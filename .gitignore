@@ -1,0 +1,23 @@
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+*.tsbuildinfo
+
+# IDE
+.vscode
+.idea
+
+# Electron
+release/
+
+# Environment
+.env
+.env.*
+
+# SQLite dev database
+*.db
+*.db-wal
+*.db-shm

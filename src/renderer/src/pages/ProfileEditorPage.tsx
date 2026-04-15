@@ -1,0 +1,633 @@
+import { useEffect, useState } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { Wand2, ChevronDown, ChevronRight } from 'lucide-react'
+import { api } from '../lib/api'
+import { useProxiesStore } from '../stores/proxies'
+import { INPUT_CLASS, LABEL_CLASS, BTN_PRIMARY, BTN_SECONDARY } from '../lib/ui'
+
+const SCREEN_PRESETS = [
+  { label: '1920x1080', value: '1920x1080' },
+  { label: '2560x1440', value: '2560x1440' },
+  { label: '1366x768', value: '1366x768' },
+  { label: '1536x864', value: '1536x864' },
+  { label: '1440x900', value: '1440x900' },
+  { label: '1280x720', value: '1280x720' }
+] as const
+
+const TIMEZONES = [
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Europe/Moscow',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Asia/Kolkata',
+  'Asia/Dubai',
+  'Australia/Sydney',
+  'Pacific/Auckland'
+] as const
+
+const HARDWARE_CONCURRENCY_OPTIONS = [4, 8, 12, 16] as const
+const DEVICE_MEMORY_OPTIONS = [4, 8, 16] as const
+
+const WEBRTC_POLICIES = [
+  { label: 'Disable non-proxied UDP', value: 'disable_non_proxied_udp' },
+  { label: 'Default public only', value: 'default_public_interface_only' },
+  { label: 'Default', value: 'default' }
+] as const
+
+const profileSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  browser_type: z.enum(['chromium', 'firefox', 'edge']),
+  group_name: z.string(),
+  group_color: z.string(),
+  notes: z.string(),
+  proxy_id: z.string(),
+  start_url: z.string(),
+  user_agent: z.string(),
+  platform: z.string(),
+  screen: z.string(),
+  timezone: z.string(),
+  hardware_concurrency: z.number(),
+  device_memory: z.number(),
+  webgl_vendor: z.string(),
+  webgl_renderer: z.string(),
+  webrtc_policy: z.string(),
+  languages: z.string()
+})
+
+type ProfileFormData = z.infer<typeof profileSchema>
+
+const DEFAULT_VALUES: ProfileFormData = {
+  name: '',
+  browser_type: 'chromium',
+  group_name: '',
+  group_color: '',
+  notes: '',
+  proxy_id: '',
+  start_url: '',
+  user_agent: '',
+  platform: '',
+  screen: '1920x1080',
+  timezone: 'America/New_York',
+  hardware_concurrency: 8,
+  device_memory: 8,
+  webgl_vendor: '',
+  webgl_renderer: '',
+  webrtc_policy: 'disable_non_proxied_udp',
+  languages: 'en-US'
+}
+
+function parseScreen(value: string): { width: number; height: number } {
+  const [w, h] = value.split('x').map(Number)
+  return { width: w || 1920, height: h || 1080 }
+}
+
+function toScreenValue(w: number, h: number): string {
+  const value = `${w}x${h}`
+  return SCREEN_PRESETS.find((p) => p.value === value) ? value : SCREEN_PRESETS[0].value
+}
+
+interface ProfileEditorPanelProps {
+  profileId?: string | null
+  onSave: () => void
+  onCancel: () => void
+}
+
+export function ProfileEditorPanel({
+  profileId,
+  onSave,
+  onCancel
+}: ProfileEditorPanelProps): React.JSX.Element {
+  const isEditMode = Boolean(profileId)
+  const [fpOpen, setFpOpen] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [templates, setTemplates] = useState<Array<{ id: string; name: string; browser_type: string }>>([])
+
+  const proxies = useProxiesStore((s) => s.proxies)
+  const fetchProxies = useProxiesStore((s) => s.fetchProxies)
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    getValues,
+    watch,
+    formState: { errors }
+  } = useForm<ProfileFormData>({
+    resolver: zodResolver(profileSchema),
+    defaultValues: DEFAULT_VALUES
+  })
+
+  useEffect(() => {
+    fetchProxies()
+  }, [fetchProxies])
+
+  useEffect(() => {
+    api.listTemplates().then((t: unknown[]) => {
+      setTemplates(t as Array<{ id: string; name: string; browser_type: string }>)
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!profileId) {
+      reset(DEFAULT_VALUES)
+      return
+    }
+    api
+      .getProfile(profileId)
+      .then((detail) => {
+        reset({
+          name: detail.profile.name,
+          browser_type: detail.profile.browser_type,
+          group_name: detail.profile.group_name ?? '',
+          group_color: detail.profile.group_color ?? '',
+          notes: detail.profile.notes,
+          proxy_id: detail.profile.proxy_id ?? '',
+          start_url: detail.profile.start_url ?? '',
+          user_agent: detail.fingerprint.user_agent,
+          platform: detail.fingerprint.platform,
+          screen: toScreenValue(detail.fingerprint.screen_width, detail.fingerprint.screen_height),
+          timezone: detail.fingerprint.timezone,
+          hardware_concurrency: detail.fingerprint.hardware_concurrency,
+          device_memory: detail.fingerprint.device_memory,
+          webgl_vendor: detail.fingerprint.webgl_vendor,
+          webgl_renderer: detail.fingerprint.webgl_renderer,
+          webrtc_policy: detail.fingerprint.webrtc_policy,
+          languages: (() => {
+            try {
+              return JSON.parse(detail.fingerprint.languages).join(', ')
+            } catch {
+              return detail.fingerprint.languages
+            }
+          })()
+        })
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Failed to load profile')
+      })
+  }, [profileId, reset])
+
+  const handleGenerateFingerprint = async (): Promise<void> => {
+    try {
+      setGenerating(true)
+      const browserType = getValues('browser_type')
+      const fp = await api.generateFingerprint(browserType)
+      setValue('user_agent', fp.user_agent)
+      setValue('platform', fp.platform)
+      setValue('screen', toScreenValue(fp.screen_width, fp.screen_height))
+      setValue('timezone', fp.timezone)
+      setValue('hardware_concurrency', fp.hardware_concurrency)
+      setValue('device_memory', fp.device_memory)
+      setValue('webgl_vendor', fp.webgl_vendor)
+      setValue('webgl_renderer', fp.webgl_renderer)
+      setValue('webrtc_policy', fp.webrtc_policy)
+      setValue('languages', fp.languages)
+      setFpOpen(true)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate fingerprint')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const onSubmit = async (data: ProfileFormData): Promise<void> => {
+    try {
+      setSaving(true)
+      setError(null)
+      const { width, height } = parseScreen(data.screen)
+      const languagesArray = data.languages
+        ? data.languages
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : ['en-US', 'en']
+
+      if (isEditMode && profileId) {
+        await api.updateProfile(profileId, {
+          name: data.name,
+          group_name: data.group_name || null,
+          notes: data.notes,
+          proxy_id: data.proxy_id || null,
+          start_url: data.start_url,
+          group_color: data.group_color || null,
+        })
+        await api.updateFingerprint(profileId, {
+          user_agent: data.user_agent,
+          platform: data.platform,
+          screen_width: width,
+          screen_height: height,
+          timezone: data.timezone,
+          hardware_concurrency: data.hardware_concurrency,
+          device_memory: data.device_memory,
+          webgl_vendor: data.webgl_vendor,
+          webgl_renderer: data.webgl_renderer,
+          webrtc_policy: data.webrtc_policy,
+          languages: languagesArray
+        })
+      } else {
+        await api.createProfile({
+          name: data.name,
+          browser_type: data.browser_type,
+          group_name: data.group_name || null,
+          notes: data.notes,
+          proxy_id: data.proxy_id || null,
+          start_url: data.start_url,
+          group_color: data.group_color || null,
+          fingerprint: {
+            user_agent: data.user_agent,
+            platform: data.platform,
+            screen_width: width,
+            screen_height: height,
+            timezone: data.timezone,
+            hardware_concurrency: data.hardware_concurrency,
+            device_memory: data.device_memory,
+            webgl_vendor: data.webgl_vendor,
+            webgl_renderer: data.webgl_renderer,
+            webrtc_policy: data.webrtc_policy,
+            languages: JSON.stringify(languagesArray)
+          }
+        })
+      }
+      onSave()
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save profile')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const screenValue = watch('screen')
+  const isCustomScreen = !SCREEN_PRESETS.some((p) => p.value === screenValue)
+  const timezoneValue = watch('timezone')
+  const isCustomTimezone = !TIMEZONES.includes(timezoneValue as (typeof TIMEZONES)[number])
+
+  return (
+    <div className="p-3 overflow-y-auto h-full">
+      <h2 className="text-sm font-bold text-content mb-2">
+        {isEditMode ? 'Edit Profile' : 'New Profile'}
+      </h2>
+
+      {error && (
+        <div className="rounded-md bg-err/10 border border-err/30 px-2 py-1.5 text-xs text-err mb-2">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
+        {/* Templates */}
+        {!isEditMode && templates.length > 0 && (
+          <div className="flex items-center gap-2 mb-1">
+            <label className="text-[10px] text-muted uppercase tracking-wide">From Template:</label>
+            <select
+              onChange={async (e) => {
+                if (!e.target.value) return
+                try {
+                  const tmpl = await api.getTemplate(e.target.value) as { config: string; browser_type: string }
+                  const config = JSON.parse(tmpl.config) as Record<string, unknown>
+                  if (config.group_name) setValue('group_name', config.group_name as string)
+                  if (config.notes) setValue('notes', config.notes as string)
+                  if (config.start_url) setValue('start_url', config.start_url as string)
+                  setValue('browser_type', tmpl.browser_type as 'chromium' | 'firefox' | 'edge')
+                } catch { /* ignore */ }
+              }}
+              className="rounded border border-edge bg-surface-alt px-2 py-0.5 text-xs text-content"
+            >
+              <option value="">Select template...</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* General */}
+        <section className="bg-surface-alt/50 rounded-md border border-edge p-2.5 space-y-1.5">
+          <h3 className="text-xs font-semibold text-content uppercase tracking-wide">General</h3>
+
+          <div>
+            <label htmlFor="name" className={LABEL_CLASS}>
+              Name
+            </label>
+            <input
+              id="name"
+              type="text"
+              placeholder="My Profile"
+              className={INPUT_CLASS}
+              {...register('name')}
+            />
+            {errors.name && <p className="mt-0.5 text-xs text-err">{errors.name.message}</p>}
+          </div>
+
+          <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
+            <div>
+              <label htmlFor="browser_type" className={LABEL_CLASS}>
+                Browser
+              </label>
+              <select id="browser_type" className={INPUT_CLASS} {...register('browser_type')}>
+                <option value="chromium">Chromium</option>
+                <option value="firefox">Firefox</option>
+                <option value="edge">Edge</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="group_name" className={LABEL_CLASS}>
+                Group
+              </label>
+              <input
+                id="group_name"
+                type="text"
+                placeholder="Work, Personal"
+                className={INPUT_CLASS}
+                {...register('group_name')}
+              />
+            </div>
+            <div>
+              <label htmlFor="group_color" className={LABEL_CLASS}>
+                Color
+              </label>
+              <input
+                id="group_color"
+                type="color"
+                className="h-[30px] w-8 rounded border border-edge bg-transparent cursor-pointer p-0"
+                {...register('group_color')}
+              />
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="proxy_id" className={LABEL_CLASS}>
+              Proxy
+            </label>
+            <select id="proxy_id" className={INPUT_CLASS} {...register('proxy_id')}>
+              <option value="">None</option>
+              {proxies.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.protocol}://{p.host}:{p.port})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="notes" className={LABEL_CLASS}>
+              Notes
+            </label>
+            <textarea
+              id="notes"
+              rows={1}
+              placeholder="Additional notes..."
+              className={`${INPUT_CLASS} resize-none`}
+              {...register('notes')}
+            />
+          </div>
+
+          <div>
+            <label htmlFor="start_url" className={LABEL_CLASS}>
+              Start URL
+            </label>
+            <input
+              id="start_url"
+              type="text"
+              placeholder="https://example.com"
+              className={INPUT_CLASS}
+              {...register('start_url')}
+            />
+          </div>
+        </section>
+
+        {/* Fingerprint */}
+        <section className="bg-surface-alt/50 rounded-md border border-edge">
+          <button
+            type="button"
+            onClick={() => setFpOpen(!fpOpen)}
+            className="flex items-center justify-between w-full px-2.5 py-1.5 text-left"
+          >
+            <h3 className="text-xs font-semibold text-content uppercase tracking-wide">Fingerprint</h3>
+            {fpOpen ? (
+              <ChevronDown className="h-4 w-4 text-muted" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-muted" />
+            )}
+          </button>
+
+          {fpOpen && (
+            <div className="px-2.5 pb-2.5 space-y-1.5 border-t border-edge pt-1.5">
+              <button
+                type="button"
+                onClick={handleGenerateFingerprint}
+                disabled={generating}
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent/20 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/30 transition-colors disabled:opacity-50"
+              >
+                <Wand2 className="h-3.5 w-3.5" />
+                {generating ? 'Generating...' : 'Generate'}
+              </button>
+
+              <div className="grid grid-cols-1 gap-1.5">
+                <div>
+                  <label htmlFor="user_agent" className={LABEL_CLASS}>
+                    User Agent
+                  </label>
+                  <input
+                    id="user_agent"
+                    type="text"
+                    className={`${INPUT_CLASS} text-xs`}
+                    {...register('user_agent')}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div>
+                    <label htmlFor="platform" className={LABEL_CLASS}>
+                      Platform
+                    </label>
+                    <input
+                      id="platform"
+                      type="text"
+                      className={INPUT_CLASS}
+                      {...register('platform')}
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="screen" className={LABEL_CLASS}>
+                      Screen
+                    </label>
+                    <select id="screen" className={INPUT_CLASS} {...register('screen')}>
+                      {SCREEN_PRESETS.map((p) => (
+                        <option key={p.value} value={p.value}>
+                          {p.label}
+                        </option>
+                      ))}
+                      {isCustomScreen && <option value={screenValue}>{screenValue}</option>}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div>
+                    <label htmlFor="timezone" className={LABEL_CLASS}>
+                      Timezone
+                    </label>
+                    <select id="timezone" className={INPUT_CLASS} {...register('timezone')}>
+                      {TIMEZONES.map((tz) => (
+                        <option key={tz} value={tz}>
+                          {tz}
+                        </option>
+                      ))}
+                      {isCustomTimezone && (
+                        <option value={timezoneValue}>{timezoneValue}</option>
+                      )}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="languages" className={LABEL_CLASS}>
+                      Languages
+                    </label>
+                    <input
+                      id="languages"
+                      type="text"
+                      placeholder="en-US, en"
+                      className={INPUT_CLASS}
+                      {...register('languages')}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div>
+                    <label htmlFor="hardware_concurrency" className={LABEL_CLASS}>
+                      CPU Cores
+                    </label>
+                    <select
+                      id="hardware_concurrency"
+                      className={INPUT_CLASS}
+                      {...register('hardware_concurrency', { valueAsNumber: true })}
+                    >
+                      {HARDWARE_CONCURRENCY_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="device_memory" className={LABEL_CLASS}>
+                      Memory (GB)
+                    </label>
+                    <select
+                      id="device_memory"
+                      className={INPUT_CLASS}
+                      {...register('device_memory', { valueAsNumber: true })}
+                    >
+                      {DEVICE_MEMORY_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div>
+                    <label htmlFor="webgl_vendor" className={LABEL_CLASS}>
+                      WebGL Vendor
+                    </label>
+                    <input
+                      id="webgl_vendor"
+                      type="text"
+                      readOnly
+                      className={`${INPUT_CLASS} cursor-default opacity-70 text-xs`}
+                      {...register('webgl_vendor')}
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="webgl_renderer" className={LABEL_CLASS}>
+                      WebGL Renderer
+                    </label>
+                    <input
+                      id="webgl_renderer"
+                      type="text"
+                      readOnly
+                      className={`${INPUT_CLASS} cursor-default opacity-70 text-xs`}
+                      {...register('webgl_renderer')}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label htmlFor="webrtc_policy" className={LABEL_CLASS}>
+                    WebRTC
+                  </label>
+                  <select id="webrtc_policy" className={INPUT_CLASS} {...register('webrtc_policy')}>
+                    {WEBRTC_POLICIES.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <div className="flex items-center gap-2">
+          <button type="submit" disabled={saving} className={`${BTN_PRIMARY} text-xs`}>
+            {saving ? 'Saving...' : isEditMode ? 'Save' : 'Create'}
+          </button>
+          <button type="button" onClick={onCancel} className={`${BTN_SECONDARY} text-xs`}>
+            Cancel
+          </button>
+          {isEditMode && (
+            <button
+              type="button"
+              onClick={async () => {
+                const data = getValues()
+                const { width, height } = parseScreen(data.screen)
+                await api.createTemplate({
+                  name: `${data.name} Template`,
+                  browser_type: data.browser_type,
+                  config: {
+                    group_name: data.group_name || null,
+                    notes: data.notes,
+                    start_url: data.start_url,
+                    proxy_id: data.proxy_id || null,
+                    fingerprint: {
+                      user_agent: data.user_agent,
+                      platform: data.platform,
+                      screen_width: width,
+                      screen_height: height,
+                      timezone: data.timezone,
+                      hardware_concurrency: data.hardware_concurrency,
+                      device_memory: data.device_memory,
+                      webgl_vendor: data.webgl_vendor,
+                      webgl_renderer: data.webgl_renderer,
+                      webrtc_policy: data.webrtc_policy
+                    }
+                  } as Record<string, unknown>
+                })
+              }}
+              className="text-[11px] text-accent hover:text-accent-dim transition-colors"
+            >
+              Save as Template
+            </button>
+          )}
+        </div>
+      </form>
+    </div>
+  )
+}
