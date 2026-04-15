@@ -168,7 +168,7 @@ src/
 ### Install
 
 ```bash
-git clone https://github.com/mxgn/lux-antidetect.git
+git clone https://github.com/GofMan5/lux-antidetect.git
 cd lux-antidetect
 npm install
 ```
