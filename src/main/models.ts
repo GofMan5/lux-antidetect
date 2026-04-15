@@ -52,6 +52,7 @@ export interface Proxy {
   password: string | null
   last_check: string | null
   check_ok: number // 0 or 1 for sqlite
+  check_latency_ms: number | null
   created_at: string
 }
 
@@ -65,6 +66,7 @@ export interface ProxyResponse {
   has_password: boolean
   last_check: string | null
   check_ok: boolean
+  check_latency_ms: number | null
   created_at: string
 }
 
@@ -153,6 +155,21 @@ export interface TemplateInput {
   config: Record<string, unknown>
 }
 
+export interface ManagedBrowserResponse {
+  browser: string
+  buildId: string
+  platform: string
+  executablePath: string
+  tags: string[]
+}
+
+export interface AvailableBrowser {
+  browserType: BrowserType
+  browser: string
+  channel: string
+  buildId: string
+}
+
 export function toProxyResponse(row: Proxy): ProxyResponse {
   return {
     id: row.id,
@@ -164,6 +181,7 @@ export function toProxyResponse(row: Proxy): ProxyResponse {
     has_password: !!row.password,
     last_check: row.last_check,
     check_ok: !!row.check_ok,
+    check_latency_ms: row.check_latency_ms ?? null,
     created_at: row.created_at
   }
 }

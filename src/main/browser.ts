@@ -1,32 +1,60 @@
-import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { spawn, execFile } from 'child_process'
 import { promisify } from 'util'
+import { request as httpRequest } from 'http'
+import { randomBytes } from 'crypto'
 import type Database from 'better-sqlite3'
 import type { BrowserType, Fingerprint, Profile, Proxy } from './models'
 import { buildInjectionScript, regenerateFingerprint } from './fingerprint'
 import { addSession, removeSession, getSession, isRunning } from './sessions'
+import { getManagedBrowserPath } from './browser-manager'
 
 const execFileAsync = promisify(execFile)
 
 const BROWSER_PATHS: Record<BrowserType, string[]> = {
   chromium: [
+    // Windows
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    // Linux
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/snap/bin/chromium',
+    // macOS
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
   ],
   edge: [
+    // Windows
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    // Linux
+    '/usr/bin/microsoft-edge',
+    // macOS
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
   ],
   firefox: [
+    // Windows
     'C:\\Program Files\\Mozilla Firefox\\firefox.exe',
-    'C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe'
+    'C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe',
+    // Linux
+    '/usr/bin/firefox',
+    '/snap/bin/firefox',
+    // macOS
+    '/Applications/Firefox.app/Contents/MacOS/firefox'
   ]
 }
 
 export function detectBrowsers(): Record<string, string> {
   const result: Record<string, string> = {}
   for (const [type, paths] of Object.entries(BROWSER_PATHS)) {
+    // Check managed browser first
+    const managed = getManagedBrowserPath(type as BrowserType)
+    if (managed && existsSync(managed)) {
+      result[type] = managed + ' (managed)'
+      continue
+    }
     for (const p of paths) {
       if (existsSync(p)) {
         result[type] = p
@@ -38,12 +66,17 @@ export function detectBrowsers(): Record<string, string> {
 }
 
 function findBrowserPath(browserType: BrowserType): string {
+  // 1. Check managed (downloaded) browsers first
+  const managed = getManagedBrowserPath(browserType)
+  if (managed && existsSync(managed)) return managed
+
+  // 2. Fallback to system-installed browsers
   const paths = BROWSER_PATHS[browserType]
   for (const p of paths) {
     if (existsSync(p)) return p
   }
   throw new Error(
-    `Browser not found: ${browserType}. Install it or configure the path in settings.`
+    `Browser not found: ${browserType}. Download it from Settings or install it on your system.`
   )
 }
 
@@ -80,8 +113,14 @@ function isBrowserProfileActive(profileDir: string, isFirefox: boolean): boolean
 async function findBrowserPidsByProfileDir(profileDir: string): Promise<number[]> {
   // Try PowerShell first (reliable), fall back to WMIC
   try {
-    const escapedDir = profileDir.replace(/\\/g, '\\\\').replace(/'/g, "''")
-    const psCmd = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escapedDir}*' } | Select-Object -ExpandProperty ProcessId`
+    // Escape PowerShell special characters in the profile path to prevent injection.
+    // Backtick-escape: ` $ " ' and also replace single quotes for -like pattern safety.
+    const psEscapedDir = profileDir
+      .replace(/`/g, '``')
+      .replace(/\$/g, '`$')
+      .replace(/"/g, '`"')
+      .replace(/'/g, "''")
+    const psCmd = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${psEscapedDir}*' } | Select-Object -ExpandProperty ProcessId`
     const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-Command', psCmd], {
       timeout: 8000,
       windowsHide: true
@@ -140,26 +179,6 @@ async function killBrowserByProfileDir(profileDir: string): Promise<void> {
   }
 }
 
-function writeChromiumExtension(extDir: string, fp: Fingerprint): void {
-  mkdirSync(extDir, { recursive: true })
-
-  const manifest = {
-    manifest_version: 3,
-    name: 'Lux Fingerprint',
-    version: '1.0',
-    content_scripts: [
-      {
-        matches: ['<all_urls>'],
-        js: ['inject.js'],
-        run_at: 'document_start',
-        all_frames: true,
-        world: 'MAIN'
-      }
-    ]
-  }
-  writeFileSync(join(extDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
-  writeFileSync(join(extDir, 'inject.js'), buildInjectionScript(fp))
-}
 
 function writeProxyAuthExtension(extDir: string, proxy: Proxy): string | null {
   if (!proxy.username || !proxy.password) return null
@@ -180,16 +199,16 @@ function writeProxyAuthExtension(extDir: string, proxy: Proxy): string | null {
 
   const background = `
 chrome.webRequest.onAuthRequired.addListener(
-  function(details) {
-    return {
+  function(details, callback) {
+    callback({
       authCredentials: {
         username: ${JSON.stringify(proxy.username)},
         password: ${JSON.stringify(proxy.password)}
       }
-    };
+    });
   },
   { urls: ['<all_urls>'] },
-  ['blocking']
+  ['asyncBlocking']
 );
 `
 
@@ -198,6 +217,349 @@ chrome.webRequest.onAuthRequired.addListener(
 
   return authExtDir
 }
+
+// ─── CDP-based fingerprint injection ─────────────────────────────────
+// Chrome 137+ removed --load-extension from branded builds. Use CDP
+// (Chrome DevTools Protocol) to inject the fingerprint script via
+// Page.addScriptToEvaluateOnNewDocument — this runs before any page
+// scripts in the MAIN world and works on all Chrome/Edge versions.
+
+function httpGet(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(url, (res) => {
+      let data = ''
+      res.on('data', (chunk: Buffer) => { data += chunk.toString() })
+      res.on('end', () => resolve(data))
+      res.on('error', reject)
+    })
+    req.on('error', reject)
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')) })
+    req.end()
+  })
+}
+
+/** Wait for Chrome's DevToolsActivePort file and return the debugging port. */
+async function waitForDebugPort(profileDir: string, timeoutMs = 15000): Promise<number> {
+  const portFile = join(profileDir, 'DevToolsActivePort')
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 300))
+    try {
+      if (!existsSync(portFile)) continue
+      const content = readFileSync(portFile, 'utf-8').trim()
+      const port = parseInt(content.split(/\r?\n/)[0], 10)
+      if (port > 0) return port
+    } catch { /* file may still be written */ }
+  }
+  throw new Error('Timed out waiting for Chrome DevTools port')
+}
+
+/** Inject fingerprint script into all current and future pages via CDP. */
+async function injectViaCDP(port: number, script: string): Promise<void> {
+  // Get the list of targets
+  const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
+  const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
+
+  // For each existing page target, inject via HTTP endpoint
+  const pageTargets = targets.filter((t) => t.type === 'page')
+
+  for (const target of pageTargets) {
+    try {
+      // Enable Page domain (required for addScriptToEvaluateOnNewDocument)
+      await cdpCommand(port, target.id, 'Page.enable', {})
+      // Inject for all future navigations in this target
+      await cdpCommand(port, target.id, 'Page.addScriptToEvaluateOnNewDocument', {
+        source: script,
+        runImmediately: true
+      })
+      // Also inject into the current page right now
+      await cdpCommand(port, target.id, 'Runtime.evaluate', {
+        expression: script,
+        allowUnsafeEvalBlockedByCSP: true
+      })
+    } catch { /* target may have closed */ }
+  }
+
+  // Also set up on any new tabs: listen for new targets via /json/new isn't possible w/o WS,
+  // so we use a persistent polling approach on the targets list
+}
+
+/** Send a CDP command via minimal WebSocket (no dependencies, uses Node's http upgrade). */
+async function cdpCommand(port: number, targetId: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const key = randomBytes(16).toString('base64')
+    const req = httpRequest({
+      hostname: '127.0.0.1',
+      port,
+      path: `/devtools/page/${targetId}`,
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': key
+      }
+    })
+
+    let resolved = false
+    const finish = (err: Error | null, result?: unknown): void => {
+      if (resolved) return
+      resolved = true
+      if (err) reject(err)
+      else resolve(result)
+    }
+
+    req.on('upgrade', (_res, socket) => {
+      const payload = JSON.stringify({ id: 1, method, params })
+      // Send WebSocket text frame
+      const buf = Buffer.from(payload, 'utf-8')
+      const mask = randomBytes(4)
+      let header: Buffer
+      if (buf.length < 126) {
+        header = Buffer.alloc(6)
+        header[0] = 0x81 // FIN + text
+        header[1] = 0x80 | buf.length // MASK + length
+        header[2] = mask[0]; header[3] = mask[1]; header[4] = mask[2]; header[5] = mask[3]
+      } else if (buf.length < 65536) {
+        header = Buffer.alloc(8)
+        header[0] = 0x81
+        header[1] = 0x80 | 126
+        header.writeUInt16BE(buf.length, 2)
+        header[4] = mask[0]; header[5] = mask[1]; header[6] = mask[2]; header[7] = mask[3]
+      } else {
+        header = Buffer.alloc(14)
+        header[0] = 0x81
+        header[1] = 0x80 | 127
+        header.writeBigUInt64BE(BigInt(buf.length), 2)
+        header[10] = mask[0]; header[11] = mask[1]; header[12] = mask[2]; header[13] = mask[3]
+      }
+      const masked = Buffer.alloc(buf.length)
+      for (let i = 0; i < buf.length; i++) masked[i] = buf[i] ^ mask[i % 4]
+      socket.write(Buffer.concat([header, masked]))
+
+      // Read response frame(s)
+      let accum = Buffer.alloc(0)
+      socket.on('data', (chunk: Buffer) => {
+        accum = Buffer.concat([accum, chunk])
+        // Try to parse a complete frame
+        if (accum.length < 2) return
+        const payloadLen = accum[1] & 0x7f
+        let offset = 2
+        let msgLen = payloadLen
+        if (payloadLen === 126) {
+          if (accum.length < 4) return
+          msgLen = accum.readUInt16BE(2)
+          offset = 4
+        } else if (payloadLen === 127) {
+          if (accum.length < 10) return
+          msgLen = Number(accum.readBigUInt64BE(2))
+          offset = 10
+        }
+        if (accum.length < offset + msgLen) return
+        const msgBuf = accum.subarray(offset, offset + msgLen)
+        try {
+          const msg = JSON.parse(msgBuf.toString('utf-8'))
+          if (msg.id === 1) {
+            socket.destroy()
+            if (msg.error) finish(new Error(msg.error.message))
+            else finish(null, msg.result)
+          }
+        } catch { /* partial frame, wait for more */ }
+      })
+      socket.on('error', (e: Error) => finish(e))
+      socket.on('close', () => finish(new Error('socket closed')))
+    })
+
+    req.on('error', (e) => finish(e))
+    req.setTimeout(5000, () => { req.destroy(); finish(new Error('CDP timeout')) })
+    req.end()
+  })
+}
+
+/** Background task: continuously ensure CDP injection is active for all pages of this profile. */
+function startCDPInjection(profileDir: string, script: string): { stop: () => void } {
+  let stopped = false
+  let port = 0
+  const injectedTargets = new Set<string>()
+
+  async function injectTarget(targetId: string): Promise<void> {
+    if (injectedTargets.has(targetId)) return
+    injectedTargets.add(targetId)
+    try {
+      await cdpCommand(port, targetId, 'Page.enable', {})
+      await cdpCommand(port, targetId, 'Page.addScriptToEvaluateOnNewDocument', {
+        source: script,
+        runImmediately: true
+      })
+      await cdpCommand(port, targetId, 'Runtime.evaluate', {
+        expression: script,
+        allowUnsafeEvalBlockedByCSP: true
+      })
+    } catch { /* target may have been destroyed */ }
+  }
+
+  const run = async (): Promise<void> => {
+    try {
+      port = await waitForDebugPort(profileDir)
+    } catch {
+      return // browser may have been closed before debug port appeared
+    }
+
+    // Initial injection for existing tabs
+    try {
+      await injectViaCDP(port, script)
+      const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
+      const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
+      for (const t of targets) {
+        if (t.type === 'page') injectedTargets.add(t.id)
+      }
+    } catch { /* best effort */ }
+
+    // Use browser-level WebSocket to listen for new targets in real-time.
+    // This avoids the 2-second polling gap where new tabs are unprotected.
+    try {
+      const versionRaw = await httpGet(`http://127.0.0.1:${port}/json/version`)
+      const versionInfo = JSON.parse(versionRaw) as { webSocketDebuggerUrl?: string }
+      const wsUrl = versionInfo.webSocketDebuggerUrl
+      if (wsUrl) {
+        // Extract path from ws://127.0.0.1:PORT/devtools/browser/UUID
+        const wsPath = new URL(wsUrl).pathname
+        startBrowserWsListener(port, wsPath, script, injectedTargets, injectTarget, () => stopped)
+      }
+    } catch { /* fall back to polling */ }
+
+    // Fallback polling for new tabs (in case WS listener fails/disconnects)
+    const pollNewTabs = async (): Promise<void> => {
+      while (!stopped) {
+        await new Promise((r) => setTimeout(r, 3000))
+        if (stopped) break
+        try {
+          const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
+          const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
+          for (const t of targets) {
+            if (t.type === 'page' && !injectedTargets.has(t.id)) {
+              await injectTarget(t.id)
+            }
+          }
+        } catch {
+          break
+        }
+      }
+    }
+
+    pollNewTabs().catch(() => {})
+  }
+
+  run().catch(() => {})
+
+  return {
+    stop: () => { stopped = true }
+  }
+}
+
+/** Open a persistent WebSocket to the browser endpoint and listen for Target.targetCreated events. */
+function startBrowserWsListener(
+  port: number,
+  wsPath: string,
+  _script: string,
+  injectedTargets: Set<string>,
+  injectTarget: (targetId: string) => Promise<void>,
+  isStopped: () => boolean
+): void {
+  const key = randomBytes(16).toString('base64')
+  const req = httpRequest({
+    hostname: '127.0.0.1',
+    port,
+    path: wsPath,
+    headers: {
+      Connection: 'Upgrade',
+      Upgrade: 'websocket',
+      'Sec-WebSocket-Version': '13',
+      'Sec-WebSocket-Key': key
+    }
+  })
+
+  req.on('upgrade', (_res, socket) => {
+    let msgId = 1
+
+    function sendWsMsg(method: string, params: Record<string, unknown> = {}): void {
+      const payload = JSON.stringify({ id: msgId++, method, params })
+      const buf = Buffer.from(payload, 'utf-8')
+      const mask = randomBytes(4)
+      let header: Buffer
+      if (buf.length < 126) {
+        header = Buffer.alloc(6)
+        header[0] = 0x81
+        header[1] = 0x80 | buf.length
+        header[2] = mask[0]; header[3] = mask[1]; header[4] = mask[2]; header[5] = mask[3]
+      } else if (buf.length < 65536) {
+        header = Buffer.alloc(8)
+        header[0] = 0x81
+        header[1] = 0x80 | 126
+        header.writeUInt16BE(buf.length, 2)
+        header[4] = mask[0]; header[5] = mask[1]; header[6] = mask[2]; header[7] = mask[3]
+      } else {
+        header = Buffer.alloc(14)
+        header[0] = 0x81
+        header[1] = 0x80 | 127
+        header.writeBigUInt64BE(BigInt(buf.length), 2)
+        header[10] = mask[0]; header[11] = mask[1]; header[12] = mask[2]; header[13] = mask[3]
+      }
+      const masked = Buffer.alloc(buf.length)
+      for (let i = 0; i < buf.length; i++) masked[i] = buf[i] ^ mask[i % 4]
+      try { socket.write(Buffer.concat([header, masked])) } catch { /* socket closed */ }
+    }
+
+    // Subscribe to target discovery
+    sendWsMsg('Target.setDiscoverTargets', { discover: true })
+
+    // Read frames from browser WebSocket
+    let accum = Buffer.alloc(0)
+    socket.on('data', (chunk: Buffer) => {
+      if (isStopped()) { socket.destroy(); return }
+      accum = Buffer.concat([accum, chunk])
+
+      // Try to parse complete frames
+      while (accum.length >= 2) {
+        const payloadLen = accum[1] & 0x7f
+        let offset = 2
+        let msgLen = payloadLen
+        if (payloadLen === 126) {
+          if (accum.length < 4) break
+          msgLen = accum.readUInt16BE(2)
+          offset = 4
+        } else if (payloadLen === 127) {
+          if (accum.length < 10) break
+          msgLen = Number(accum.readBigUInt64BE(2))
+          offset = 10
+        }
+        if (accum.length < offset + msgLen) break
+
+        const msgBuf = accum.subarray(offset, offset + msgLen)
+        accum = accum.subarray(offset + msgLen)
+
+        try {
+          const msg = JSON.parse(msgBuf.toString('utf-8'))
+          if (msg.method === 'Target.targetCreated') {
+            const info = msg.params?.targetInfo
+            if (info && info.type === 'page' && !injectedTargets.has(info.targetId)) {
+              injectTarget(info.targetId).catch(() => {})
+            }
+          }
+        } catch { /* partial/invalid JSON */ }
+      }
+    })
+
+    socket.on('error', () => { /* silently close */ })
+    socket.on('close', () => { /* browser closed or WS dropped */ })
+  })
+
+  req.on('error', () => { /* can't connect, polling fallback is active */ })
+  req.setTimeout(5000, () => { req.destroy() })
+  req.end()
+}
+
+// Track CDP injection handles so we can stop them when the browser stops
+const cdpInjectors = new Map<string, { stop: () => void }>()
 
 interface FirefoxProxyConfig {
   protocol: string
@@ -228,11 +590,18 @@ function writeFirefoxUserJs(
         `user_pref("network.proxy.socks_version", ${proxy.protocol === 'socks5' ? 5 : 4});`
       )
       lines.push(`user_pref("network.proxy.socks_remote_dns", true);`)
+      // SOCKS5 supports authentication via user.js prefs
+      if (proxy.protocol === 'socks5' && proxy.username) {
+        lines.push(`user_pref("network.proxy.socks_username", ${JSON.stringify(proxy.username)});`)
+        lines.push(`user_pref("network.proxy.socks_password", ${JSON.stringify((proxy as { password?: string }).password || '')});`)
+      }
     } else {
       lines.push(`user_pref("network.proxy.http", ${JSON.stringify(proxy.host)});`)
       lines.push(`user_pref("network.proxy.http_port", ${proxy.port});`)
       lines.push(`user_pref("network.proxy.ssl", ${JSON.stringify(proxy.host)});`)
       lines.push(`user_pref("network.proxy.ssl_port", ${proxy.port});`)
+      // NOTE: HTTP/HTTPS proxy auth cannot be set via user.js prefs in Firefox.
+      // Firefox will show a native authentication popup when the proxy requires credentials.
     }
   }
 
@@ -275,6 +644,10 @@ function startBrowserPolling(
     activeBrowsers.delete(profileId)
     removeSession(profileId, 0)
 
+    // Stop CDP injection polling
+    const injector = cdpInjectors.get(profileId)
+    if (injector) { injector.stop(); cdpInjectors.delete(profileId) }
+
     try {
       db.prepare(
         `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
@@ -304,6 +677,25 @@ function startBrowserPolling(
         return
       }
 
+      // Check session timeout
+      try {
+        const timeoutRow = db.prepare("SELECT value FROM settings WHERE key = 'session_timeout_minutes'").get() as { value: string } | undefined
+        if (timeoutRow) {
+          const timeoutMinutes = JSON.parse(timeoutRow.value)
+          if (typeof timeoutMinutes === 'number' && timeoutMinutes > 0) {
+            const session = getSession(profileId)
+            if (session) {
+              const elapsed = (Date.now() - new Date(session.started_at).getTime()) / 60000
+              if (elapsed >= timeoutMinutes) {
+                markStopped()
+                await killBrowserByProfileDir(profileDir)
+                return
+              }
+            }
+          }
+        }
+      } catch { /* best effort */ }
+
       // Lock file still exists (can be stale on Windows) — check actual processes
       const pids = await findBrowserPidsByProfileDir(profileDir)
       if (pids.length === 0) {
@@ -331,13 +723,21 @@ export async function killAllBrowsers(): Promise<void> {
     clearInterval(active.pollTimer)
     kills.push(killBrowserByProfileDir(active.profileDir))
     removeSession(profileId, null)
+    const injector = cdpInjectors.get(profileId)
+    if (injector) injector.stop()
   }
   activeBrowsers.clear()
+  cdpInjectors.clear()
   await Promise.all(kills)
 }
 
 export function isProfileBrowserActive(profileId: string): boolean {
   return activeBrowsers.has(profileId)
+}
+
+/** Return the set of profile IDs that have active browser polling. */
+export function getActiveBrowserProfileIds(): Set<string> {
+  return new Set(activeBrowsers.keys())
 }
 
 // ─── Launch / Stop ──────────────────────────────────────────────────────
@@ -400,6 +800,7 @@ export async function launchBrowser(
     mkdirSync(profileDir, { recursive: true })
 
     const args: string[] = []
+    let injectionScript: string | null = null
 
     if (isFirefox) {
       args.push('-profile', profileDir, '-no-remote')
@@ -409,6 +810,8 @@ export async function launchBrowser(
       args.push('--no-first-run')
       args.push('--disable-default-apps')
       args.push('--disable-background-networking')
+      args.push('--disable-search-engine-choice-screen')
+      args.push('--remote-debugging-port=0')
 
       args.push('--dns-over-https-mode=automatic')
 
@@ -434,22 +837,29 @@ export async function launchBrowser(
         args.push(`--proxy-server=${proxyUrl}`)
       }
 
+      // Proxy auth still needs an extension (CDP can't intercept onAuthRequired)
       const extDirs: string[] = []
-      const fpExtDir = join(profileDir, '_lux_ext')
-      writeChromiumExtension(fpExtDir, activeFp)
-      extDirs.push(fpExtDir)
-
       if (proxy?.username && proxy?.password) {
         const authDir = writeProxyAuthExtension(profileDir, proxy)
         if (authDir) extDirs.push(authDir)
       }
 
-      args.push(`--load-extension=${extDirs.join(',')}`)
-      args.push(`--disable-extensions-except=${extDirs.join(',')}`)
+      if (extDirs.length > 0) {
+        args.push(`--load-extension=${extDirs.join(',')}`)
+        args.push(`--disable-extensions-except=${extDirs.join(',')}`)
+      }
+
+      // Build the fingerprint injection script for CDP injection after launch
+      injectionScript = buildInjectionScript(activeFp)
     }
 
     if (profile.start_url?.trim()) {
       args.push(profile.start_url.trim())
+    }
+
+    // Delete stale DevToolsActivePort before spawning (avoid race condition)
+    if (injectionScript) {
+      try { unlinkSync(join(profileDir, 'DevToolsActivePort')) } catch { /* ignore */ }
     }
 
     const child = spawn(exePath, args, {
@@ -458,6 +868,11 @@ export async function launchBrowser(
     })
     child.unref()
 
+    // WARNING: Chrome 137+ removed --load-extension from branded Chrome/Edge builds (Sept 2025).
+    // Proxy auth still uses an extension via --load-extension as a best-effort fallback because
+    // CDP cannot intercept webRequest.onAuthRequired. If the extension fails to load on newer
+    // Chrome builds, proxy authentication will not work automatically — the user will see a
+    // native auth popup instead. See also: writeProxyAuthExtension().
     const pid = child.pid
     if (!pid) throw new Error('Failed to get browser process ID')
 
@@ -485,6 +900,12 @@ export async function launchBrowser(
 
     // Start polling for browser exit detection
     startBrowserPolling(profileId, profileDir, isFirefox, db, mainWindow)
+
+    // Start CDP-based fingerprint injection for Chromium browsers (async, non-blocking)
+    if (injectionScript) {
+      const injector = startCDPInjection(profileDir, injectionScript)
+      cdpInjectors.set(profileId, injector)
+    }
 
     return { pid }
   } catch (err) {
@@ -524,6 +945,10 @@ export async function stopBrowser(
 
   // Stop polling first
   stopBrowserPolling(profileId)
+
+  // Stop CDP injection
+  const injector = cdpInjectors.get(profileId)
+  if (injector) { injector.stop(); cdpInjectors.delete(profileId) }
 
   // Kill by profile directory (finds real browser PIDs) — ASYNC, no longer blocks main thread
   if (activeBrowser) {

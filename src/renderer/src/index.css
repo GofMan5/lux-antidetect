@@ -13,6 +13,25 @@
   --color-ok: #22c55e;
   --color-warn: #f59e0b;
   --color-err: #ef4444;
+
+  --animate-slideIn: slideIn 0.25s ease-out;
+  --animate-slideInRight: slideInRight 0.2s ease-out;
+  --animate-fadeIn: fadeIn 0.15s ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(100%); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 body {
@@ -33,6 +52,18 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-edge); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-muted); }
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge) transparent;
+}
+
+/* Selection styling */
+::selection {
+  background-color: var(--color-accent);
+  color: white;
+}
 
 /* Style native select dropdowns for dark theme */
 select option {

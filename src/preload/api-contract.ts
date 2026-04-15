@@ -12,7 +12,9 @@ import type {
   Template,
   TemplateInput,
   UpdateFingerprintInput,
-  UpdateProfileInput
+  UpdateProfileInput,
+  ManagedBrowserResponse,
+  AvailableBrowser
 } from '../main/models'
 
 // Reuse the canonical session payload to keep preload and main in lockstep.
@@ -50,6 +52,8 @@ export interface LuxAPI {
   updateProxy(id: string, input: ProxyInput): Promise<ProxyResponse>
   deleteProxy(id: string): Promise<void>
   testProxy(id: string): Promise<boolean>
+  parseProxyString(raw: string): Promise<{ ok: boolean; data?: ProxyInput; error?: string }[]>
+  bulkTestProxies(ids: string[]): Promise<{ id: string; ok: boolean }[]>
 
   generateFingerprint(browserType: BrowserType): Promise<Omit<Fingerprint, 'id' | 'profile_id'>>
 
@@ -86,4 +90,14 @@ export interface LuxAPI {
   onUpdateDownloaded(callback: (data: { version: string }) => void): () => void
   onUpdateProgress(callback: (data: { percent: number }) => void): () => void
   onUpdateError(callback: (data: { message: string }) => void): () => void
+
+  // Browser management (download / list / remove)
+  listManagedBrowsers(): Promise<ManagedBrowserResponse[]>
+  getAvailableBrowsers(): Promise<AvailableBrowser[]>
+  downloadBrowser(browserType: BrowserType, channel?: string): Promise<ManagedBrowserResponse>
+  removeManagedBrowser(browser: string, buildId: string): Promise<void>
+  cancelBrowserDownload(browser: string, buildId: string): Promise<boolean>
+  onBrowserDownloadProgress(callback: (data: { browser: string; buildId: string; downloadedBytes: number; totalBytes: number; percent: number }) => void): () => void
+  onBrowserDownloadComplete(callback: (data: ManagedBrowserResponse) => void): () => void
+  onBrowserDownloadError(callback: (data: { browser: string; buildId: string; message: string }) => void): () => void
 }

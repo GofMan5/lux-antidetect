@@ -13,18 +13,17 @@ function randInt(min: number, max: number): number {
 
 // ─── Realistic Chrome version pool (Windows / Mac) ───────────────────────
 
-const CHROME_MAJORS = [122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133] as const
+const CHROME_MAJORS = [134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146] as const
 
 function randomChromeVersion(): string {
   const major = pick(CHROME_MAJORS)
-  const build = randInt(6261, 6723)
+  const build = randInt(6900, 7700)
   const patch = randInt(40, 230)
   return `${major}.0.${build}.${patch}`
 }
 
 // ─── OS builds ───────────────────────────────────────────────────────────
 
-const WIN_BUILDS = ['10.0', '10.0', '10.0', '11.0'] as const // weighted toward Win10
 const MAC_VERSIONS = [
   '10_15_7', '13_0', '13_1', '13_2', '13_3', '13_4', '13_5', '13_6',
   '14_0', '14_1', '14_2', '14_3', '14_4', '14_5', '14_6', '14_7',
@@ -314,8 +313,8 @@ export function generateDefaultFingerprint(
   let pixelRatio: number
 
   if (isWindows) {
-    const winBuild = pick(WIN_BUILDS)
-    userAgent = `Mozilla/5.0 (Windows NT ${winBuild}; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
+    // Chrome UA reduction: always NT 10.0 regardless of actual Windows version
+    userAgent = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
     platform = 'Win32'
     pixelRatio = Math.random() > 0.8 ? 1.25 : Math.random() > 0.5 ? 1.5 : 1.0
   } else {
@@ -382,10 +381,35 @@ export function generateFingerprintForApi(browserType: BrowserType): Omit<Finger
 // ─── Injection script ────────────────────────────────────────────────────
 
 export function buildInjectionScript(fp: Fingerprint): string {
-  const languages: string[] = JSON.parse(fp.languages)
+  let languages: string[]
+  try {
+    languages = JSON.parse(fp.languages)
+    if (!Array.isArray(languages)) languages = ['en-US', 'en']
+  } catch {
+    languages = ['en-US', 'en']
+  }
   const languagesJson = JSON.stringify(languages)
-  const fontsJson = fp.fonts_list
+
+  let fontsJson = fp.fonts_list
+  try {
+    JSON.parse(fontsJson) // validate
+  } catch {
+    fontsJson = '[]'
+  }
+
   const isChrome = fp.user_agent.includes('Chrome/')
+
+  // Pre-build worker spoofing code (injected into Worker/SharedWorker constructors)
+  const workerSpoofCode = JSON.stringify(
+    `(function(){try{var n=navigator;var d=Object.defineProperty;` +
+    `d(n,"language",{get:function(){return ${JSON.stringify(languages[0] || 'en-US')}},configurable:true});` +
+    `d(n,"languages",{get:function(){return ${languagesJson}},configurable:true});` +
+    `d(n,"userAgent",{get:function(){return ${JSON.stringify(fp.user_agent)}},configurable:true});` +
+    `d(n,"platform",{get:function(){return ${JSON.stringify(fp.platform)}},configurable:true});` +
+    `d(n,"hardwareConcurrency",{get:function(){return ${fp.hardware_concurrency}},configurable:true});` +
+    `d(n,"deviceMemory",{get:function(){return ${fp.device_memory}},configurable:true});` +
+    `}catch(e){}})();\n`
+  )
 
   return `(function(){
 'use strict';
@@ -396,30 +420,40 @@ function _m32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>1
 var _rng=_m32(_seed);
 
 // ── toString cloaking helper ──
-var _nativeToString=Function.prototype.toString;
-var _patched=new WeakSet();
+var _toStringMap=new WeakMap();
+var _origFnToString=Function.prototype.toString;
+var _origFnToStringStr=_origFnToString.call(_origFnToString);
 function _cloak(obj,name,fn){
   var orig=obj[name];
   obj[name]=fn;
-  _patched.add(fn);
-  if(orig&&!_patched.has(orig)){
-    var src;try{src=_nativeToString.call(orig);}catch(e){src='function '+name+'() { [native code] }';}
-    var _map=_cloak._m||(_cloak._m=new WeakMap());
-    _map.set(fn,src);
+  // Preserve name and length from original
+  try{Object.defineProperty(fn,'name',{value:name,configurable:true});}catch(e){}
+  if(typeof orig==='function'){
+    try{Object.defineProperty(fn,'length',{value:orig.length,configurable:true});}catch(e){}
+    try{_toStringMap.set(fn,_origFnToString.call(orig));}catch(e){_toStringMap.set(fn,'function '+name+'() { [native code] }');}
+  }else{
+    _toStringMap.set(fn,'function '+name+'() { [native code] }');
   }
 }
-var _origFnToString=Function.prototype.toString;
-Function.prototype.toString=function(){
-  var m=_cloak._m;
-  if(m&&m.has(this))return m.get(this);
+Function.prototype.toString=function toString(){
+  if(_toStringMap.has(this))return _toStringMap.get(this);
   return _origFnToString.call(this);
 };
-_patched.add(Function.prototype.toString);
-if(_cloak._m)_cloak._m.set(Function.prototype.toString,_origFnToString.call(_origFnToString));
+_toStringMap.set(Function.prototype.toString,_origFnToStringStr);
 
 // ── Utility: defineProperty shorthand ──
 function _defProp(obj,prop,getter){
-  try{Object.defineProperty(obj,prop,{get:getter,configurable:true,enumerable:true});}catch(e){}
+  try{
+    var desc=Object.getOwnPropertyDescriptor(obj,prop);
+    var enumerable=desc?!!desc.enumerable:true;
+    // Cloak the getter so its toString returns native code
+    if(desc&&desc.get){
+      try{_toStringMap.set(getter,_origFnToString.call(desc.get));}catch(e){_toStringMap.set(getter,'function get '+prop+'() { [native code] }');}
+    }else{
+      _toStringMap.set(getter,'function get '+prop+'() { [native code] }');
+    }
+    Object.defineProperty(obj,prop,{get:getter,configurable:true,enumerable:enumerable});
+  }catch(e){}
 }
 
 // ═══════════════════════════════════════════
@@ -454,13 +488,10 @@ for(var _sk in _scrProps){
 _defProp(window,'devicePixelRatio',function(){return ${fp.pixel_ratio};});
 _defProp(window,'outerWidth',function(){return ${fp.screen_width};});
 _defProp(window,'outerHeight',function(){return ${fp.screen_height};});
-_defProp(window,'innerWidth',function(){return ${fp.screen_width};});
-_defProp(window,'innerHeight',function(){return ${fp.screen_height - 80};});
 
 // ═══════════════════════════════════════════
 // 3. Canvas fingerprint spoofing (Enhanced)
 // ═══════════════════════════════════════════
-var _canvasRng=_m32(_seed);
 
 function _addCanvasNoise(imageData,rng){
   var d=imageData.data,len=d.length;
@@ -543,7 +574,22 @@ var _baseExts=[
 if(_isNvidia||_isAmd)_baseExts.push('WEBGL_compressed_texture_astc','EXT_texture_norm16');
 if(_isApple)_baseExts=_baseExts.filter(function(e){return e!=='EXT_disjoint_timer_query'&&e!=='EXT_texture_compression_rgtc';});
 
-function _hookWebGL(proto){
+// WebGL2 extensions (different from WebGL1 — many WGL1 exts are core in WGL2)
+var _gl2Exts=[
+  'EXT_color_buffer_float','EXT_color_buffer_half_float',
+  'EXT_disjoint_timer_query_webgl2','EXT_float_blend',
+  'EXT_texture_compression_bptc','EXT_texture_compression_rgtc',
+  'EXT_texture_filter_anisotropic','EXT_texture_norm16',
+  'KHR_parallel_shader_compile','OES_draw_buffers_indexed',
+  'OES_texture_float_linear','WEBGL_clip_cull_distance',
+  'WEBGL_compressed_texture_s3tc','WEBGL_compressed_texture_s3tc_srgb',
+  'WEBGL_debug_renderer_info','WEBGL_debug_shaders',
+  'WEBGL_lose_context','WEBGL_multi_draw','WEBGL_provoking_vertex'
+];
+if(_isNvidia||_isAmd)_gl2Exts.push('WEBGL_compressed_texture_astc');
+if(_isApple)_gl2Exts=_gl2Exts.filter(function(e){return e!=='EXT_disjoint_timer_query_webgl2'&&e!=='EXT_texture_compression_rgtc';});
+
+function _hookWebGL(proto,exts){
   var origGetParam=proto.getParameter;
   _cloak(proto,'getParameter',function(p){
     if(p===0x9245)return _wglVendor;
@@ -555,43 +601,88 @@ function _hookWebGL(proto){
 
   var origGetExt=proto.getExtension;
   _cloak(proto,'getExtension',function(name){
-    if(name==='WEBGL_debug_renderer_info'){
-      return{UNMASKED_VENDOR_WEBGL:0x9245,UNMASKED_RENDERER_WEBGL:0x9246};
-    }
+    // Only return extensions that are in our supported list
+    if(exts.indexOf(name)===-1)return null;
+    // Return the real extension object to preserve prototype chain
+    // getParameter is already hooked to return spoofed vendor/renderer
     return origGetExt.call(this,name);
   });
 
   var origGetSupported=proto.getSupportedExtensions;
   _cloak(proto,'getSupportedExtensions',function(){
-    return _baseExts.slice();
-  });
-
-  var origGetSPF=proto.getShaderPrecisionFormat;
-  _cloak(proto,'getShaderPrecisionFormat',function(shaderType,precisionType){
-    var r=origGetSPF.call(this,shaderType,precisionType);
-    if(!r)return r;
-    var rangeMin=r.rangeMin,rangeMax=r.rangeMax,prec=r.precision;
-    if(_isApple){rangeMin=127;rangeMax=127;prec=23;}
-    else if(_isNvidia||_isAmd){rangeMin=127;rangeMax=127;prec=23;}
-    else{rangeMin=r.rangeMin;rangeMax=r.rangeMax;prec=r.precision;}
-    return{rangeMin:rangeMin,rangeMax:rangeMax,precision:prec};
+    return exts.slice();
   });
 }
-if(typeof WebGLRenderingContext!=='undefined')_hookWebGL(WebGLRenderingContext.prototype);
-if(typeof WebGL2RenderingContext!=='undefined')_hookWebGL(WebGL2RenderingContext.prototype);
+if(typeof WebGLRenderingContext!=='undefined')_hookWebGL(WebGLRenderingContext.prototype,_baseExts);
+if(typeof WebGL2RenderingContext!=='undefined')_hookWebGL(WebGL2RenderingContext.prototype,_gl2Exts);
+
+// ═══════════════════════════════════════════
+// 4b. WebGPU fingerprint spoofing
+// ═══════════════════════════════════════════
+try{
+  if(navigator.gpu&&navigator.gpu.requestAdapter){
+    var _origReqAdapter=navigator.gpu.requestAdapter.bind(navigator.gpu);
+    _cloak(navigator.gpu,'requestAdapter',function(opts){
+      return _origReqAdapter(opts).then(function(adapter){
+        if(!adapter)return adapter;
+        // Override requestAdapterInfo to return spoofed GPU info
+        if(adapter.requestAdapterInfo){
+          var _origAdapterInfo=adapter.requestAdapterInfo.bind(adapter);
+          _cloak(adapter,'requestAdapterInfo',function(){
+            return _origAdapterInfo().then(function(info){
+              // Create a new object with spoofed values
+              var desc=_wglRenderer.match(/NVIDIA|AMD|Intel|Apple/i);
+              var spoofedVendor=desc?desc[0]:'';
+              var gpuMatch=_wglRenderer.match(/(?:NVIDIA|AMD|Intel|Apple)[^,)]*/);
+              var spoofedDesc=gpuMatch?gpuMatch[0].trim():_wglRenderer;
+              return{
+                vendor:spoofedVendor,
+                architecture:info.architecture||'',
+                device:spoofedDesc,
+                description:spoofedDesc,
+                get [Symbol.toStringTag](){return 'GPUAdapterInfo';}
+              };
+            });
+          });
+        }
+        // Also override the info property if it exists (newer Chrome)
+        if(adapter.info){
+          try{
+            var desc2=_wglRenderer.match(/NVIDIA|AMD|Intel|Apple/i);
+            var sv=desc2?desc2[0]:'';
+            var gm=_wglRenderer.match(/(?:NVIDIA|AMD|Intel|Apple)[^,)]*/);
+            var sd=gm?gm[0].trim():_wglRenderer;
+            Object.defineProperty(adapter,'info',{get:function(){
+              return{vendor:sv,architecture:'',device:sd,description:sd};
+            },configurable:true});
+          }catch(e){}
+        }
+        return adapter;
+      });
+    });
+  }
+}catch(e){}
 
 // ═══════════════════════════════════════════
 // 5. AudioContext fingerprint spoofing
 // ═══════════════════════════════════════════
 var _audioNoise=${fp.audio_context_noise};
-var _audioRng=_m32(_seed^0xABCD1234);
 
 if(typeof AudioBuffer!=='undefined'){
   var _origGetCD=AudioBuffer.prototype.getChannelData;
+  var _noisedBufs=new WeakSet();
   _cloak(AudioBuffer.prototype,'getChannelData',function(ch){
     var data=_origGetCD.call(this,ch);
-    for(var i=0;i<data.length;i+=100){
-      data[i]=data[i]+_audioNoise*(_audioRng()-0.5);
+    // Only add noise once per buffer to prevent accumulation on repeated calls
+    if(!_noisedBufs.has(this)){
+      _noisedBufs.add(this);
+      var rng=_m32(_seed^(this.length&0x7FFFFFFF));
+      for(var c=0;c<this.numberOfChannels;c++){
+        var d=_origGetCD.call(this,c);
+        for(var i=0;i<d.length;i+=100){
+          d[i]=d[i]+_audioNoise*(rng()-0.5);
+        }
+      }
     }
     return data;
   });
@@ -628,6 +719,56 @@ if(typeof OscillatorNode!=='undefined'){
   });
 }
 
+// Hook OfflineAudioContext.startRendering for audio fingerprint spoofing
+if(typeof OfflineAudioContext!=='undefined'){
+  var _origStartRendering=OfflineAudioContext.prototype.startRendering;
+  _cloak(OfflineAudioContext.prototype,'startRendering',function(){
+    return _origStartRendering.call(this).then(function(buf){
+      // Mark buffer as already noised so getChannelData hook doesn't double-noise
+      if(typeof _noisedBufs!=='undefined')_noisedBufs.add(buf);
+      try{
+        var rng=_m32(_seed^0xA0D10);
+        for(var ch=0;ch<buf.numberOfChannels;ch++){
+          var data=_origGetCD.call(buf,ch);
+          for(var i=0;i<data.length;i+=100){
+            data[i]=data[i]+_audioNoise*(rng()-0.5);
+          }
+        }
+      }catch(e){}
+      return buf;
+    });
+  });
+}
+
+// Hook OffscreenCanvas if available (used for canvas fingerprinting in workers)
+if(typeof OffscreenCanvas!=='undefined'){
+  // Hook OffscreenCanvasRenderingContext2D.getImageData at prototype level
+  if(typeof OffscreenCanvasRenderingContext2D!=='undefined'&&OffscreenCanvasRenderingContext2D.prototype.getImageData){
+    var _origOSCGetID=OffscreenCanvasRenderingContext2D.prototype.getImageData;
+    _cloak(OffscreenCanvasRenderingContext2D.prototype,'getImageData',function(sx,sy,sw,sh){
+      var id=_origOSCGetID.call(this,sx,sy,sw,sh);
+      var rng=_m32(_seed^(sw*sh&0x7FFFFFFF));
+      _addCanvasNoise(id,rng);
+      return id;
+    });
+  }
+  if(OffscreenCanvas.prototype.convertToBlob){
+    var _origOSCToBlob=OffscreenCanvas.prototype.convertToBlob;
+    _cloak(OffscreenCanvas.prototype,'convertToBlob',function(opts){
+      var rng=_m32(_seed^(this.width*this.height&0x7FFFFFFF));
+      try{
+        var ctx=this.getContext('2d');
+        if(ctx){
+          var id=ctx.getImageData(0,0,this.width,this.height);
+          _addCanvasNoise(id,rng);
+          ctx.putImageData(id,0,0);
+        }
+      }catch(e){}
+      return _origOSCToBlob.call(this,opts);
+    });
+  }
+}
+
 // ═══════════════════════════════════════════
 // 6. Font enumeration protection
 // ═══════════════════════════════════════════
@@ -651,19 +792,31 @@ if(typeof FontFaceSet!=='undefined'&&document.fonts){
 // ═══════════════════════════════════════════
 // 7. ClientRects / DOMRect spoofing
 // ═══════════════════════════════════════════
-var _rectRng=_m32(_seed^0x1337);
-function _rNoise(){return(_rectRng()-0.5)*0.002;}
+function _rNoise(r){
+  // Deterministic noise based on rect values so repeated calls return same results
+  var h=((r.x*73856093)^(r.y*19349663)^(r.width*83492791)^(r.height*39916801))>>>0;
+  var rng=_m32(_seed^(h|1));
+  return(rng()-0.5)*0.002;
+}
 
 function _noisyDOMRect(r){
-  return new DOMRect(r.x+_rNoise(),r.y+_rNoise(),r.width+_rNoise(),r.height+_rNoise());
+  var n1=_rNoise(r),n2=_rNoise({x:r.y,y:r.x,width:r.height,height:r.width});
+  return new DOMRect(r.x+n1,r.y+n2,r.width+_rNoise({x:r.width,y:r.x,width:r.y,height:r.height}),r.height+_rNoise({x:r.height,y:r.y,width:r.x,height:r.width}));
 }
 function _noisyRectList(origFn,self){
   var rects=origFn.call(self);
   var arr=[];
   for(var i=0;i<rects.length;i++)arr.push(_noisyDOMRect(rects[i]));
-  arr.item=function(idx){return this[idx]||null;};
-  Object.defineProperty(arr,'length',{get:function(){return rects.length;},configurable:true});
-  return arr;
+  // Return original DOMRectList-like object with noisy values
+  var result=Object.create(rects.__proto__||Object.getPrototypeOf(rects)||{});
+  for(var j=0;j<arr.length;j++)result[j]=arr[j];
+  Object.defineProperty(result,'length',{get:function(){return arr.length;},configurable:true,enumerable:true});
+  Object.defineProperty(result,'item',{value:function(idx){return arr[idx]||null;},writable:false,enumerable:false,configurable:true});
+  _toStringMap.set(result.item,'function item() { [native code] }');
+  if(typeof Symbol!=='undefined'&&Symbol.iterator){
+    Object.defineProperty(result,Symbol.iterator,{value:function(){var _i=0;return{next:function(){return _i<arr.length?{value:arr[_i++],done:false}:{value:undefined,done:true};}};},writable:false,enumerable:false,configurable:true});
+  }
+  return result;
 }
 
 var _origElBCR=Element.prototype.getBoundingClientRect;
@@ -692,24 +845,78 @@ if(typeof Range!=='undefined'){
 // 8. Timezone override
 // ═══════════════════════════════════════════
 var _tz=${JSON.stringify(fp.timezone)};
+var _OrigDTF=Intl.DateTimeFormat;
 try{
   var _now=new Date();
   var _utcStr=_now.toLocaleString('en-US',{timeZone:'UTC'});
   var _localStr=_now.toLocaleString('en-US',{timeZone:_tz});
   var _offset=(new Date(_utcStr)-new Date(_localStr))/60000;
   _cloak(Date.prototype,'getTimezoneOffset',function(){return _offset;});
+
+  // Hook Date string methods to show spoofed timezone
+  // Build timezone abbreviation and offset string
+  var _tzAbbrDate=new _OrigDTF('en-US',{timeZone:_tz,timeZoneName:'short'});
+  var _tzAbbrParts=_tzAbbrDate.formatToParts(new Date());
+  var _tzAbbr='';
+  for(var _tp=0;_tp<_tzAbbrParts.length;_tp++){if(_tzAbbrParts[_tp].type==='timeZoneName')_tzAbbr=_tzAbbrParts[_tp].value;}
+  // Build GMT offset string like "GMT+0300"
+  var _offSign=_offset<=0?'+':'-';
+  var _offAbs=Math.abs(_offset);
+  var _offH=String(Math.floor(_offAbs/60));
+  var _offM=String(_offAbs%60);
+  if(_offH.length<2)_offH='0'+_offH;
+  if(_offM.length<2)_offM='0'+_offM;
+  var _gmtStr='GMT'+_offSign+_offH+_offM;
+
+  var _origDateToString=Date.prototype.toString;
+  _cloak(Date.prototype,'toString',function(){
+    // Reformat: "Day Mon DD YYYY HH:MM:SS GMTxxxx (TZ Name)"
+    var d=this;
+    try{
+      var parts=new _OrigDTF('en-US',{timeZone:_tz,weekday:'short',year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).formatToParts(d);
+      var p={};for(var i=0;i<parts.length;i++)p[parts[i].type]=parts[i].value;
+      return p.weekday+' '+p.month+' '+p.day+' '+p.year+' '+p.hour+':'+p.minute+':'+p.second+' '+_gmtStr+' ('+_tzAbbr+')';
+    }catch(e){return _origDateToString.call(this);}
+  });
+
+  var _origDateToTimeString=Date.prototype.toTimeString;
+  _cloak(Date.prototype,'toTimeString',function(){
+    try{
+      var parts=new _OrigDTF('en-US',{timeZone:_tz,hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).formatToParts(this);
+      var p={};for(var i=0;i<parts.length;i++)p[parts[i].type]=parts[i].value;
+      return p.hour+':'+p.minute+':'+p.second+' '+_gmtStr+' ('+_tzAbbr+')';
+    }catch(e){return _origDateToTimeString.call(this);}
+  });
+
+  var _origDateToDateString=Date.prototype.toDateString;
+  _cloak(Date.prototype,'toDateString',function(){
+    try{
+      var parts=new _OrigDTF('en-US',{timeZone:_tz,weekday:'short',year:'numeric',month:'short',day:'2-digit'}).formatToParts(this);
+      var p={};for(var i=0;i<parts.length;i++)p[parts[i].type]=parts[i].value;
+      return p.weekday+' '+p.month+' '+p.day+' '+p.year;
+    }catch(e){return _origDateToDateString.call(this);}
+  });
+
+  // Hook toLocaleString/toLocaleDateString/toLocaleTimeString to inject locale+tz
+  var _dtLocales=['toLocaleString','toLocaleDateString','toLocaleTimeString'];
+  for(var _dli=0;_dli<_dtLocales.length;_dli++){
+    (function(mName){
+      var orig=Date.prototype[mName];
+      _cloak(Date.prototype,mName,function(locales,opts){
+        if(locales===undefined||locales===null)locales=_navProps.languages.slice();
+        opts=opts||{};
+        if(!opts.timeZone)opts.timeZone=_tz;
+        return orig.call(this,locales,opts);
+      });
+    })(_dtLocales[_dli]);
+  }
 }catch(e){}
 
-var _origResolvedOpts=Intl.DateTimeFormat.prototype.resolvedOptions;
-_cloak(Intl.DateTimeFormat.prototype,'resolvedOptions',function(){
-  var r=_origResolvedOpts.call(this);
-  r.timeZone=_tz;
-  return r;
-});
+// resolvedOptions: no override needed — the constructor hook injects _tz when no timeZone is set
 
-// Also hook Intl.DateTimeFormat constructor to inject timezone
-var _OrigDTF=Intl.DateTimeFormat;
+// Also hook Intl.DateTimeFormat constructor to inject timezone AND locale
 Intl.DateTimeFormat=function(locales,options){
+  if(locales===undefined||locales===null)locales=_navProps.languages.slice();
   if(options&&typeof options==='object'){
     if(!options.timeZone)options.timeZone=_tz;
   }else if(!options){
@@ -717,8 +924,36 @@ Intl.DateTimeFormat=function(locales,options){
   }
   return new _OrigDTF(locales,options);
 };
+Object.defineProperty(Intl.DateTimeFormat,'name',{value:'DateTimeFormat',configurable:true});
+Object.defineProperty(Intl.DateTimeFormat,'length',{value:0,configurable:true});
+_toStringMap.set(Intl.DateTimeFormat,_origFnToString.call(_OrigDTF));
 Intl.DateTimeFormat.prototype=_OrigDTF.prototype;
+Intl.DateTimeFormat.prototype.constructor=Intl.DateTimeFormat;
 Intl.DateTimeFormat.supportedLocalesOf=_OrigDTF.supportedLocalesOf;
+
+// ═══════════════════════════════════════════
+// 8b. Intl locale override (NumberFormat, PluralRules, etc.)
+// ═══════════════════════════════════════════
+try{
+  var _spoofLangs=_navProps.languages;
+  var _intlNames=['NumberFormat','PluralRules','ListFormat','RelativeTimeFormat','Collator','Segmenter','DisplayNames'];
+  for(var _ii=0;_ii<_intlNames.length;_ii++){
+    (function(name){
+      if(!Intl[name])return;
+      var Orig=Intl[name];
+      Intl[name]=function(locales,opts){
+        if(locales===undefined||locales===null)locales=_spoofLangs.slice();
+        return new Orig(locales,opts);
+      };
+      Object.defineProperty(Intl[name],'name',{value:name,configurable:true});
+      Object.defineProperty(Intl[name],'length',{value:0,configurable:true});
+      _toStringMap.set(Intl[name],_origFnToString.call(Orig));
+      Intl[name].prototype=Orig.prototype;
+      Intl[name].prototype.constructor=Intl[name];
+      if(Orig.supportedLocalesOf)Intl[name].supportedLocalesOf=Orig.supportedLocalesOf.bind(Orig);
+    })(_intlNames[_ii]);
+  }
+}catch(e){}
 
 // ═══════════════════════════════════════════
 // 9. MediaDevices spoofing (enhanced)
@@ -731,16 +966,29 @@ if(navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices){
     for(var i=0;i<len;i++)s+=h[(rng()*16)|0];
     return s;
   }
+  var _mdiProto=(typeof MediaDeviceInfo!=='undefined')?MediaDeviceInfo.prototype:null;
+  function _mkDevice(deviceId,groupId,kind,label){
+    var d=_mdiProto?Object.create(_mdiProto):{};
+    Object.defineProperties(d,{
+      deviceId:{get:function(){return deviceId;},enumerable:true,configurable:true},
+      groupId:{get:function(){return groupId;},enumerable:true,configurable:true},
+      kind:{get:function(){return kind;},enumerable:true,configurable:true},
+      label:{get:function(){return label;},enumerable:true,configurable:true}
+    });
+    d.toJSON=function(){return{deviceId:deviceId,kind:kind,label:label,groupId:groupId};};
+    _toStringMap.set(d.toJSON,'function toJSON() { [native code] }');
+    return d;
+  }
   // Pre-generate deterministic IDs
   var _cachedDevices=[];
   var _gid=_hexStr(32,_devRng);
-  for(var _vi=0;_vi<_vidIn;_vi++)_cachedDevices.push({deviceId:_hexStr(64,_devRng),groupId:_gid,kind:'videoinput',label:''});
+  for(var _vi=0;_vi<_vidIn;_vi++)_cachedDevices.push(_mkDevice(_hexStr(64,_devRng),_gid,'videoinput',''));
   var _gid2=_hexStr(32,_devRng);
-  for(var _ai=0;_ai<_audIn;_ai++)_cachedDevices.push({deviceId:_hexStr(64,_devRng),groupId:_gid2,kind:'audioinput',label:''});
-  for(var _ao=0;_ao<_audOut;_ao++)_cachedDevices.push({deviceId:_hexStr(64,_devRng),groupId:_gid2,kind:'audiooutput',label:''});
+  for(var _ai=0;_ai<_audIn;_ai++)_cachedDevices.push(_mkDevice(_hexStr(64,_devRng),_gid2,'audioinput',''));
+  for(var _ao=0;_ao<_audOut;_ao++)_cachedDevices.push(_mkDevice(_hexStr(64,_devRng),_gid2,'audiooutput',''));
 
   _cloak(navigator.mediaDevices,'enumerateDevices',function(){
-    return Promise.resolve(_cachedDevices.map(function(d){return Object.assign({},d);}));
+    return Promise.resolve(_cachedDevices.slice());
   });
 }
 
@@ -751,81 +999,91 @@ var _rtcPolicy=${JSON.stringify(fp.webrtc_policy)};
 if(_rtcPolicy==='disable_non_proxied_udp'){
   var _OrigRTC=window.RTCPeerConnection||window.webkitRTCPeerConnection;
   if(_OrigRTC){
+    function _filterSDP(sdp){
+      if(!sdp)return sdp;
+      return sdp.replace(/a=candidate:[^\\r\\n]*typ\\s+(host|srflx|prflx)[^\\r\\n]*(\\r\\n|\\r|\\n)/g,'');
+    }
+    function _filterIceCandidate(e){
+      if(e.candidate&&e.candidate.candidate){
+        var c=e.candidate.candidate;
+        if(c.indexOf('host')!==-1||c.indexOf('srflx')!==-1||c.indexOf('prflx')!==-1)return true;
+      }
+      return false;
+    }
+    // Hook prototype methods so instances don't have own-property overrides
+    var _origCO=_OrigRTC.prototype.createOffer;
+    _cloak(_OrigRTC.prototype,'createOffer',function(opts){
+      return _origCO.call(this,opts).then(function(o){o.sdp=_filterSDP(o.sdp);return o;});
+    });
+    var _origCA=_OrigRTC.prototype.createAnswer;
+    _cloak(_OrigRTC.prototype,'createAnswer',function(opts){
+      return _origCA.call(this,opts).then(function(a){a.sdp=_filterSDP(a.sdp);return a;});
+    });
+    var _origAEL=_OrigRTC.prototype.addEventListener;
+    _cloak(_OrigRTC.prototype,'addEventListener',function(type,fn,opts){
+      if(type==='icecandidate'){
+        return _origAEL.call(this,type,function(e){
+          if(_filterIceCandidate(e))return;
+          fn(e);
+        },opts);
+      }
+      return _origAEL.call(this,type,fn,opts);
+    });
+    // Hook onicecandidate setter on prototype
+    var _oicDesc=Object.getOwnPropertyDescriptor(_OrigRTC.prototype,'onicecandidate');
+    if(_oicDesc&&_oicDesc.set){
+      var _origOicSet=_oicDesc.set;
+      var _origOicGet=_oicDesc.get;
+      Object.defineProperty(_OrigRTC.prototype,'onicecandidate',{
+        set:function(fn){
+          _origOicSet.call(this,function(e){
+            if(_filterIceCandidate(e))return;
+            if(fn)fn(e);
+          });
+        },
+        get:function(){return _origOicGet?_origOicGet.call(this):undefined;},
+        configurable:true,enumerable:true
+      });
+    }
+    // Constructor wrapper only enforces config
     var _newRTC=function(config){
       config=config||{};
       config.iceServers=[];
       config.iceTransportPolicy='relay';
-      var pc=new _OrigRTC(config);
-      // Filter SDP
-      function _filterSDP(sdp){
-        if(!sdp)return sdp;
-        return sdp.replace(/a=candidate:[^\\r\\n]*typ\\s+(srflx|prflx|relay)[^\\r\\n]*(\\r\\n|\\r|\\n)/g,'');
-      }
-      var origCreateOffer=pc.createOffer.bind(pc);
-      pc.createOffer=function(opts){
-        return origCreateOffer(opts).then(function(o){o.sdp=_filterSDP(o.sdp);return o;});
-      };
-      var origCreateAnswer=pc.createAnswer.bind(pc);
-      pc.createAnswer=function(opts){
-        return origCreateAnswer(opts).then(function(a){a.sdp=_filterSDP(a.sdp);return a;});
-      };
-      // Filter ICE candidates via event
-      var _origAddEvent=pc.addEventListener.bind(pc);
-      pc.addEventListener=function(type,fn,opts){
-        if(type==='icecandidate'){
-          return _origAddEvent(type,function(e){
-            if(e.candidate&&e.candidate.candidate){
-              var c=e.candidate.candidate;
-              if(c.indexOf('srflx')!==-1||c.indexOf('prflx')!==-1||c.indexOf('relay')!==-1)return;
-            }
-            fn(e);
-          },opts);
-        }
-        return _origAddEvent(type,fn,opts);
-      };
-      // Also intercept onicecandidate setter
-      var _oicDesc=Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype,'onicecandidate');
-      if(_oicDesc&&_oicDesc.set){
-        var _origOicSet=_oicDesc.set;
-        Object.defineProperty(pc,'onicecandidate',{
-          set:function(fn){
-            _origOicSet.call(this,function(e){
-              if(e.candidate&&e.candidate.candidate){
-                var c=e.candidate.candidate;
-                if(c.indexOf('srflx')!==-1||c.indexOf('prflx')!==-1||c.indexOf('relay')!==-1)return;
-              }
-              if(fn)fn(e);
-            });
-          },
-          get:function(){return _oicDesc.get?_oicDesc.get.call(this):undefined;},
-          configurable:true
-        });
-      }
-      return pc;
+      return new _OrigRTC(config);
     };
     _newRTC.prototype=_OrigRTC.prototype;
     _newRTC.generateCertificate=_OrigRTC.generateCertificate;
+    Object.defineProperty(_newRTC,'name',{value:'RTCPeerConnection',configurable:true});
+    Object.defineProperty(_newRTC,'length',{value:0,configurable:true});
+    _toStringMap.set(_newRTC,_origFnToString.call(_OrigRTC));
     window.RTCPeerConnection=_newRTC;
     if(window.webkitRTCPeerConnection)window.webkitRTCPeerConnection=_newRTC;
   }
 }else if(_rtcPolicy==='default_public_interface_only'){
   var _OrigRTC2=window.RTCPeerConnection||window.webkitRTCPeerConnection;
   if(_OrigRTC2){
+    function _filterRelaySDP(sdp){
+      if(!sdp)return sdp;
+      return sdp.replace(/a=candidate:[^\\r\\n]*typ\\s+relay[^\\r\\n]*(\\r\\n|\\r|\\n)/g,'');
+    }
+    var _origCO2=_OrigRTC2.prototype.createOffer;
+    _cloak(_OrigRTC2.prototype,'createOffer',function(opts){
+      return _origCO2.call(this,opts).then(function(o){o.sdp=_filterRelaySDP(o.sdp);return o;});
+    });
+    var _origCA2=_OrigRTC2.prototype.createAnswer;
+    _cloak(_OrigRTC2.prototype,'createAnswer',function(opts){
+      return _origCA2.call(this,opts).then(function(a){a.sdp=_filterRelaySDP(a.sdp);return a;});
+    });
     var _newRTC2=function(config){
       config=config||{};
-      var pc=new _OrigRTC2(config);
-      function _filterRelaySDP(sdp){
-        if(!sdp)return sdp;
-        return sdp.replace(/a=candidate:[^\\r\\n]*typ\\s+relay[^\\r\\n]*(\\r\\n|\\r|\\n)/g,'');
-      }
-      var origCO2=pc.createOffer.bind(pc);
-      pc.createOffer=function(opts){return origCO2(opts).then(function(o){o.sdp=_filterRelaySDP(o.sdp);return o;});};
-      var origCA2=pc.createAnswer.bind(pc);
-      pc.createAnswer=function(opts){return origCA2(opts).then(function(a){a.sdp=_filterRelaySDP(a.sdp);return a;});};
-      return pc;
+      return new _OrigRTC2(config);
     };
     _newRTC2.prototype=_OrigRTC2.prototype;
     _newRTC2.generateCertificate=_OrigRTC2.generateCertificate;
+    Object.defineProperty(_newRTC2,'name',{value:'RTCPeerConnection',configurable:true});
+    Object.defineProperty(_newRTC2,'length',{value:0,configurable:true});
+    _toStringMap.set(_newRTC2,_origFnToString.call(_OrigRTC2));
     window.RTCPeerConnection=_newRTC2;
     if(window.webkitRTCPeerConnection)window.webkitRTCPeerConnection=_newRTC2;
   }
@@ -863,22 +1121,54 @@ try{
     {name:'WebKit built-in PDF',filename:'internal-pdf-viewer',description:'Portable Document Format',
      mimeTypes:[{type:'application/pdf',suffixes:'pdf',description:'Portable Document Format'}]}
   ];
-  var _fakePlugins=[];
-  var _fakeMimes=[];
+  // Build with proper prototypes
+  var _paProto=(typeof PluginArray!=='undefined')?PluginArray.prototype:null;
+  var _maProto=(typeof MimeTypeArray!=='undefined')?MimeTypeArray.prototype:null;
+  var _pProto=(typeof Plugin!=='undefined')?Plugin.prototype:null;
+  var _mtProto=(typeof MimeType!=='undefined')?MimeType.prototype:null;
+  var _fakePlugins=_paProto?Object.create(_paProto):Object.create(null);
+  var _fakeMimes=_maProto?Object.create(_maProto):Object.create(null);
+  var _plugCount=0,_mimeCount=0;
   _pluginData.forEach(function(pd){
-    var plug={name:pd.name,filename:pd.filename,description:pd.description,length:pd.mimeTypes.length};
-    pd.mimeTypes.forEach(function(mt,idx){
-      var mo={type:mt.type,suffixes:mt.suffixes,description:mt.description,enabledPlugin:plug};
-      plug[idx]=mo;
-      _fakeMimes.push(mo);
+    var plug=_pProto?Object.create(_pProto):{};
+    Object.defineProperties(plug,{
+      name:{get:function(){return pd.name;},enumerable:true,configurable:true},
+      filename:{get:function(){return pd.filename;},enumerable:true,configurable:true},
+      description:{get:function(){return pd.description;},enumerable:true,configurable:true},
+      length:{get:function(){return pd.mimeTypes.length;},enumerable:true,configurable:true}
     });
-    _fakePlugins.push(plug);
+    pd.mimeTypes.forEach(function(mt,idx){
+      var mo=_mtProto?Object.create(_mtProto):{};
+      Object.defineProperties(mo,{
+        type:{get:function(){return mt.type;},enumerable:true,configurable:true},
+        suffixes:{get:function(){return mt.suffixes;},enumerable:true,configurable:true},
+        description:{get:function(){return mt.description;},enumerable:true,configurable:true},
+        enabledPlugin:{get:function(){return plug;},enumerable:true,configurable:true}
+      });
+      plug[idx]=mo;
+      _fakeMimes[_mimeCount++]=mo;
+    });
+    _fakePlugins[_plugCount++]=plug;
   });
-  _fakePlugins.item=function(i){return this[i]||null;};
-  _fakePlugins.namedItem=function(n){for(var i=0;i<this.length;i++)if(this[i]&&this[i].name===n)return this[i];return null;};
-  _fakePlugins.refresh=function(){};
-  _fakeMimes.item=function(i){return this[i]||null;};
-  _fakeMimes.namedItem=function(n){for(var i=0;i<this.length;i++)if(this[i]&&this[i].type===n)return this[i];return null;};
+  Object.defineProperty(_fakePlugins,'length',{value:_plugCount,enumerable:false,configurable:true});
+  Object.defineProperty(_fakePlugins,'item',{value:function(i){return _fakePlugins[i]||null;},writable:false,enumerable:false,configurable:true});
+  Object.defineProperty(_fakePlugins,'namedItem',{value:function(n){for(var i=0;i<_plugCount;i++)if(_fakePlugins[i]&&_fakePlugins[i].name===n)return _fakePlugins[i];return null;},writable:false,enumerable:false,configurable:true});
+  Object.defineProperty(_fakePlugins,'refresh',{value:function(){},writable:false,enumerable:false,configurable:true});
+  _toStringMap.set(_fakePlugins.item,'function item() { [native code] }');
+  _toStringMap.set(_fakePlugins.namedItem,'function namedItem() { [native code] }');
+  _toStringMap.set(_fakePlugins.refresh,'function refresh() { [native code] }');
+  if(typeof Symbol!=='undefined'&&Symbol.iterator){
+    Object.defineProperty(_fakePlugins,Symbol.iterator,{value:function(){var _i=0;var self=_fakePlugins;return{next:function(){return _i<_plugCount?{value:self[_i++],done:false}:{value:undefined,done:true};}};},enumerable:false,configurable:true});
+  }
+
+  Object.defineProperty(_fakeMimes,'length',{value:_mimeCount,enumerable:false,configurable:true});
+  Object.defineProperty(_fakeMimes,'item',{value:function(i){return _fakeMimes[i]||null;},writable:false,enumerable:false,configurable:true});
+  Object.defineProperty(_fakeMimes,'namedItem',{value:function(n){for(var i=0;i<_mimeCount;i++)if(_fakeMimes[i]&&_fakeMimes[i].type===n)return _fakeMimes[i];return null;},writable:false,enumerable:false,configurable:true});
+  _toStringMap.set(_fakeMimes.item,'function item() { [native code] }');
+  _toStringMap.set(_fakeMimes.namedItem,'function namedItem() { [native code] }');
+  if(typeof Symbol!=='undefined'&&Symbol.iterator){
+    Object.defineProperty(_fakeMimes,Symbol.iterator,{value:function(){var _i=0;var self=_fakeMimes;return{next:function(){return _i<_mimeCount?{value:self[_i++],done:false}:{value:undefined,done:true};}};},enumerable:false,configurable:true});
+  }
 
   _defProp(Navigator.prototype,'plugins',function(){return _fakePlugins;});
   _defProp(Navigator.prototype,'mimeTypes',function(){return _fakeMimes;});
@@ -903,26 +1193,33 @@ try{
     };
   }
   if(!window.chrome.csi){
-    window.chrome.csi=function(){return{startE:Date.now(),onloadT:Date.now(),pageT:Date.now()-performance.timing.navigationStart,tran:15};};
+    window.chrome.csi=function(){var o=performance.timeOrigin||Date.now();return{startE:o,onloadT:Date.now(),pageT:Date.now()-o,tran:15};};
+    _toStringMap.set(window.chrome.csi,'function csi() { [native code] }');
   }
   if(!window.chrome.loadTimes){
     window.chrome.loadTimes=function(){
+      var o=performance.timeOrigin||Date.now();
+      var nav=(performance.getEntriesByType&&performance.getEntriesByType('navigation')[0])||{};
+      var rs=nav.responseStart?o+nav.responseStart:o;
+      var dcl=nav.domContentLoadedEventEnd?o+nav.domContentLoadedEventEnd:o;
+      var le=nav.loadEventEnd?o+nav.loadEventEnd:0;
       return{
-        commitLoadTime:performance.timing.responseStart/1000,
+        commitLoadTime:rs/1000,
         connectionInfo:'h2',
-        finishDocumentLoadTime:performance.timing.domContentLoadedEventEnd/1000,
-        finishLoadTime:performance.timing.loadEventEnd/1000,
+        finishDocumentLoadTime:dcl/1000,
+        finishLoadTime:le/1000,
         firstPaintAfterLoadTime:0,
-        firstPaintTime:performance.timing.responseStart/1000,
+        firstPaintTime:rs/1000,
         navigationType:'Other',
         npnNegotiatedProtocol:'h2',
-        requestTime:performance.timing.navigationStart/1000,
-        startLoadTime:performance.timing.navigationStart/1000,
+        requestTime:o/1000,
+        startLoadTime:o/1000,
         wasAlternateProtocolAvailable:false,
         wasFetchedViaSpdy:true,
         wasNpnNegotiated:true
       };
     };
+    _toStringMap.set(window.chrome.loadTimes,'function loadTimes() { [native code] }');
   }
   if(!window.chrome.app){
     window.chrome.app={isInstalled:false,InstallState:{DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'},RunningState:{CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'},getDetails:function(){return null;},getIsInstalled:function(){return false;},installState:function(cb){if(cb)cb('not_installed');}};
@@ -937,29 +1234,68 @@ try{
   if(typeof Permissions!=='undefined'&&Permissions.prototype.query){
     var _origPermQuery=Permissions.prototype.query;
     _cloak(Permissions.prototype,'query',function(desc){
-      var name=desc&&desc.name;
-      // Return consistent results for commonly queried permissions
-      if(name==='notifications')return Promise.resolve({state:'prompt',onchange:null});
-      if(name==='push')return Promise.resolve({state:'prompt',onchange:null});
-      if(name==='midi')return Promise.resolve({state:'prompt',onchange:null});
-      if(name==='camera')return Promise.resolve({state:'prompt',onchange:null});
-      if(name==='microphone')return Promise.resolve({state:'prompt',onchange:null});
-      if(name==='background-sync')return Promise.resolve({state:'granted',onchange:null});
-      if(name==='accelerometer'||name==='gyroscope'||name==='magnetometer')return Promise.resolve({state:'granted',onchange:null});
-      if(name==='clipboard-read'||name==='clipboard-write')return Promise.resolve({state:'prompt',onchange:null});
-      return _origPermQuery.call(this,desc);
+      return _origPermQuery.call(this,desc).catch(function(){
+        // If the query fails (invalid name, etc.), return a PermissionStatus-like object
+        var ps=typeof PermissionStatus!=='undefined'?Object.create(PermissionStatus.prototype):{};
+        Object.defineProperties(ps,{
+          state:{get:function(){return 'prompt';},enumerable:true,configurable:true},
+          status:{get:function(){return 'prompt';},enumerable:true,configurable:true},
+          onchange:{value:null,writable:true,enumerable:true,configurable:true}
+        });
+        ps.addEventListener=function(){};
+        ps.removeEventListener=function(){};
+        ps.dispatchEvent=function(){return true;};
+        return ps;
+      });
     });
   }
 }catch(e){}
 
 // ═══════════════════════════════════════════
-// 15. speechSynthesis.getVoices() hook
+// 15. speechSynthesis spoofing (prototype-level)
 // ═══════════════════════════════════════════
 try{
-  if(typeof speechSynthesis!=='undefined'&&speechSynthesis.getVoices){
-    _cloak(speechSynthesis,'getVoices',function(){
-      return[];
+  if(typeof SpeechSynthesis!=='undefined'){
+    var _lang0=_navProps.language;
+    // Build a realistic voice list based on spoofed locale
+    // Use SpeechSynthesisVoice prototype from a real voice if available
+    var _voiceProto=(typeof SpeechSynthesisVoice!=='undefined')?SpeechSynthesisVoice.prototype:null;
+    function _mkVoice(name,lang,local,def){
+      var v=_voiceProto?Object.create(_voiceProto):{};
+      Object.defineProperties(v,{
+        name:{get:function(){return name;},enumerable:true,configurable:true},
+        lang:{get:function(){return lang;},enumerable:true,configurable:true},
+        localService:{get:function(){return local;},enumerable:true,configurable:true},
+        default:{get:function(){return def;},enumerable:true,configurable:true},
+        voiceURI:{get:function(){return name;},enumerable:true,configurable:true}
+      });
+      return v;
+    }
+    var _fakeVoices=[];
+    // Local voices matching the primary language
+    if(_lang0.startsWith('de')){_fakeVoices.push(_mkVoice('Microsoft Hedda - German','de-DE',true,true),_mkVoice('Microsoft Katja - German','de-DE',true,false));}
+    else if(_lang0.startsWith('fr')){_fakeVoices.push(_mkVoice('Microsoft Hortense - French','fr-FR',true,true),_mkVoice('Microsoft Julie - French','fr-FR',true,false));}
+    else if(_lang0.startsWith('es')){_fakeVoices.push(_mkVoice('Microsoft Helena - Spanish (Spain)','es-ES',true,true),_mkVoice('Microsoft Laura - Spanish (Spain)','es-ES',true,false));}
+    else if(_lang0.startsWith('ru')){_fakeVoices.push(_mkVoice('Microsoft Irina - Russian','ru-RU',true,true),_mkVoice('Microsoft Pavel - Russian','ru-RU',true,false));_fakeVoices.push(_mkVoice('Microsoft David - English (United States)','en-US',true,false));}
+    else if(_lang0.startsWith('ja')){_fakeVoices.push(_mkVoice('Microsoft Haruka - Japanese','ja-JP',true,true),_mkVoice('Microsoft Ichiro - Japanese','ja-JP',true,false));}
+    else if(_lang0.startsWith('zh')){_fakeVoices.push(_mkVoice('Microsoft Huihui - Chinese (Simplified)','zh-CN',true,true),_mkVoice('Microsoft Yaoyao - Chinese (Simplified)','zh-CN',true,false));}
+    else if(_lang0.startsWith('ko')){_fakeVoices.push(_mkVoice('Microsoft Heami - Korean','ko-KR',true,true));}
+    else if(_lang0.startsWith('pt')){_fakeVoices.push(_mkVoice('Microsoft Maria - Portuguese (Brazil)','pt-BR',true,true));}
+    else if(_lang0.startsWith('it')){_fakeVoices.push(_mkVoice('Microsoft Elsa - Italian','it-IT',true,true));}
+    else{_fakeVoices.push(_mkVoice('Microsoft David - English (United States)','en-US',true,true),_mkVoice('Microsoft Zira - English (United States)','en-US',true,false),_mkVoice('Microsoft Mark - English (United States)','en-US',true,false));}
+    // Common Google network voices
+    _fakeVoices.push(_mkVoice('Google US English','en-US',false,false));
+    _fakeVoices.push(_mkVoice('Google UK English Female','en-GB',false,false));
+    _fakeVoices.push(_mkVoice('Google UK English Male','en-GB',false,false));
+    Object.freeze(_fakeVoices);
+    _cloak(SpeechSynthesis.prototype,'getVoices',function(){return _fakeVoices.slice();});
+    // Suppress voiceschanged to prevent re-enumeration with real voices
+    var _origAddEv=SpeechSynthesis.prototype.addEventListener;
+    _cloak(SpeechSynthesis.prototype,'addEventListener',function(type,fn,opts){
+      if(type==='voiceschanged')return;
+      return _origAddEv.call(this,type,fn,opts);
     });
+    try{Object.defineProperty(speechSynthesis,'onvoiceschanged',{get:function(){return null;},set:function(){},configurable:true});}catch(e){}
   }
 }catch(e){}
 
@@ -969,19 +1305,35 @@ try{
 
 // Prevent WebDriver detection
 _defProp(Navigator.prototype,'webdriver',function(){return false;});
-try{delete navigator.__proto__.webdriver;}catch(e){}
+// Also override on the instance in case Chrome set an own-property (CDP automation flag)
+try{Object.defineProperty(navigator,'webdriver',{get:function(){return false;},configurable:true,enumerable:true});}catch(e){}
 
-// Consistent doNotTrack
-_defProp(Navigator.prototype,'doNotTrack',function(){return '1';});
+// Consistent doNotTrack (null = Chrome default, DNT setting removed in Chrome 120+)
+_defProp(Navigator.prototype,'doNotTrack',function(){return null;});
 
 // Battery API — return consistent object
 try{
   if(navigator.getBattery){
+    var _origGetBattery=Navigator.prototype.getBattery;
     _cloak(Navigator.prototype,'getBattery',function(){
-      return Promise.resolve({
-        charging:true,chargingTime:0,dischargingTime:Infinity,level:1.0,
-        addEventListener:function(){},removeEventListener:function(){},
-        onchargingchange:null,onchargingtimechange:null,ondischargingtimechange:null,onlevelchange:null
+      return _origGetBattery.call(this).then(function(bm){
+        // Override values on the real BatteryManager instance to preserve prototype chain
+        try{
+          var _bmGetters={charging:true,chargingTime:0,dischargingTime:Infinity,level:1.0};
+          for(var _bk in _bmGetters){
+            (function(k,v){
+              var origDesc=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(bm),k);
+              var getter=function(){return v;};
+              if(origDesc&&origDesc.get){
+                try{_toStringMap.set(getter,_origFnToString.call(origDesc.get));}catch(e){_toStringMap.set(getter,'function get '+k+'() { [native code] }');}
+              }else{
+                _toStringMap.set(getter,'function get '+k+'() { [native code] }');
+              }
+              Object.defineProperty(bm,k,{get:getter,configurable:true,enumerable:true});
+            })(_bk,_bmGetters[_bk]);
+          }
+        }catch(e){}
+        return bm;
       });
     });
   }
@@ -991,6 +1343,140 @@ try{
 try{
   if(typeof Notification!=='undefined'){
     _defProp(Notification,'permission',function(){return 'default';});
+  }
+}catch(e){}
+
+// Storage quota fingerprint protection
+try{
+  if(navigator.storage&&navigator.storage.estimate){
+    var _origEstimate=navigator.storage.estimate.bind(navigator.storage);
+    _cloak(navigator.storage,'estimate',function(){
+      return _origEstimate().then(function(est){
+        // Round quota to nearest GB to reduce uniqueness
+        var roundedQuota=Math.round((est.quota||0)/(1024*1024*1024))*(1024*1024*1024);
+        // Round usage to nearest 10MB
+        var roundedUsage=Math.round((est.usage||0)/(10*1024*1024))*(10*1024*1024);
+        return{quota:roundedQuota,usage:roundedUsage,usageDetails:est.usageDetails};
+      });
+    });
+  }
+}catch(e){}
+
+// ═══════════════════════════════════════════
+// 17. navigator.userAgentData (Client Hints API)
+// ═══════════════════════════════════════════
+try{
+  var _uaM=_navProps.userAgent.match(/Chrome\\/(\\d+)/);
+  var _chrM=_uaM?parseInt(_uaM[1]):120;
+  var _uaFull=_navProps.userAgent.match(/Chrome\\/([\\d.]+)/);
+  var _fVer=_uaFull?_uaFull[1]:_chrM+'.0.0.0';
+  var _isWinUA=_navProps.platform==='Win32';
+  var _isMacUA=_navProps.platform==='MacIntel';
+  // Not-a-brand rotation based on Chrome major version
+  var _nbPool=['Not_A Brand','Not/A)Brand','Not)A;Brand','Not A;Brand'];
+  var _nb=_nbPool[_chrM%4];
+  var _brands=Object.freeze([
+    Object.freeze({brand:'Google Chrome',version:String(_chrM)}),
+    Object.freeze({brand:'Chromium',version:String(_chrM)}),
+    Object.freeze({brand:_nb,version:'24'})
+  ]);
+  var _fullBrands=Object.freeze([
+    Object.freeze({brand:'Google Chrome',version:_fVer}),
+    Object.freeze({brand:'Chromium',version:_fVer}),
+    Object.freeze({brand:_nb,version:'24.0.0.0'})
+  ]);
+  var _uaPlatform=_isWinUA?'Windows':_isMacUA?'macOS':'Linux';
+  // Derive platformVersion deterministically from seed (no DB field needed)
+  var _isW11=(_seed%4===0);
+  var _platVer=_isWinUA?(_isW11?'15.0.0':'10.0.0'):_isMacUA?'14.5.0':'6.5.0';
+  var _uaData={
+    brands:_brands,
+    mobile:false,
+    platform:_uaPlatform,
+    toJSON:function(){return{brands:this.brands,mobile:this.mobile,platform:this.platform};}
+  };
+  _uaData.getHighEntropyValues=function(hints){
+    var r={brands:_brands,mobile:false,platform:_uaPlatform};
+    for(var _hi=0;_hi<hints.length;_hi++){
+      var h=hints[_hi];
+      if(h==='architecture')r.architecture='x86';
+      if(h==='bitness')r.bitness='64';
+      if(h==='fullVersionList')r.fullVersionList=_fullBrands;
+      if(h==='model')r.model='';
+      if(h==='platformVersion')r.platformVersion=_platVer;
+      if(h==='uaFullVersion')r.uaFullVersion=_fVer;
+      if(h==='wow64')r.wow64=false;
+      if(h==='formFactors')r.formFactors=['Desktop'];
+    }
+    return Promise.resolve(r);
+  };
+  _toStringMap.set(_uaData.toJSON,'function toJSON() { [native code] }');
+  _toStringMap.set(_uaData.getHighEntropyValues,'function getHighEntropyValues() { [native code] }');
+  _defProp(Navigator.prototype,'userAgentData',function(){return _uaData;});
+}catch(e){}
+
+// ═══════════════════════════════════════════
+// 18. Worker/SharedWorker scope spoofing
+// ═══════════════════════════════════════════
+try{
+  var _wkSpoof=${workerSpoofCode};
+  var _OW=window.Worker;
+  if(_OW){
+    var _HookedWorker=function(s,o){
+      try{
+        if(typeof s==='string'||s instanceof URL){
+          var u=''+s;
+          try{u=new URL(u,location.href).href;}catch(e){}
+          var blobUrl;
+          if(o&&o.type==='module'){
+            var mb=new Blob([_wkSpoof+'import '+JSON.stringify(u)+';'],{type:'text/javascript'});
+            blobUrl=URL.createObjectURL(mb);
+          }else{
+            var cb=new Blob([_wkSpoof+'importScripts('+JSON.stringify(u)+');'],{type:'text/javascript'});
+            blobUrl=URL.createObjectURL(cb);
+          }
+          var w=new _OW(blobUrl,o);
+          // Revoke blob URL after worker has loaded (microtask delay is enough)
+          Promise.resolve().then(function(){URL.revokeObjectURL(blobUrl);});
+          return w;
+        }
+      }catch(e){}
+      return new _OW(s,o);
+    };
+    _HookedWorker.prototype=_OW.prototype;
+    Object.defineProperty(_HookedWorker,'name',{value:'Worker',configurable:true});
+    Object.defineProperty(_HookedWorker,'length',{value:1,configurable:true});
+    _toStringMap.set(_HookedWorker,_origFnToString.call(_OW));
+    window.Worker=_HookedWorker;
+  }
+  // SharedWorker hook
+  var _OSW=window.SharedWorker;
+  if(_OSW){
+    var _HookedSW=function(s,o){
+      try{
+        if(typeof s==='string'||s instanceof URL){
+          var u=''+s;
+          try{u=new URL(u,location.href).href;}catch(e){}
+          var blobUrl;
+          if(o&&o.type==='module'){
+            var msb=new Blob([_wkSpoof+'import '+JSON.stringify(u)+';'],{type:'text/javascript'});
+            blobUrl=URL.createObjectURL(msb);
+          }else{
+            var sb=new Blob([_wkSpoof+'importScripts('+JSON.stringify(u)+');'],{type:'text/javascript'});
+            blobUrl=URL.createObjectURL(sb);
+          }
+          var sw=new _OSW(blobUrl,o);
+          Promise.resolve().then(function(){URL.revokeObjectURL(blobUrl);});
+          return sw;
+        }
+      }catch(e){}
+      return new _OSW(s,o);
+    };
+    _HookedSW.prototype=_OSW.prototype;
+    Object.defineProperty(_HookedSW,'name',{value:'SharedWorker',configurable:true});
+    Object.defineProperty(_HookedSW,'length',{value:1,configurable:true});
+    _toStringMap.set(_HookedSW,_origFnToString.call(_OSW));
+    window.SharedWorker=_HookedSW;
   }
 }catch(e){}
 

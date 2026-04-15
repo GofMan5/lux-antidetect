@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS proxies (
     password TEXT,
     last_check TEXT,
     check_ok INTEGER DEFAULT 0,
+    check_latency_ms INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -146,6 +147,13 @@ export function initDatabase(userDataPath: string): Database.Database {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `)
+
+  // Migration: add check_latency_ms column to proxies
+  try {
+    db.prepare('SELECT check_latency_ms FROM proxies LIMIT 0').get()
+  } catch {
+    db.exec('ALTER TABLE proxies ADD COLUMN check_latency_ms INTEGER')
+  }
 
   return db
 }

@@ -9,7 +9,7 @@ export function initSessionsDb(db: Database.Database): void {
   _db = db
 }
 
-interface TrackedSession extends SessionInfo {
+export interface TrackedSession extends SessionInfo {
   process: ChildProcess
   history_id: string
 }

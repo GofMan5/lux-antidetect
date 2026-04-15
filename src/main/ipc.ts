@@ -10,10 +10,17 @@ import {
   duplicateProfile
 } from './profile'
 import { listProxies, createProxy, updateProxy, deleteProxy, testProxy } from './proxy'
-import { launchBrowser, stopBrowser, detectBrowsers } from './browser'
-import { getAllSessions, getSessionHistory, checkProcessHealth } from './sessions'
+import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds } from './browser'
+import { getAllSessions, getSessionHistory } from './sessions'
 import { generateFingerprintForApi } from './fingerprint'
 import { checkForUpdates, installUpdate } from './updater'
+import {
+  downloadBrowser,
+  listManagedBrowsers,
+  removeManagedBrowser,
+  getAvailableBrowsers,
+  cancelDownload
+} from './browser-manager'
 import { v4 as uuidv4 } from 'uuid'
 import { writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
@@ -60,7 +67,74 @@ export function registerIpcHandlers(
     updateProxy(db, proxyId, input)
   )
   ipcMain.handle('delete-proxy', (_, proxyId: string) => deleteProxy(db, proxyId))
+
+  // Parse proxy strings (host:port:user:pass or protocol://host:port:user:pass)
+  ipcMain.handle('parse-proxy-string', (_, raw: string) => {
+    const results: { ok: boolean; data?: ProxyInput; error?: string; line: string }[] = []
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    for (const line of lines) {
+      try {
+        let protocol: ProxyInput['protocol'] = 'http'
+        let rest = line
+        // Check for protocol prefix
+        const protoMatch = rest.match(/^(https?|socks[45]):\/\//)
+        if (protoMatch) {
+          protocol = protoMatch[1] as ProxyInput['protocol']
+          rest = rest.replace(protoMatch[0], '')
+        }
+        // Split by : — formats: host:port, host:port:user:pass, user:pass@host:port
+        let host: string, port: number, username: string | undefined, password: string | undefined
+        const atIdx = rest.indexOf('@')
+        if (atIdx !== -1) {
+          // user:pass@host:port
+          const auth = rest.slice(0, atIdx)
+          const hostPort = rest.slice(atIdx + 1)
+          const [u, p] = auth.split(':')
+          username = u; password = p
+          const [h, portStr] = hostPort.split(':')
+          host = h; port = parseInt(portStr, 10)
+        } else {
+          const parts = rest.split(':')
+          if (parts.length === 4) {
+            // host:port:user:pass
+            host = parts[0]; port = parseInt(parts[1], 10)
+            username = parts[2]; password = parts[3]
+          } else if (parts.length === 2) {
+            // host:port
+            host = parts[0]; port = parseInt(parts[1], 10)
+          } else {
+            throw new Error('Invalid format')
+          }
+        }
+        if (!host || !port || isNaN(port) || port < 1 || port > 65535) throw new Error('Invalid host:port')
+        results.push({
+          ok: true,
+          data: { name: `${host}:${port}`, protocol, host, port, username, password },
+          line
+        })
+      } catch (err) {
+        results.push({ ok: false, error: err instanceof Error ? err.message : 'Parse error', line })
+      }
+    }
+    return results
+  })
+
   ipcMain.handle('test-proxy', (_, proxyId: string) => testProxy(db, proxyId))
+
+  // Bulk proxy test
+  ipcMain.handle('bulk-test-proxies', async (_, proxyIds: string[]) => {
+    const results: { id: string; ok: boolean }[] = []
+    for (const id of proxyIds) {
+      try {
+        await testProxy(db, id)
+        const proxy = db.prepare('SELECT check_ok FROM proxies WHERE id = ?').get(id) as { check_ok: number } | undefined
+        results.push({ id, ok: !!proxy?.check_ok })
+      } catch {
+        results.push({ id, ok: false })
+      }
+    }
+    return results
+  })
 
   // Fingerprint
   ipcMain.handle('generate-fingerprint', (_, browserType: BrowserType) =>
@@ -152,14 +226,24 @@ export function registerIpcHandlers(
   // Bulk operations (async — each op yields the main thread between iterations)
   ipcMain.handle('bulk-launch', async (_, profileIds: string[]) => {
     const results: { id: string; ok: boolean; error?: string }[] = []
-    for (const id of profileIds) {
-      try {
-        await launchBrowser(db, id, profilesDir, mainWindow)
-        results.push({ id, ok: true })
-      } catch (err) {
-        results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
+    const concurrency = 3
+    let idx = 0
+
+    async function runNext(): Promise<void> {
+      while (idx < profileIds.length) {
+        const i = idx++
+        const id = profileIds[i]
+        try {
+          await launchBrowser(db, id, profilesDir, mainWindow)
+          results.push({ id, ok: true })
+        } catch (err) {
+          results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
+        }
       }
     }
+
+    const workers = Array.from({ length: Math.min(concurrency, profileIds.length) }, () => runNext())
+    await Promise.all(workers)
     return results
   })
 
@@ -207,6 +291,10 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('import-cookies', (_, profileId: string, cookieData: string) => {
+    // Validate size (max 5MB)
+    if (cookieData.length > 5 * 1024 * 1024) {
+      throw new Error('Cookie data too large (max 5MB)')
+    }
     const profileDir = join(profilesDir, profileId)
     const targetDir = join(profileDir, 'Default')
     if (!existsSync(targetDir)) {
@@ -217,8 +305,18 @@ export function registerIpcHandlers(
     return { ok: true }
   })
 
-  // Process health
-  ipcMain.handle('check-process-health', () => checkProcessHealth())
+  // Process health — check which sessions have lost their browser process
+  ipcMain.handle('check-process-health', () => {
+    const activeBrowserIds = getActiveBrowserProfileIds()
+    const sessions = getAllSessions()
+    const dead: string[] = []
+    for (const s of sessions) {
+      if (!activeBrowserIds.has(s.profile_id)) {
+        dead.push(s.profile_id)
+      }
+    }
+    return { dead }
+  })
 
   // Fingerprint validation
   ipcMain.handle('validate-fingerprint', (_, profileId: string) => {
@@ -249,4 +347,17 @@ export function registerIpcHandlers(
   // Auto-updates
   ipcMain.handle('check-for-updates', () => checkForUpdates())
   ipcMain.handle('install-update', () => installUpdate())
+
+  // Browser management (download / list / remove)
+  ipcMain.handle('list-managed-browsers', () => listManagedBrowsers())
+  ipcMain.handle('get-available-browsers', () => getAvailableBrowsers())
+  ipcMain.handle('download-browser', async (_, browserType: BrowserType, channel?: string) =>
+    downloadBrowser(browserType, channel ?? 'stable')
+  )
+  ipcMain.handle('remove-managed-browser', async (_, browser: string, buildId: string) =>
+    removeManagedBrowser(browser, buildId)
+  )
+  ipcMain.handle('cancel-browser-download', (_, browser: string, buildId: string) =>
+    cancelDownload(browser, buildId)
+  )
 }

@@ -119,7 +119,10 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
     set((state) => {
       const errors = { ...state.profileErrors }
       delete errors[id]
-      return { profileErrors: errors }
+      return {
+        profileErrors: errors,
+        profiles: setProfileStatus(state.profiles, id, 'ready')
+      }
     })
   }
 }))
@@ -127,12 +130,16 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
 // Reactive session event subscriptions — instant UI updates when browsers start/stop.
 // Use a retry loop because contextBridge may not have exposed window.api yet
 // when this module is first evaluated.
+const MAX_INIT_RETRIES = 100 // 5 seconds max (100 * 50ms)
+let initRetries = 0
+
 function initEventListeners(): void {
   if (typeof window === 'undefined') return
 
   if (!window.api) {
-    // contextBridge hasn't run yet — retry
-    setTimeout(initEventListeners, 50)
+    if (initRetries++ < MAX_INIT_RETRIES) {
+      setTimeout(initEventListeners, 50)
+    }
     return
   }
 

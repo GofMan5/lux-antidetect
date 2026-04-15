@@ -59,7 +59,10 @@ const profileSchema = z.object({
   webgl_vendor: z.string(),
   webgl_renderer: z.string(),
   webrtc_policy: z.string(),
-  languages: z.string()
+  languages: z.string(),
+  tags: z.string(),
+  color_depth: z.number(),
+  pixel_ratio: z.number()
 })
 
 type ProfileFormData = z.infer<typeof profileSchema>
@@ -81,7 +84,10 @@ const DEFAULT_VALUES: ProfileFormData = {
   webgl_vendor: '',
   webgl_renderer: '',
   webrtc_policy: 'disable_non_proxied_udp',
-  languages: 'en-US'
+  languages: 'en-US',
+  tags: '',
+  color_depth: 24,
+  pixel_ratio: 1.0
 }
 
 function parseScreen(value: string): { width: number; height: number } {
@@ -90,14 +96,30 @@ function parseScreen(value: string): { width: number; height: number } {
 }
 
 function toScreenValue(w: number, h: number): string {
-  const value = `${w}x${h}`
-  return SCREEN_PRESETS.find((p) => p.value === value) ? value : SCREEN_PRESETS[0].value
+  return `${w}x${h}`
 }
 
 interface ProfileEditorPanelProps {
   profileId?: string | null
   onSave: () => void
   onCancel: () => void
+}
+
+function getFingerprintStrength(data: ProfileFormData): { score: number; issues: string[] } {
+  const issues: string[] = []
+  const ua = data.user_agent
+  const platform = data.platform
+
+  if (ua.includes('Windows') && platform !== 'Win32') issues.push('UA/Platform mismatch')
+  if (ua.includes('Macintosh') && platform !== 'MacIntel') issues.push('UA/Platform mismatch')
+  if (ua.includes('Macintosh') && data.pixel_ratio === 1) issues.push('Mac usually has 2x pixel ratio')
+  if (!ua) issues.push('No User-Agent set')
+  if (!data.webgl_vendor) issues.push('No WebGL vendor')
+  if (!data.timezone) issues.push('No timezone set')
+  if (ua.includes('Windows') && data.webgl_vendor === 'Apple') issues.push('Windows + Apple GPU impossible')
+
+  const score = Math.max(0, 100 - issues.length * 15)
+  return { score, issues }
 }
 
 export function ProfileEditorPanel({
@@ -110,6 +132,7 @@ export function ProfileEditorPanel({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [templateSaved, setTemplateSaved] = useState(false)
   const [templates, setTemplates] = useState<Array<{ id: string; name: string; browser_type: string }>>([])
 
   const proxies = useProxiesStore((s) => s.proxies)
@@ -127,6 +150,8 @@ export function ProfileEditorPanel({
     resolver: zodResolver(profileSchema),
     defaultValues: DEFAULT_VALUES
   })
+
+  const watchedData = watch()
 
   useEffect(() => {
     fetchProxies()
@@ -154,6 +179,7 @@ export function ProfileEditorPanel({
           notes: detail.profile.notes,
           proxy_id: detail.profile.proxy_id ?? '',
           start_url: detail.profile.start_url ?? '',
+          tags: detail.profile.tags || '',
           user_agent: detail.fingerprint.user_agent,
           platform: detail.fingerprint.platform,
           screen: toScreenValue(detail.fingerprint.screen_width, detail.fingerprint.screen_height),
@@ -163,6 +189,8 @@ export function ProfileEditorPanel({
           webgl_vendor: detail.fingerprint.webgl_vendor,
           webgl_renderer: detail.fingerprint.webgl_renderer,
           webrtc_policy: detail.fingerprint.webrtc_policy,
+          color_depth: detail.fingerprint.color_depth ?? 24,
+          pixel_ratio: detail.fingerprint.pixel_ratio ?? 1.0,
           languages: (() => {
             try {
               return JSON.parse(detail.fingerprint.languages).join(', ')
@@ -192,6 +220,8 @@ export function ProfileEditorPanel({
       setValue('webgl_renderer', fp.webgl_renderer)
       setValue('webrtc_policy', fp.webrtc_policy)
       setValue('languages', fp.languages)
+      setValue('color_depth', fp.color_depth ?? 24)
+      setValue('pixel_ratio', fp.pixel_ratio ?? 1.0)
       setFpOpen(true)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to generate fingerprint')
@@ -220,6 +250,7 @@ export function ProfileEditorPanel({
           proxy_id: data.proxy_id || null,
           start_url: data.start_url,
           group_color: data.group_color || null,
+          tags: data.tags ? data.tags.split(',').map(s => s.trim()).filter(Boolean) : []
         })
         await api.updateFingerprint(profileId, {
           user_agent: data.user_agent,
@@ -243,6 +274,7 @@ export function ProfileEditorPanel({
           proxy_id: data.proxy_id || null,
           start_url: data.start_url,
           group_color: data.group_color || null,
+          tags: data.tags ? data.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
           fingerprint: {
             user_agent: data.user_agent,
             platform: data.platform,
@@ -375,6 +407,19 @@ export function ProfileEditorPanel({
           </div>
 
           <div>
+            <label htmlFor="tags" className={LABEL_CLASS}>
+              Tags <span className="text-muted font-normal">(comma separated)</span>
+            </label>
+            <input
+              id="tags"
+              type="text"
+              placeholder="social, work, shopping"
+              className={INPUT_CLASS}
+              {...register('tags')}
+            />
+          </div>
+
+          <div>
             <label htmlFor="start_url" className={LABEL_CLASS}>
               Start URL
             </label>
@@ -427,6 +472,27 @@ export function ProfileEditorPanel({
                 <Wand2 className="h-3.5 w-3.5" />
                 {generating ? 'Generating...' : 'Generate Fingerprint'}
               </button>
+
+              {(() => {
+                const data = watchedData as ProfileFormData
+                if (!data.user_agent) return null
+                const { score, issues } = getFingerprintStrength(data)
+                const color = score >= 80 ? 'text-ok' : score >= 50 ? 'text-warn' : 'text-err'
+                const bgColor = score >= 80 ? 'bg-ok' : score >= 50 ? 'bg-warn' : 'bg-err'
+                return (
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="flex-1 h-1.5 bg-surface rounded-full overflow-hidden">
+                      <div className={`h-full ${bgColor} rounded-full transition-all`} style={{ width: `${score}%` }} />
+                    </div>
+                    <span className={`text-[10px] font-medium ${color}`}>{score}%</span>
+                    {issues.length > 0 && (
+                      <span className="text-[10px] text-muted" title={issues.join(', ')}>
+                        {issues.length} issue{issues.length > 1 ? 's' : ''}
+                      </span>
+                    )}
+                  </div>
+                )
+              })()}
 
               <div className="grid grid-cols-1 gap-2.5">
                 <div>
@@ -538,6 +604,39 @@ export function ProfileEditorPanel({
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
+                    <label htmlFor="color_depth" className={LABEL_CLASS}>
+                      Color Depth
+                    </label>
+                    <select
+                      id="color_depth"
+                      className={SELECT_CLASS}
+                      {...register('color_depth', { valueAsNumber: true })}
+                    >
+                      <option value={24}>24</option>
+                      <option value={30}>30</option>
+                      <option value={32}>32</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="pixel_ratio" className={LABEL_CLASS}>
+                      Pixel Ratio
+                    </label>
+                    <select
+                      id="pixel_ratio"
+                      className={SELECT_CLASS}
+                      {...register('pixel_ratio', { valueAsNumber: true })}
+                    >
+                      <option value={1}>1.0</option>
+                      <option value={1.25}>1.25</option>
+                      <option value={1.5}>1.5</option>
+                      <option value={2}>2.0</option>
+                      <option value={3}>3.0</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
                     <label htmlFor="webgl_vendor" className={LABEL_CLASS}>
                       WebGL Vendor
                     </label>
@@ -592,34 +691,40 @@ export function ProfileEditorPanel({
             <button
               type="button"
               onClick={async () => {
-                const data = getValues()
-                const { width, height } = parseScreen(data.screen)
-                await api.createTemplate({
-                  name: `${data.name} Template`,
-                  browser_type: data.browser_type,
-                  config: {
-                    group_name: data.group_name || null,
-                    notes: data.notes,
-                    start_url: data.start_url,
-                    proxy_id: data.proxy_id || null,
-                    fingerprint: {
-                      user_agent: data.user_agent,
-                      platform: data.platform,
-                      screen_width: width,
-                      screen_height: height,
-                      timezone: data.timezone,
-                      hardware_concurrency: data.hardware_concurrency,
-                      device_memory: data.device_memory,
-                      webgl_vendor: data.webgl_vendor,
-                      webgl_renderer: data.webgl_renderer,
-                      webrtc_policy: data.webrtc_policy
-                    }
-                  } as Record<string, unknown>
-                })
+                try {
+                  const data = getValues()
+                  const { width, height } = parseScreen(data.screen)
+                  await api.createTemplate({
+                    name: `${data.name} Template`,
+                    browser_type: data.browser_type,
+                    config: {
+                      group_name: data.group_name || null,
+                      notes: data.notes,
+                      start_url: data.start_url,
+                      proxy_id: data.proxy_id || null,
+                      fingerprint: {
+                        user_agent: data.user_agent,
+                        platform: data.platform,
+                        screen_width: width,
+                        screen_height: height,
+                        timezone: data.timezone,
+                        hardware_concurrency: data.hardware_concurrency,
+                        device_memory: data.device_memory,
+                        webgl_vendor: data.webgl_vendor,
+                        webgl_renderer: data.webgl_renderer,
+                        webrtc_policy: data.webrtc_policy
+                      }
+                    } as Record<string, unknown>
+                  })
+                  setTemplateSaved(true)
+                  setTimeout(() => setTemplateSaved(false), 2000)
+                } catch (err: unknown) {
+                  setError(err instanceof Error ? err.message : 'Failed to save template')
+                }
               }}
               className="ml-auto text-xs text-accent hover:text-accent-dim transition-colors font-medium"
             >
-              Save as Template
+              {templateSaved ? 'Saved!' : 'Save as Template'}
             </button>
           )}
         </div>

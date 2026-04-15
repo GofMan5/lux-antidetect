@@ -26,6 +26,7 @@ export function listProfiles(db: Database.Database): Profile[] {
 }
 
 export function getProfile(db: Database.Database, profileId: string): ProfileDetail {
+  assertUuid(profileId)
   const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as
     | Profile
     | undefined
@@ -119,6 +120,7 @@ export function updateProfile(
   profileId: string,
   input: UpdateProfileInput
 ): Profile {
+  assertUuid(profileId)
   const existing = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as
     | Profile
     | undefined
@@ -145,6 +147,7 @@ export function updateFingerprint(
   profileId: string,
   input: UpdateFingerprintInput
 ): void {
+  assertUuid(profileId)
   const existing = db.prepare('SELECT * FROM fingerprints WHERE profile_id = ?').get(profileId) as
     | Fingerprint
     | undefined
@@ -229,6 +232,7 @@ export async function duplicateProfile(
   profileId: string,
   profilesDir: string
 ): Promise<Profile> {
+  assertUuid(profileId)
   const detail = getProfile(db, profileId)
   const newId = uuidv4()
   const fpId = uuidv4()

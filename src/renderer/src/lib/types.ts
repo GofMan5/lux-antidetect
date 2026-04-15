@@ -52,6 +52,7 @@ export interface ProxyResponse {
   has_password: boolean
   last_check: string | null
   check_ok: boolean
+  check_latency_ms: number | null
   created_at: string
 }
 
@@ -138,4 +139,19 @@ export interface TemplateInput {
   description?: string
   browser_type: BrowserType
   config: Record<string, unknown>
+}
+
+export interface ManagedBrowserResponse {
+  browser: string
+  buildId: string
+  platform: string
+  executablePath: string
+  tags: string[]
+}
+
+export interface AvailableBrowser {
+  browserType: BrowserType
+  browser: string
+  channel: string
+  buildId: string
 }

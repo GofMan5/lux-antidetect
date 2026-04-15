@@ -30,6 +30,8 @@ const api: LuxAPI = {
   updateProxy: (id: string, input: UpdateProxyInput) => ipcRenderer.invoke('update-proxy', id, input),
   deleteProxy: (id: string) => ipcRenderer.invoke('delete-proxy', id),
   testProxy: (id: string) => ipcRenderer.invoke('test-proxy', id),
+  parseProxyString: (raw: string) => ipcRenderer.invoke('parse-proxy-string', raw),
+  bulkTestProxies: (ids: string[]) => ipcRenderer.invoke('bulk-test-proxies', ids),
 
   generateFingerprint: (browserType: GenerateFingerprintBrowserType) =>
     ipcRenderer.invoke('generate-fingerprint', browserType),
@@ -106,6 +108,31 @@ const api: LuxAPI = {
     return () => {
       ipcRenderer.removeListener('session:state', handler)
     }
+  },
+
+  // Browser management
+  listManagedBrowsers: () => ipcRenderer.invoke('list-managed-browsers'),
+  getAvailableBrowsers: () => ipcRenderer.invoke('get-available-browsers'),
+  downloadBrowser: (browserType: string, channel?: string) =>
+    ipcRenderer.invoke('download-browser', browserType, channel),
+  removeManagedBrowser: (browser: string, buildId: string) =>
+    ipcRenderer.invoke('remove-managed-browser', browser, buildId),
+  cancelBrowserDownload: (browser: string, buildId: string) =>
+    ipcRenderer.invoke('cancel-browser-download', browser, buildId),
+  onBrowserDownloadProgress: (callback: (data: { browser: string; buildId: string; downloadedBytes: number; totalBytes: number; percent: number }) => void) => {
+    const handler = (_: unknown, data: { browser: string; buildId: string; downloadedBytes: number; totalBytes: number; percent: number }): void => callback(data)
+    ipcRenderer.on('browser-download:progress', handler)
+    return () => { ipcRenderer.removeListener('browser-download:progress', handler) }
+  },
+  onBrowserDownloadComplete: (callback: (data: Record<string, unknown>) => void) => {
+    const handler = (_: unknown, data: Record<string, unknown>): void => callback(data)
+    ipcRenderer.on('browser-download:complete', handler)
+    return () => { ipcRenderer.removeListener('browser-download:complete', handler) }
+  },
+  onBrowserDownloadError: (callback: (data: { browser: string; buildId: string; message: string }) => void) => {
+    const handler = (_: unknown, data: { browser: string; buildId: string; message: string }): void => callback(data)
+    ipcRenderer.on('browser-download:error', handler)
+    return () => { ipcRenderer.removeListener('browser-download:error', handler) }
   }
 }
 

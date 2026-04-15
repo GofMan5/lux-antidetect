@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
-import { Users, Globe, Settings, Shield, Download, RefreshCw } from 'lucide-react'
+import { Users, Globe, Settings, Shield, Download, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const NAV_ITEMS = [
   { to: '/profiles', label: 'Profiles', icon: Users },
@@ -29,12 +29,12 @@ function UpdateBanner(): React.JSX.Element | null {
       <div className="px-3 py-1.5 bg-accent/15 border-t border-accent/30">
         <div className="flex items-center gap-2 text-[11px] text-accent">
           <Download className="h-3 w-3 animate-pulse" />
-          <span>Downloading update… {downloading}%</span>
+          <span>Downloading update… {Math.round(downloading)}%</span>
         </div>
         <div className="mt-1 h-1 rounded-full bg-surface overflow-hidden">
           <div
             className="h-full bg-accent rounded-full transition-all duration-300"
-            style={{ width: `${downloading}%` }}
+            style={{ width: `${Math.round(downloading)}%` }}
           />
         </div>
       </div>
@@ -60,14 +60,18 @@ function UpdateBanner(): React.JSX.Element | null {
 }
 
 export function Layout(): React.JSX.Element {
+  const [collapsed, setCollapsed] = useState(false)
+
   return (
     <div className="flex h-screen w-screen overflow-hidden">
-      <aside className="w-[180px] shrink-0 bg-surface-alt border-r border-edge flex flex-col">
-        <div className="flex items-center gap-2.5 px-4 py-4 border-b border-edge">
+      <aside className={`${collapsed ? 'w-[52px]' : 'w-[180px]'} shrink-0 bg-surface-alt border-r border-edge flex flex-col transition-all duration-200`}>
+        <div className="flex items-center gap-2.5 px-3 py-4 border-b border-edge">
           <Shield className="h-5 w-5 text-accent shrink-0" />
-          <span className="text-sm font-bold tracking-tight text-content">
-            Lux Antidetect
-          </span>
+          {!collapsed && (
+            <span className="text-sm font-bold tracking-tight text-content">
+              Lux Antidetect
+            </span>
+          )}
         </div>
         <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 py-2 flex-1">
           {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
@@ -75,22 +79,32 @@ export function Layout(): React.JSX.Element {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors ${
+                `flex items-center ${collapsed ? 'justify-center' : ''} gap-2.5 rounded-md px-3 py-2 text-[13px] font-medium transition-colors ${
                   isActive
                     ? 'bg-accent text-white'
                     : 'text-muted hover:bg-elevated hover:text-content'
                 }`
               }
+              title={collapsed ? label : undefined}
             >
               <Icon className="h-4 w-4 shrink-0" />
-              {label}
+              {!collapsed && label}
             </NavLink>
           ))}
         </nav>
         <UpdateBanner />
-        <div className="px-4 py-2.5 text-[11px] text-muted border-t border-edge">
-          Lux v1.0.0
-        </div>
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          className="mx-2 mb-1 rounded-md p-1.5 text-muted hover:text-content hover:bg-elevated transition-colors flex items-center justify-center"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+        </button>
+        {!collapsed && (
+          <div className="px-4 py-2.5 text-[11px] text-muted border-t border-edge">
+            Lux v1.0.1
+          </div>
+        )}
       </aside>
       <main className="flex-1 min-w-0 overflow-hidden bg-surface flex flex-col">
         <Outlet />

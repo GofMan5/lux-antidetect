@@ -2,8 +2,10 @@ import { useEffect, useState, useCallback } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Trash2, FlaskConical, Pencil, X, Loader2 } from 'lucide-react'
+import { Plus, Trash2, FlaskConical, Pencil, X, Loader2, Upload, Globe } from 'lucide-react'
 import { useProxiesStore } from '../stores/proxies'
+import { useConfirmStore } from '../components/ConfirmDialog'
+import { useToastStore } from '../components/Toast'
 import { api } from '../lib/api'
 import { INPUT_CLASS, SELECT_CLASS, LABEL_CLASS, BTN_PRIMARY, BTN_SECONDARY, BTN_ICON, BTN_DANGER } from '../lib/ui'
 import type { ProxyProtocol, ProxyResponse } from '../lib/types'
@@ -41,12 +43,19 @@ export function ProxiesPage(): React.JSX.Element {
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
   const deleteProxy = useProxiesStore((s) => s.deleteProxy)
   const testProxy = useProxiesStore((s) => s.testProxy)
+  const confirm = useConfirmStore((s) => s.show)
+  const addToast = useToastStore((s) => s.addToast)
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [modalError, setModalError] = useState<string | null>(null)
   const [modalSaving, setModalSaving] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<{ id: string; ok: boolean } | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importLoading, setImportLoading] = useState(false)
+  const [bulkTesting, setBulkTesting] = useState(false)
 
   const {
     register,
@@ -118,6 +127,7 @@ export function ProxiesPage(): React.JSX.Element {
       }
       await fetchProxies()
       closeModal()
+      addToast(editingId ? 'Proxy updated' : 'Proxy created', 'success')
     } catch (err: unknown) {
       setModalError(err instanceof Error ? err.message : 'Failed to save proxy')
     } finally {
@@ -125,15 +135,32 @@ export function ProxiesPage(): React.JSX.Element {
     }
   }
 
-  const handleDelete = (id: string, name: string): void => {
-    if (window.confirm(`Delete proxy "${name}"?`)) {
+  const handleDelete = async (id: string, name: string): Promise<void> => {
+    const ok = await confirm({
+      title: 'Delete Proxy',
+      message: `Delete proxy "${name}"?`,
+      confirmLabel: 'Delete',
+      danger: true
+    })
+    if (ok) {
       deleteProxy(id)
+      addToast('Proxy deleted', 'success')
     }
   }
 
   const handleTest = async (id: string): Promise<void> => {
     setTestingId(id)
-    await testProxy(id)
+    setTestResult(null)
+    try {
+      await testProxy(id)
+      await fetchProxies()
+      const updated = useProxiesStore.getState().proxies.find(p => p.id === id)
+      setTestResult({ id, ok: !!updated?.check_ok })
+      setTimeout(() => setTestResult(null), 3000)
+    } catch {
+      setTestResult({ id, ok: false })
+      setTimeout(() => setTestResult(null), 3000)
+    }
     setTestingId(null)
   }
 
@@ -154,15 +181,38 @@ export function ProxiesPage(): React.JSX.Element {
             {proxies.length}
           </span>
         </div>
-        <button onClick={openAdd} className={BTN_PRIMARY}>
-          <Plus className="h-4 w-4" />
-          Add Proxy
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={openAdd} className={BTN_PRIMARY}>
+            <Plus className="h-4 w-4" />
+            Add Proxy
+          </button>
+          <button onClick={() => setImportOpen(true)} className={BTN_SECONDARY}>
+            <Upload className="h-4 w-4" />
+            Import
+          </button>
+          <button
+            onClick={async () => {
+              setBulkTesting(true)
+              try {
+                const ids = proxies.map(p => p.id)
+                await api.bulkTestProxies(ids)
+                await fetchProxies()
+              } catch { /* best effort */ }
+              setBulkTesting(false)
+            }}
+            disabled={bulkTesting || proxies.length === 0}
+            className={BTN_SECONDARY}
+          >
+            {bulkTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+            Test All
+          </button>
+        </div>
       </div>
 
       {proxies.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 text-center">
           <div className="bg-card rounded-xl p-8 border border-edge">
+            <Globe className="h-8 w-8 text-muted/30 mx-auto mb-3" />
             <p className="text-muted mb-4 text-sm">No proxies configured</p>
             <button onClick={openAdd} className={BTN_PRIMARY}>
               <Plus className="h-4 w-4" />
@@ -211,10 +261,22 @@ export function ProxiesPage(): React.JSX.Element {
                   <td className="px-3 py-2.5 text-muted text-xs truncate">{proxy.username ?? <span className="text-muted/50">None</span>}</td>
                   <td className="px-3 py-2.5">
                     <span className="inline-flex items-center gap-1.5 text-xs">
-                      <span
-                        className={`h-2 w-2 rounded-full shrink-0 ${proxy.check_ok ? 'bg-ok' : 'bg-err'}`}
-                      />
-                      <span className="text-muted">{proxy.check_ok ? 'OK' : 'Fail'}</span>
+                      {testResult?.id === proxy.id ? (
+                        <>
+                          <span className={`h-2 w-2 rounded-full shrink-0 ${testResult.ok ? 'bg-ok animate-pulse' : 'bg-err animate-pulse'}`} />
+                          <span className={testResult.ok ? 'text-ok font-medium' : 'text-err font-medium'}>
+                            {testResult.ok ? 'Connected!' : 'Failed!'}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className={`h-2 w-2 rounded-full shrink-0 ${proxy.check_ok ? 'bg-ok' : 'bg-err'}`} />
+                          <span className="text-muted">{proxy.check_ok ? 'OK' : 'Fail'}</span>
+                          {proxy.check_ok && proxy.check_latency_ms != null && (
+                            <span className="text-muted/70 font-mono">{proxy.check_latency_ms}ms</span>
+                          )}
+                        </>
+                      )}
                     </span>
                   </td>
                   <td className="px-3 py-2.5">
@@ -257,7 +319,7 @@ export function ProxiesPage(): React.JSX.Element {
       {/* Modal */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn"
           onClick={closeModal}
         >
           <div
@@ -374,6 +436,71 @@ export function ProxiesPage(): React.JSX.Element {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Import Modal */}
+      {importOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn"
+          onClick={() => setImportOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Import proxies"
+            className="bg-card rounded-xl p-5 w-[90%] max-w-[500px] border border-edge shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-semibold text-content">Import Proxies</h2>
+              <button onClick={() => setImportOpen(false)} className={BTN_ICON} aria-label="Close">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="text-xs text-muted mb-2">
+              One proxy per line. Formats: <code className="text-accent">host:port</code>, <code className="text-accent">host:port:user:pass</code>, <code className="text-accent">socks5://host:port</code>, <code className="text-accent">user:pass@host:port</code>
+            </p>
+            <textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder="192.168.1.1:8080&#10;socks5://proxy.example.com:1080:user:pass"
+              rows={6}
+              className="w-full rounded-md border border-edge bg-surface-alt px-3 py-2 text-sm text-content font-mono placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent/60 resize-none mb-3"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  if (!importText.trim()) return
+                  setImportLoading(true)
+                  try {
+                    const parsed = await api.parseProxyString(importText)
+                    let created = 0
+                    for (const r of parsed) {
+                      if (r.ok && r.data) {
+                        try {
+                          await api.createProxy(r.data)
+                          created++
+                        } catch { /* skip duplicates */ }
+                      }
+                    }
+                    await fetchProxies()
+                    addToast(`Imported ${created} proxy/proxies`, 'success')
+                    setImportOpen(false)
+                    setImportText('')
+                  } catch { /* best effort */ }
+                  setImportLoading(false)
+                }}
+                disabled={importLoading || !importText.trim()}
+                className={BTN_PRIMARY}
+              >
+                {importLoading ? 'Importing...' : 'Import'}
+              </button>
+              <button onClick={() => setImportOpen(false)} className={BTN_SECONDARY}>
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

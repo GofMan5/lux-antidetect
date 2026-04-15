@@ -90,14 +90,18 @@ export function testProxy(db: Database.Database, proxyId: string): Promise<boole
   const proxy = db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as Proxy | undefined
   if (!proxy) throw new Error(`Proxy not found: ${proxyId}`)
 
+  const startTime = Date.now()
+
   return new Promise((resolve) => {
     const socket = createConnection(
       { host: proxy.host, port: proxy.port, timeout: PROXY_TEST_TIMEOUT_MS },
       () => {
+        const latency = Date.now() - startTime
         socket.destroy()
         const now = new Date().toISOString()
-        db.prepare('UPDATE proxies SET last_check = ?, check_ok = 1 WHERE id = ?').run(
+        db.prepare('UPDATE proxies SET last_check = ?, check_ok = 1, check_latency_ms = ? WHERE id = ?').run(
           now,
+          latency,
           proxyId
         )
         resolve(true)
@@ -106,7 +110,7 @@ export function testProxy(db: Database.Database, proxyId: string): Promise<boole
     socket.on('error', () => {
       socket.destroy()
       const now = new Date().toISOString()
-      db.prepare('UPDATE proxies SET last_check = ?, check_ok = 0 WHERE id = ?').run(
+      db.prepare('UPDATE proxies SET last_check = ?, check_ok = 0, check_latency_ms = NULL WHERE id = ?').run(
         now,
         proxyId
       )
@@ -115,7 +119,7 @@ export function testProxy(db: Database.Database, proxyId: string): Promise<boole
     socket.on('timeout', () => {
       socket.destroy()
       const now = new Date().toISOString()
-      db.prepare('UPDATE proxies SET last_check = ?, check_ok = 0 WHERE id = ?').run(
+      db.prepare('UPDATE proxies SET last_check = ?, check_ok = 0, check_latency_ms = NULL WHERE id = ?').run(
         now,
         proxyId
       )

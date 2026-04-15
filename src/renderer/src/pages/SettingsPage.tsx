@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
-import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download } from 'lucide-react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, HardDrive, Loader2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
+import { useProfilesStore } from '../stores/profiles'
 import { THEME_PRESETS } from '../lib/themes'
 import type { Theme, ThemeColors } from '../lib/themes'
 import { BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER, LABEL_CLASS, INPUT_CLASS, CHECKBOX_CLASS } from '../lib/ui'
+import type { ManagedBrowserResponse, AvailableBrowser } from '../lib/types'
+import { useToastStore } from '../components/Toast'
 
 const COLOR_LABELS: Record<keyof ThemeColors, string> = {
   surface: 'Background',
@@ -40,6 +43,13 @@ export function SettingsPage(): React.JSX.Element {
   const [browsers, setBrowsers] = useState<Record<string, string>>({})
   const [browsersLoading, setBrowsersLoading] = useState(true)
 
+  // Browser Manager state
+  const [managedBrowsers, setManagedBrowsers] = useState<ManagedBrowserResponse[]>([])
+  const [availableBrowsers, setAvailableBrowsers] = useState<AvailableBrowser[]>([])
+  const [downloading, setDownloading] = useState<Record<string, number>>({}) // key → percent
+  const addToast = useToastStore((s) => s.addToast)
+  const downloadingRef = useRef(downloading)
+
   const activeThemeId = useSettingsStore((s) => s.activeThemeId)
   const customThemes = useSettingsStore((s) => s.customThemes)
   const setActiveTheme = useSettingsStore((s) => s.setActiveTheme)
@@ -57,6 +67,11 @@ export function SettingsPage(): React.JSX.Element {
   }>>([])
   const [historyLoading, setHistoryLoading] = useState(true)
 
+  const profiles = useProfilesStore((s) => s.profiles)
+  const profileNameMap = new Map(profiles.map(p => [p.id, p.name]))
+
+  const [sessionTimeout, setSessionTimeout] = useState(0)
+
   const [showCustomEditor, setShowCustomEditor] = useState(false)
   const [customName, setCustomName] = useState('')
   const [customColors, setCustomColors] = useState<ThemeColors>({ ...DEFAULT_CUSTOM_COLORS })
@@ -69,6 +84,12 @@ export function SettingsPage(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    api.getSetting('session_timeout_minutes').then((v: unknown) => {
+      if (typeof v === 'number') setSessionTimeout(v)
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     api.getSessionHistory().then((h: unknown) => {
       setSessionHistory(h as typeof sessionHistory)
       setHistoryLoading(false)
@@ -78,6 +99,66 @@ export function SettingsPage(): React.JSX.Element {
       setTemplates(t as typeof templates)
     }).catch(() => {})
   }, [])
+
+  // Browser Manager: load managed & available browsers + listen to download events
+  const refreshManagedBrowsers = useCallback(() => {
+    api.listManagedBrowsers().then(setManagedBrowsers).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    refreshManagedBrowsers()
+    api.getAvailableBrowsers().then(setAvailableBrowsers).catch(() => {})
+
+    const offProgress = api.onBrowserDownloadProgress((data) => {
+      setDownloading(prev => ({ ...prev, [`${data.browser}-${data.buildId}`]: data.percent }))
+    })
+    const offComplete = api.onBrowserDownloadComplete(() => {
+      refreshManagedBrowsers()
+      // Re-detect system browsers after managed install
+      api.detectBrowsers().then(setBrowsers)
+    })
+    const offError = api.onBrowserDownloadError((data) => {
+      setDownloading(prev => {
+        const next = { ...prev }
+        delete next[`${data.browser}-${data.buildId}`]
+        return next
+      })
+      addToast(`Download failed: ${data.message}`, 'error')
+    })
+
+    return () => { offProgress(); offComplete(); offError() }
+  }, [refreshManagedBrowsers, addToast])
+
+  // Keep ref in sync
+  downloadingRef.current = downloading
+
+  const handleDownloadBrowser = async (browserType: string, channel: string, browser: string, buildId: string): Promise<void> => {
+    const key = `${browser}-${buildId}`
+    if (downloading[key] !== undefined) return // already downloading
+    setDownloading(prev => ({ ...prev, [key]: 0 }))
+    try {
+      await api.downloadBrowser(browserType as 'chromium' | 'firefox' | 'edge', channel)
+      setDownloading(prev => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      addToast(`${browserType} ${buildId} downloaded successfully`, 'success')
+    } catch {
+      // Error events handled by listener above
+    }
+  }
+
+  const handleRemoveBrowser = async (browser: string, buildId: string): Promise<void> => {
+    try {
+      await api.removeManagedBrowser(browser, buildId)
+      setManagedBrowsers(prev => prev.filter(b => !(b.browser === browser && b.buildId === buildId)))
+      api.detectBrowsers().then(setBrowsers)
+      addToast(`${browser} ${buildId} removed`, 'success')
+    } catch (err) {
+      addToast(`Failed to remove: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }
 
   function formatDuration(seconds: number | null): string {
     if (seconds === null) return '\u2014'
@@ -262,6 +343,7 @@ export function SettingsPage(): React.JSX.Element {
             <table className="w-full text-sm">
               <thead className="sticky top-0">
                 <tr className="border-b border-edge bg-surface-alt">
+                  <th className="text-left px-3 py-2 text-muted font-medium text-xs uppercase tracking-wide">Profile</th>
                   <th className="text-left px-3 py-2 text-muted font-medium text-xs uppercase tracking-wide">Date</th>
                   <th className="text-left px-3 py-2 text-muted font-medium text-xs uppercase tracking-wide">Duration</th>
                   <th className="text-left px-3 py-2 text-muted font-medium text-xs uppercase tracking-wide">Exit</th>
@@ -270,6 +352,9 @@ export function SettingsPage(): React.JSX.Element {
               <tbody>
                 {sessionHistory.slice(0, 20).map((h, i) => (
                   <tr key={h.id} className={`border-b border-edge/50 last:border-0 ${i % 2 === 1 ? 'bg-elevated/20' : ''}`}>
+                    <td className="px-3 py-2 text-content text-xs truncate max-w-[140px]" title={profileNameMap.get(h.profile_id) ?? h.profile_id}>
+                      {profileNameMap.get(h.profile_id) ?? <span className="text-muted/50 font-mono">{h.profile_id.slice(0, 8)}</span>}
+                    </td>
                     <td className="px-3 py-2 text-content text-xs">
                       {new Date(h.started_at).toLocaleString()}
                     </td>
@@ -321,35 +406,144 @@ export function SettingsPage(): React.JSX.Element {
         )}
       </section>
 
-      {/* Detected Browsers */}
+      {/* Browser Manager */}
       <section className="bg-card rounded-lg border border-edge p-4 mb-3">
-        <h2 className="text-xs font-semibold text-muted mb-3 uppercase tracking-wide">Detected Browsers</h2>
-        {browsersLoading ? (
-          <p className="text-muted text-sm">Detecting browsers...</p>
-        ) : browserEntries.length === 0 ? (
-          <div className="flex items-center gap-2">
-            <XCircle className="h-4 w-4 text-err" />
-            <p className="text-sm text-muted">No browsers detected</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {browserEntries.map(([name, path]) => (
-              <div key={name} className="flex items-center gap-2.5 bg-surface-alt rounded-lg px-3 py-2 border border-edge/50">
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-content capitalize">{name}</p>
-                  <p className="text-xs text-muted truncate font-mono">{path}</p>
+        <h2 className="text-xs font-semibold text-muted mb-3 flex items-center gap-2 uppercase tracking-wide">
+          <HardDrive className="h-4 w-4 text-accent" />
+          Browser Manager
+        </h2>
+
+        {/* Installed managed browsers */}
+        {managedBrowsers.length > 0 && (
+          <div className="mb-3">
+            <p className="text-xs text-muted mb-2 font-medium">Installed Browsers</p>
+            <div className="space-y-1.5">
+              {managedBrowsers.map((b) => (
+                <div key={`${b.browser}-${b.buildId}`} className="flex items-center gap-2.5 bg-surface-alt rounded-lg px-3 py-2.5 border border-edge/50">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-content capitalize">{b.browser}</p>
+                    <p className="text-xs text-muted truncate font-mono">{b.buildId} — {b.platform}</p>
+                  </div>
+                  <button
+                    onClick={() => handleRemoveBrowser(b.browser, b.buildId)}
+                    className={BTN_DANGER}
+                    title="Remove this browser"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
+
+        {/* Available for download */}
+        <p className="text-xs text-muted mb-2 font-medium">Download Browsers</p>
+        {availableBrowsers.length === 0 ? (
+          <p className="text-xs text-muted">Checking available downloads...</p>
+        ) : (
+          <div className="space-y-1.5">
+            {availableBrowsers.map((ab) => {
+              const dlKey = `${ab.browser}-${ab.buildId}`
+              const isDownloading = downloading[dlKey] !== undefined
+              const percent = downloading[dlKey] ?? 0
+              const isInstalled = managedBrowsers.some(m => m.browser === ab.browser && m.buildId === ab.buildId)
+              return (
+                <div key={dlKey} className="flex items-center gap-2.5 bg-surface-alt rounded-lg px-3 py-2.5 border border-edge/50">
+                  <Download className="h-4 w-4 shrink-0 text-accent" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-content capitalize">{ab.browserType}</p>
+                    <p className="text-xs text-muted font-mono">{ab.channel} — {ab.buildId}</p>
+                    {isDownloading && (
+                      <div className="mt-1.5 w-full bg-surface rounded-full h-1.5">
+                        <div
+                          className="bg-accent h-1.5 rounded-full transition-all duration-300"
+                          style={{ width: `${percent}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {isInstalled ? (
+                    <span className="text-xs text-ok font-medium px-2 py-1 rounded bg-ok/10">Installed</span>
+                  ) : isDownloading ? (
+                    <span className="flex items-center gap-1.5 text-xs text-accent font-medium">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {percent}%
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleDownloadBrowser(ab.browserType, ab.channel, ab.browser, ab.buildId)}
+                      className={BTN_PRIMARY + ' text-xs !px-3 !py-1.5'}
+                    >
+                      Download
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* System-detected browsers as fallback info */}
+        <div className="mt-4 border-t border-edge pt-3">
+          <p className="text-xs text-muted mb-2 font-medium">System Browsers (auto-detected)</p>
+          {browsersLoading ? (
+            <p className="text-muted text-xs">Detecting...</p>
+          ) : browserEntries.length === 0 ? (
+            <div className="flex items-center gap-2">
+              <XCircle className="h-3.5 w-3.5 text-err" />
+              <p className="text-xs text-muted">No system browsers detected</p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {browserEntries.map(([name, path]) => (
+                <div key={name} className="flex items-center gap-2 text-xs">
+                  <CheckCircle2 className="h-3 w-3 shrink-0 text-ok" />
+                  <span className="text-content capitalize font-medium">{name}</span>
+                  <span className="text-muted truncate font-mono">{path}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </section>
 
       {/* About */}
       <section className="bg-card rounded-lg border border-edge p-4 mb-3">
         <h2 className="text-xs font-semibold text-muted mb-2 uppercase tracking-wide">About</h2>
-        <p className="text-sm text-muted">Lux Antidetect Browser v1.0.0</p>
+        <p className="text-sm text-muted">Lux Antidetect Browser v1.0.1</p>
+      </section>
+
+      {/* Data Management */}
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-3 flex items-center gap-2 uppercase tracking-wide">
+          <Trash2 className="h-4 w-4 text-err" />
+          Data Management
+        </h2>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-content">Session Timeout</p>
+              <p className="text-xs text-muted">Auto-stop browsers after this duration (0 = disabled)</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                max={1440}
+                value={sessionTimeout}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 0
+                  setSessionTimeout(val)
+                  api.setSetting('session_timeout_minutes', val)
+                }}
+                className="w-20 rounded-md border border-edge bg-surface-alt px-2 py-1.5 text-sm text-content text-center focus:outline-none focus:ring-2 focus:ring-accent/60"
+              />
+              <span className="text-xs text-muted">min</span>
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* Updates */}
@@ -358,9 +552,15 @@ export function SettingsPage(): React.JSX.Element {
           <Download className="h-4 w-4 text-accent" />
           Updates
         </h2>
-        <p className="text-sm text-muted">
-          Auto-updater will check for new versions when available. Current: v1.0.0
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted">Current: v1.0.1</p>
+          <button
+            onClick={() => api.checkForUpdates()}
+            className={BTN_SECONDARY + ' text-xs'}
+          >
+            Check for Updates
+          </button>
+        </div>
       </section>
     </div>
   )

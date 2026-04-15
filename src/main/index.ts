@@ -6,6 +6,7 @@ import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
 import { killAllBrowsers } from './browser'
 import { initAutoUpdater } from './updater'
+import { initBrowserManager } from './browser-manager'
 
 // Portable mode: if a "data" directory exists next to the executable, use it
 function resolveDataPath(): string {
@@ -78,13 +79,18 @@ app.whenReady().then(() => {
   // Crash recovery: reset profiles stuck in non-ready states from a previous crash
   db.prepare("UPDATE profiles SET status = 'ready' WHERE status IN ('running', 'starting', 'stopping', 'error')").run()
 
-  const mainWindow = createWindow()
+  let mainWindow = createWindow()
 
   registerIpcHandlers(db, profilesDir, mainWindow)
   initAutoUpdater(mainWindow)
+  initBrowserManager(userDataPath, mainWindow)
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      mainWindow = createWindow()
+      registerIpcHandlers(db, profilesDir, mainWindow)
+      initAutoUpdater(mainWindow)
+    }
   })
 })
 
