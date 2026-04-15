@@ -72,9 +72,10 @@ export function initDatabase(userDataPath: string): Database.Database {
 
   // Migration: widen status CHECK constraint if needed (old: ready/running/error → new: +starting/stopping)
   // SQLite can't ALTER CHECK constraints, so we recreate the table if the old constraint exists.
-  try {
-    db.prepare("UPDATE profiles SET status = 'starting' WHERE 0").run()
-  } catch {
+  // Check the actual table SQL — WHERE 0 doesn't trigger CHECK validation.
+  const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='profiles'").get() as { sql: string } | undefined
+  const needsStatusMigration = tableInfo?.sql && !tableInfo.sql.includes('starting')
+  if (needsStatusMigration) {
     // CHECK constraint rejects 'starting' → need migration
     db.pragma('foreign_keys = OFF')
     db.exec(`
