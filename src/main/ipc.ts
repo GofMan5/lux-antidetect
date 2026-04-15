@@ -13,6 +13,7 @@ import { listProxies, createProxy, updateProxy, deleteProxy, testProxy } from '.
 import { launchBrowser, stopBrowser, detectBrowsers } from './browser'
 import { getAllSessions, getSessionHistory, checkProcessHealth } from './sessions'
 import { generateFingerprintForApi } from './fingerprint'
+import { checkForUpdates, installUpdate } from './updater'
 import { v4 as uuidv4 } from 'uuid'
 import { writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
@@ -244,4 +245,8 @@ export function registerIpcHandlers(
 
     return { valid: issues.length === 0, issues }
   })
+
+  // Auto-updates
+  ipcMain.handle('check-for-updates', () => checkForUpdates())
+  ipcMain.handle('install-update', () => installUpdate())
 }

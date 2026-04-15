@@ -62,6 +62,30 @@ const api: LuxAPI = {
   checkProcessHealth: () => ipcRenderer.invoke('check-process-health'),
   validateFingerprint: (profileId: string) => ipcRenderer.invoke('validate-fingerprint', profileId),
 
+  // Auto-updates
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdateAvailable: (callback: (data: { version: string }) => void) => {
+    const handler = (_: unknown, data: { version: string }): void => callback(data)
+    ipcRenderer.on('update:available', handler)
+    return () => { ipcRenderer.removeListener('update:available', handler) }
+  },
+  onUpdateDownloaded: (callback: (data: { version: string }) => void) => {
+    const handler = (_: unknown, data: { version: string }): void => callback(data)
+    ipcRenderer.on('update:downloaded', handler)
+    return () => { ipcRenderer.removeListener('update:downloaded', handler) }
+  },
+  onUpdateProgress: (callback: (data: { percent: number }) => void) => {
+    const handler = (_: unknown, data: { percent: number }): void => callback(data)
+    ipcRenderer.on('update:download-progress', handler)
+    return () => { ipcRenderer.removeListener('update:download-progress', handler) }
+  },
+  onUpdateError: (callback: (data: { message: string }) => void) => {
+    const handler = (_: unknown, data: { message: string }): void => callback(data)
+    ipcRenderer.on('update:error', handler)
+    return () => { ipcRenderer.removeListener('update:error', handler) }
+  },
+
   onSessionStarted: (callback: (data: SessionStartedEvent) => void) => {
     const handler = (_: unknown, data: SessionStartedEvent): void => callback(data)
     ipcRenderer.on('session:started', handler)

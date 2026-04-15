@@ -5,6 +5,7 @@ import { initDatabase } from './db'
 import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
 import { killAllBrowsers } from './browser'
+import { initAutoUpdater } from './updater'
 
 // Portable mode: if a "data" directory exists next to the executable, use it
 function resolveDataPath(): string {
@@ -80,6 +81,7 @@ app.whenReady().then(() => {
   const mainWindow = createWindow()
 
   registerIpcHandlers(db, profilesDir, mainWindow)
+  initAutoUpdater(mainWindow)
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
