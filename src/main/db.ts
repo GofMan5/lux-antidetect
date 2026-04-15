@@ -91,9 +91,12 @@ export function initDatabase(userDataPath: string): Database.Database {
           proxy_id TEXT REFERENCES proxies(id) ON DELETE SET NULL,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-          last_used TEXT
+          last_used TEXT,
+          start_url TEXT DEFAULT '',
+          group_color TEXT
       );
-      INSERT INTO profiles_new SELECT * FROM profiles;
+      INSERT INTO profiles_new (id, name, browser_type, group_name, tags, notes, status, proxy_id, created_at, updated_at, last_used)
+        SELECT id, name, browser_type, group_name, tags, notes, status, proxy_id, created_at, updated_at, last_used FROM profiles;
       DROP TABLE profiles;
       ALTER TABLE profiles_new RENAME TO profiles;
       CREATE INDEX IF NOT EXISTS idx_profiles_group ON profiles(group_name);
