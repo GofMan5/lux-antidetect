@@ -61,7 +61,12 @@ export function getSession(profileId: string): TrackedSession | null {
 }
 
 export function getAllSessions(): SessionInfo[] {
-  return Array.from(sessions.values()).map(({ process: _, history_id: _h, ...info }) => info)
+  return Array.from(sessions.values()).map((session) => ({
+    profile_id: session.profile_id,
+    pid: session.pid,
+    browser_type: session.browser_type,
+    started_at: session.started_at
+  }))
 }
 
 export function isRunning(profileId: string): boolean {

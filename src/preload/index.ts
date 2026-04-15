@@ -1,11 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { LuxAPI, SessionStartedEvent, SessionStateEvent, SessionStoppedEvent } from './api-contract'
 
-const api = {
+type CreateProfileInput = Parameters<LuxAPI['createProfile']>[0]
+type UpdateProfileInput = Parameters<LuxAPI['updateProfile']>[1]
+type UpdateFingerprintInput = Parameters<LuxAPI['updateFingerprint']>[1]
+type CreateProxyInput = Parameters<LuxAPI['createProxy']>[0]
+type UpdateProxyInput = Parameters<LuxAPI['updateProxy']>[1]
+type GenerateFingerprintBrowserType = Parameters<LuxAPI['generateFingerprint']>[0]
+type CreateTemplateInput = Parameters<LuxAPI['createTemplate']>[0]
+type UpdateTemplateInput = Parameters<LuxAPI['updateTemplate']>[1]
+
+const api: LuxAPI = {
   listProfiles: () => ipcRenderer.invoke('list-profiles'),
   getProfile: (id: string) => ipcRenderer.invoke('get-profile', id),
-  createProfile: (input: unknown) => ipcRenderer.invoke('create-profile', input),
-  updateProfile: (id: string, input: unknown) => ipcRenderer.invoke('update-profile', id, input),
-  updateFingerprint: (id: string, input: unknown) =>
+  createProfile: (input: CreateProfileInput) => ipcRenderer.invoke('create-profile', input),
+  updateProfile: (id: string, input: UpdateProfileInput) => ipcRenderer.invoke('update-profile', id, input),
+  updateFingerprint: (id: string, input: UpdateFingerprintInput) =>
     ipcRenderer.invoke('update-fingerprint', id, input),
   deleteProfile: (id: string) => ipcRenderer.invoke('delete-profile', id),
   duplicateProfile: (id: string) => ipcRenderer.invoke('duplicate-profile', id),
@@ -16,13 +26,13 @@ const api = {
   detectBrowsers: () => ipcRenderer.invoke('detect-browsers'),
 
   listProxies: () => ipcRenderer.invoke('list-proxies'),
-  createProxy: (input: unknown) => ipcRenderer.invoke('create-proxy', input),
-  updateProxy: (id: string, input: unknown) => ipcRenderer.invoke('update-proxy', id, input),
+  createProxy: (input: CreateProxyInput) => ipcRenderer.invoke('create-proxy', input),
+  updateProxy: (id: string, input: UpdateProxyInput) => ipcRenderer.invoke('update-proxy', id, input),
   deleteProxy: (id: string) => ipcRenderer.invoke('delete-proxy', id),
   testProxy: (id: string) => ipcRenderer.invoke('test-proxy', id),
 
-  generateFingerprint: (browserType: string, osHint?: string) =>
-    ipcRenderer.invoke('generate-fingerprint', browserType, osHint),
+  generateFingerprint: (browserType: GenerateFingerprintBrowserType) =>
+    ipcRenderer.invoke('generate-fingerprint', browserType),
 
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
@@ -30,8 +40,8 @@ const api = {
   // Templates
   listTemplates: () => ipcRenderer.invoke('list-templates'),
   getTemplate: (id: string) => ipcRenderer.invoke('get-template', id),
-  createTemplate: (input: unknown) => ipcRenderer.invoke('create-template', input),
-  updateTemplate: (id: string, input: unknown) => ipcRenderer.invoke('update-template', id, input),
+  createTemplate: (input: CreateTemplateInput) => ipcRenderer.invoke('create-template', input),
+  updateTemplate: (id: string, input: UpdateTemplateInput) => ipcRenderer.invoke('update-template', id, input),
   deleteTemplate: (id: string) => ipcRenderer.invoke('delete-template', id),
   createProfileFromTemplate: (templateId: string, name: string) =>
     ipcRenderer.invoke('create-profile-from-template', templateId, name),
@@ -52,22 +62,22 @@ const api = {
   checkProcessHealth: () => ipcRenderer.invoke('check-process-health'),
   validateFingerprint: (profileId: string) => ipcRenderer.invoke('validate-fingerprint', profileId),
 
-  onSessionStarted: (callback: (data: unknown) => void) => {
-    const handler = (_: unknown, data: unknown): void => callback(data)
+  onSessionStarted: (callback: (data: SessionStartedEvent) => void) => {
+    const handler = (_: unknown, data: SessionStartedEvent): void => callback(data)
     ipcRenderer.on('session:started', handler)
     return () => {
       ipcRenderer.removeListener('session:started', handler)
     }
   },
-  onSessionStopped: (callback: (data: unknown) => void) => {
-    const handler = (_: unknown, data: unknown): void => callback(data)
+  onSessionStopped: (callback: (data: SessionStoppedEvent) => void) => {
+    const handler = (_: unknown, data: SessionStoppedEvent): void => callback(data)
     ipcRenderer.on('session:stopped', handler)
     return () => {
       ipcRenderer.removeListener('session:stopped', handler)
     }
   },
-  onSessionState: (callback: (data: unknown) => void) => {
-    const handler = (_: unknown, data: unknown): void => callback(data)
+  onSessionState: (callback: (data: SessionStateEvent) => void) => {
+    const handler = (_: unknown, data: SessionStateEvent): void => callback(data)
     ipcRenderer.on('session:state', handler)
     return () => {
       ipcRenderer.removeListener('session:state', handler)
@@ -78,5 +88,5 @@ const api = {
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('api', api)
 } else {
-  ;(window as unknown as Record<string, unknown>).api = api
+  Object.assign(window, { api })
 }

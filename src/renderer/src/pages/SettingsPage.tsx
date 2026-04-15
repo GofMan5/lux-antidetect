@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
 import { THEME_PRESETS } from '../lib/themes'
 import type { Theme, ThemeColors } from '../lib/themes'
-import { BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER, LABEL_CLASS, INPUT_CLASS } from '../lib/ui'
+import { BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER, LABEL_CLASS, INPUT_CLASS, CHECKBOX_CLASS } from '../lib/ui'
 
 const COLOR_LABELS: Record<keyof ThemeColors, string> = {
   surface: 'Background',
@@ -107,46 +107,46 @@ export function SettingsPage(): React.JSX.Element {
   const browserEntries = Object.entries(browsers)
 
   return (
-    <div className="p-3 h-full overflow-y-auto">
-      <h1 className="text-lg font-bold text-content mb-2">Settings</h1>
+    <div className="p-4 h-full overflow-y-auto">
+      <h1 className="text-lg font-bold text-content mb-4">Settings</h1>
 
       {/* Appearance */}
-      <section className="bg-card rounded-md border border-edge p-2.5 mb-2">
-        <h2 className="text-xs font-semibold text-content mb-2 flex items-center gap-1.5 uppercase tracking-wide">
-          <Palette className="h-3.5 w-3.5 text-accent" />
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-3 flex items-center gap-2 uppercase tracking-wide">
+          <Palette className="h-4 w-4 text-accent" />
           Appearance
         </h2>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
           {allThemes.map((theme) => (
             <button
               key={theme.id}
               onClick={() => setActiveTheme(theme.id)}
-              className={`relative rounded-md border p-2 text-left transition-colors ${
+              className={`relative rounded-lg border p-3 text-left transition-all ${
                 activeThemeId === theme.id
-                  ? 'border-accent bg-accent/10'
-                  : 'border-edge hover:border-muted'
+                  ? 'border-accent bg-accent/10 ring-1 ring-accent/30'
+                  : 'border-edge hover:border-muted hover:bg-elevated/30'
               }`}
             >
               {activeThemeId === theme.id && (
-                <Check className="absolute top-1.5 right-1.5 h-3 w-3 text-accent" />
+                <Check className="absolute top-2 right-2 h-3.5 w-3.5 text-accent" />
               )}
-              <p className="text-xs font-medium text-content mb-1.5 truncate">{theme.name}</p>
-              <div className="flex gap-1">
+              <p className="text-xs font-medium text-content mb-2 truncate">{theme.name}</p>
+              <div className="flex gap-1.5">
                 <div
-                  className="h-4 w-4 rounded-sm border border-edge"
+                  className="h-5 w-5 rounded border border-edge/50"
                   style={{ backgroundColor: theme.colors.surface }}
                 />
                 <div
-                  className="h-4 w-4 rounded-sm border border-edge"
+                  className="h-5 w-5 rounded border border-edge/50"
                   style={{ backgroundColor: theme.colors.card }}
                 />
                 <div
-                  className="h-4 w-4 rounded-sm border border-edge"
+                  className="h-5 w-5 rounded border border-edge/50"
                   style={{ backgroundColor: theme.colors.accent }}
                 />
                 <div
-                  className="h-4 w-4 rounded-sm border border-edge"
+                  className="h-5 w-5 rounded border border-edge/50"
                   style={{ backgroundColor: theme.colors.content }}
                 />
               </div>
@@ -156,7 +156,7 @@ export function SettingsPage(): React.JSX.Element {
                     e.stopPropagation()
                     deleteCustomTheme(theme.id)
                   }}
-                  className={`${BTN_DANGER} absolute bottom-1.5 right-1.5`}
+                  className={`${BTN_DANGER} absolute bottom-2 right-2`}
                   aria-label={`Delete ${theme.name}`}
                 >
                   <Trash2 className="h-3 w-3" />
@@ -169,13 +169,13 @@ export function SettingsPage(): React.JSX.Element {
         {!showCustomEditor ? (
           <button
             onClick={() => setShowCustomEditor(true)}
-            className="inline-flex items-center gap-1.5 text-xs text-accent hover:text-accent-dim transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs text-accent hover:text-accent-dim transition-colors font-medium"
           >
-            <Plus className="h-3 w-3" />
+            <Plus className="h-3.5 w-3.5" />
             Create Custom Theme
           </button>
         ) : (
-          <div className="border-t border-edge pt-2 mt-2 space-y-2">
+          <div className="border-t border-edge pt-3 mt-3 space-y-3">
             <div>
               <label className={LABEL_CLASS}>Theme Name</label>
               <input
@@ -186,18 +186,18 @@ export function SettingsPage(): React.JSX.Element {
                 className={INPUT_CLASS}
               />
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {(Object.keys(COLOR_LABELS) as (keyof ThemeColors)[]).map((key) => (
                 <div key={key}>
-                  <label className="block text-[10px] text-muted mb-0.5">{COLOR_LABELS[key]}</label>
-                  <div className="flex items-center gap-1">
+                  <label className="block text-[11px] text-muted mb-1">{COLOR_LABELS[key]}</label>
+                  <div className="flex items-center gap-1.5">
                     <input
                       type="color"
                       value={customColors[key]}
                       onChange={(e) =>
                         setCustomColors((prev) => ({ ...prev, [key]: e.target.value }))
                       }
-                      className="h-6 w-6 rounded border border-edge bg-transparent cursor-pointer p-0"
+                      className="h-8 w-8 rounded-md border border-edge bg-transparent cursor-pointer p-0 shrink-0"
                     />
                     <input
                       type="text"
@@ -205,7 +205,7 @@ export function SettingsPage(): React.JSX.Element {
                       onChange={(e) =>
                         setCustomColors((prev) => ({ ...prev, [key]: e.target.value }))
                       }
-                      className="w-full rounded border border-edge bg-surface-alt px-1 py-0.5 text-[10px] text-content font-mono"
+                      className="w-full rounded-md border border-edge bg-surface-alt px-2 py-1 text-xs text-content font-mono focus:outline-none focus:ring-2 focus:ring-accent/60"
                     />
                   </div>
                 </div>
@@ -231,53 +231,54 @@ export function SettingsPage(): React.JSX.Element {
       </section>
 
       {/* Fingerprint */}
-      <section className="bg-card rounded-md border border-edge p-2.5 mb-2">
-        <h2 className="text-xs font-semibold text-content mb-2 uppercase tracking-wide">Fingerprint</h2>
-        <label className="flex items-center gap-2 cursor-pointer">
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-3 uppercase tracking-wide">Fingerprint</h2>
+        <label className="flex items-center gap-2.5 cursor-pointer">
           <input
             type="checkbox"
             checked={autoRegenFingerprint}
             onChange={(e) => setAutoRegenFingerprint(e.target.checked)}
-            className="h-4 w-4 rounded border-edge accent-accent"
+            className={CHECKBOX_CLASS}
           />
-          <span className="text-xs text-content">Auto-regenerate fingerprint on each launch</span>
+          <span className="text-sm text-content">Auto-regenerate fingerprint on each launch</span>
         </label>
-        <p className="text-[11px] text-muted mt-1 ml-6">
+        <p className="text-xs text-muted mt-1.5 ml-[26px]">
           When enabled, every browser launch generates a unique fingerprint automatically.
         </p>
       </section>
 
       {/* Session History */}
-      <section className="bg-card rounded-md border border-edge p-2.5 mb-2">
-        <h2 className="text-xs font-semibold text-content mb-2 flex items-center gap-1.5 uppercase tracking-wide">
-          <History className="h-3.5 w-3.5 text-accent" />
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-3 flex items-center gap-2 uppercase tracking-wide">
+          <History className="h-4 w-4 text-accent" />
           Session History
         </h2>
         {historyLoading ? (
-          <p className="text-muted text-xs">Loading...</p>
+          <p className="text-muted text-sm">Loading...</p>
         ) : sessionHistory.length === 0 ? (
-          <p className="text-muted text-xs">No session history yet</p>
+          <p className="text-muted text-sm">No session history yet</p>
         ) : (
-          <div className="max-h-48 overflow-y-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-edge">
-                  <th className="text-left px-1 py-1 text-muted font-medium">Date</th>
-                  <th className="text-left px-1 py-1 text-muted font-medium">Duration</th>
-                  <th className="text-left px-1 py-1 text-muted font-medium">Exit</th>
+          <div className="max-h-56 overflow-y-auto rounded-lg border border-edge">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0">
+                <tr className="border-b border-edge bg-surface-alt">
+                  <th className="text-left px-3 py-2 text-muted font-medium text-xs uppercase tracking-wide">Date</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium text-xs uppercase tracking-wide">Duration</th>
+                  <th className="text-left px-3 py-2 text-muted font-medium text-xs uppercase tracking-wide">Exit</th>
                 </tr>
               </thead>
               <tbody>
-                {sessionHistory.slice(0, 20).map((h) => (
-                  <tr key={h.id} className="border-b border-edge last:border-0">
-                    <td className="px-1 py-1 text-content">
+                {sessionHistory.slice(0, 20).map((h, i) => (
+                  <tr key={h.id} className={`border-b border-edge/50 last:border-0 ${i % 2 === 1 ? 'bg-elevated/20' : ''}`}>
+                    <td className="px-3 py-2 text-content text-xs">
                       {new Date(h.started_at).toLocaleString()}
                     </td>
-                    <td className="px-1 py-1 text-content">
+                    <td className="px-3 py-2 text-content text-xs font-mono">
                       {formatDuration(h.duration_seconds)}
                     </td>
-                    <td className="px-1 py-1">
-                      <span className={h.exit_code === 0 || h.exit_code === null ? 'text-ok' : 'text-warn'}>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center gap-1 text-xs ${h.exit_code === 0 || h.exit_code === null ? 'text-ok' : 'text-warn'}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${h.exit_code === 0 || h.exit_code === null ? 'bg-ok' : 'bg-warn'}`} />
                         {h.exit_code ?? '\u2014'}
                       </span>
                     </td>
@@ -290,20 +291,20 @@ export function SettingsPage(): React.JSX.Element {
       </section>
 
       {/* Templates */}
-      <section className="bg-card rounded-md border border-edge p-2.5 mb-2">
-        <h2 className="text-xs font-semibold text-content mb-2 flex items-center gap-1.5 uppercase tracking-wide">
-          <FileText className="h-3.5 w-3.5 text-accent" />
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-3 flex items-center gap-2 uppercase tracking-wide">
+          <FileText className="h-4 w-4 text-accent" />
           Templates
         </h2>
         {templates.length === 0 ? (
-          <p className="text-muted text-xs">No templates yet. Save a profile as a template from the editor.</p>
+          <p className="text-muted text-sm">No templates yet. Save a profile as a template from the editor.</p>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {templates.map((t) => (
-              <div key={t.id} className="flex items-center justify-between bg-surface-alt rounded px-2 py-1.5">
+              <div key={t.id} className="flex items-center justify-between bg-surface-alt rounded-lg px-3 py-2.5 border border-edge/50">
                 <div>
-                  <p className="text-xs text-content font-medium">{t.name}</p>
-                  <p className="text-[10px] text-muted">{t.browser_type} — {t.description || 'No description'}</p>
+                  <p className="text-sm text-content font-medium">{t.name}</p>
+                  <p className="text-xs text-muted">{t.browser_type} — {t.description || 'No description'}</p>
                 </div>
                 <button
                   onClick={async () => {
@@ -312,7 +313,7 @@ export function SettingsPage(): React.JSX.Element {
                   }}
                   className={BTN_DANGER}
                 >
-                  <Trash2 className="h-3 w-3" />
+                  <Trash2 className="h-4 w-4" />
                 </button>
               </div>
             ))}
@@ -321,23 +322,23 @@ export function SettingsPage(): React.JSX.Element {
       </section>
 
       {/* Detected Browsers */}
-      <section className="bg-card rounded-md border border-edge p-2.5 mb-2">
-        <h2 className="text-xs font-semibold text-content mb-2 uppercase tracking-wide">Detected Browsers</h2>
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-3 uppercase tracking-wide">Detected Browsers</h2>
         {browsersLoading ? (
-          <p className="text-muted text-xs">Detecting browsers...</p>
+          <p className="text-muted text-sm">Detecting browsers...</p>
         ) : browserEntries.length === 0 ? (
           <div className="flex items-center gap-2">
             <XCircle className="h-4 w-4 text-err" />
-            <p className="text-xs text-muted">No browsers detected</p>
+            <p className="text-sm text-muted">No browsers detected</p>
           </div>
         ) : (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {browserEntries.map(([name, path]) => (
-              <div key={name} className="flex items-center gap-2">
+              <div key={name} className="flex items-center gap-2.5 bg-surface-alt rounded-lg px-3 py-2 border border-edge/50">
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
                 <div className="min-w-0">
-                  <p className="text-xs font-medium text-content capitalize">{name}</p>
-                  <p className="text-[11px] text-muted truncate">{path}</p>
+                  <p className="text-sm font-medium text-content capitalize">{name}</p>
+                  <p className="text-xs text-muted truncate font-mono">{path}</p>
                 </div>
               </div>
             ))}
@@ -346,18 +347,18 @@ export function SettingsPage(): React.JSX.Element {
       </section>
 
       {/* About */}
-      <section className="bg-card rounded-md border border-edge p-2.5 mb-2">
-        <h2 className="text-xs font-semibold text-content mb-1 uppercase tracking-wide">About</h2>
-        <p className="text-xs text-muted">Lux Antidetect Browser v1.0.0</p>
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-2 uppercase tracking-wide">About</h2>
+        <p className="text-sm text-muted">Lux Antidetect Browser v1.0.0</p>
       </section>
 
       {/* Updates */}
-      <section className="bg-card rounded-md border border-edge p-2.5 mb-2">
-        <h2 className="text-xs font-semibold text-content mb-2 flex items-center gap-1.5 uppercase tracking-wide">
-          <Download className="h-3.5 w-3.5 text-accent" />
+      <section className="bg-card rounded-lg border border-edge p-4 mb-3">
+        <h2 className="text-xs font-semibold text-muted mb-2 flex items-center gap-2 uppercase tracking-wide">
+          <Download className="h-4 w-4 text-accent" />
           Updates
         </h2>
-        <p className="text-xs text-muted">
+        <p className="text-sm text-muted">
           Auto-updater will check for new versions when available. Current: v1.0.0
         </p>
       </section>

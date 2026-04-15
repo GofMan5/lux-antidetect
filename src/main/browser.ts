@@ -1,10 +1,13 @@
-import { existsSync, mkdirSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs'
 import { join } from 'path'
-import { spawn } from 'child_process'
+import { spawn, execFile } from 'child_process'
+import { promisify } from 'util'
 import type Database from 'better-sqlite3'
 import type { BrowserType, Fingerprint, Profile, Proxy } from './models'
 import { buildInjectionScript, regenerateFingerprint } from './fingerprint'
 import { addSession, removeSession, getSession, isRunning } from './sessions'
+
+const execFileAsync = promisify(execFile)
 
 const BROWSER_PATHS: Record<BrowserType, string[]> = {
   chromium: [
@@ -42,6 +45,99 @@ function findBrowserPath(browserType: BrowserType): string {
   throw new Error(
     `Browser not found: ${browserType}. Install it or configure the path in settings.`
   )
+}
+
+/** Check if Chromium profile dir has an active lock file (browser is running). */
+function isChromiumProfileLocked(profileDir: string): boolean {
+  const lockPath = join(profileDir, 'lockfile')
+  const singletonPath = join(profileDir, 'SingletonLock')
+  try {
+    if (existsSync(lockPath)) return true
+    if (existsSync(singletonPath)) return true
+  } catch { /* ignore */ }
+  return false
+}
+
+/** Check if Firefox profile dir is locked. */
+function isFirefoxProfileLocked(profileDir: string): boolean {
+  const lockPath = join(profileDir, 'parent.lock')
+  try {
+    if (existsSync(lockPath)) {
+      statSync(lockPath)
+      return true
+    }
+  } catch { /* ignore */ }
+  return false
+}
+
+/** Check if a browser profile directory is actively in use. */
+function isBrowserProfileActive(profileDir: string, isFirefox: boolean): boolean {
+  if (isFirefox) return isFirefoxProfileLocked(profileDir)
+  return isChromiumProfileLocked(profileDir)
+}
+
+/** Find PIDs of processes whose command line includes the given profile directory. (ASYNC) */
+async function findBrowserPidsByProfileDir(profileDir: string): Promise<number[]> {
+  // Try PowerShell first (reliable), fall back to WMIC
+  try {
+    const escapedDir = profileDir.replace(/\\/g, '\\\\').replace(/'/g, "''")
+    const psCmd = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${escapedDir}*' } | Select-Object -ExpandProperty ProcessId`
+    const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-Command', psCmd], {
+      timeout: 8000,
+      windowsHide: true
+    })
+    const pids: number[] = []
+    for (const line of stdout.trim().split(/\r?\n/)) {
+      const pid = parseInt(line.trim(), 10)
+      if (pid > 0) pids.push(pid)
+    }
+    if (pids.length > 0) return pids
+  } catch { /* fall through to WMIC */ }
+
+  // Fallback: WMIC (deprecated but still works on most Windows)
+  try {
+    const wmicDir = profileDir.replace(/\\/g, '\\\\')
+    const { stdout } = await execFileAsync(
+      'wmic',
+      ['process', 'where', `CommandLine like '%${wmicDir}%'`, 'get', 'ProcessId', '/format:list'],
+      { timeout: 5000, windowsHide: true }
+    )
+    const pids: number[] = []
+    for (const line of stdout.split(/\r?\n/)) {
+      const match = line.match(/ProcessId=(\d+)/)
+      if (match) {
+        const pid = parseInt(match[1], 10)
+        if (pid > 0) pids.push(pid)
+      }
+    }
+    return pids
+  } catch {
+    return []
+  }
+}
+
+/** Kill a single PID tree (async). */
+async function killPid(pid: number): Promise<void> {
+  try {
+    await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      timeout: 5000,
+      windowsHide: true
+    })
+  } catch {
+    // Process may have already exited
+  }
+}
+
+/** Kill all processes associated with a browser profile directory. (ASYNC) */
+async function killBrowserByProfileDir(profileDir: string): Promise<void> {
+  const pids = await findBrowserPidsByProfileDir(profileDir)
+  await Promise.all(pids.map(killPid))
+
+  // Second pass: if PIDs were found but processes are sticky, try again
+  if (pids.length > 0) {
+    const remaining = await findBrowserPidsByProfileDir(profileDir)
+    await Promise.all(remaining.map(killPid))
+  }
 }
 
 function writeChromiumExtension(extDir: string, fp: Fingerprint): void {
@@ -148,13 +244,113 @@ function writeFirefoxUserJs(
   writeFileSync(join(profileDir, 'user.js'), lines.join('\n'))
 }
 
-export function launchBrowser(
+// ─── Polling-based browser lifecycle tracking ────────────────────────────
+// Chrome's launcher process exits immediately on Windows.
+// We poll the lock file + process list to detect when the browser actually stops.
+
+const POLL_INTERVAL_MS = 3000
+
+interface ActiveBrowser {
+  profileId: string
+  profileDir: string
+  isFirefox: boolean
+  pollTimer: ReturnType<typeof setInterval>
+}
+
+const activeBrowsers = new Map<string, ActiveBrowser>()
+
+function startBrowserPolling(
+  profileId: string,
+  profileDir: string,
+  isFirefox: boolean,
+  db: Database.Database,
+  mainWindow: Electron.BrowserWindow | null
+): void {
+  let stabilityChecks = 0
+  const graceChecks = 4 // ~12 seconds grace period for browser to start
+  let polling = false
+
+  function markStopped(): void {
+    clearInterval(pollTimer)
+    activeBrowsers.delete(profileId)
+    removeSession(profileId, 0)
+
+    try {
+      db.prepare(
+        `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run('ready', profileId)
+    } catch { /* db may be closed on app exit */ }
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('session:stopped', {
+        profile_id: profileId,
+        exit_code: 0
+      })
+    }
+  }
+
+  const pollTimer = setInterval(async () => {
+    stabilityChecks++
+    if (stabilityChecks <= graceChecks) return
+
+    // Skip if previous poll is still running
+    if (polling) return
+    polling = true
+
+    try {
+      // Quick check: if lock file is gone, browser is definitely stopped
+      if (!isBrowserProfileActive(profileDir, isFirefox)) {
+        markStopped()
+        return
+      }
+
+      // Lock file still exists (can be stale on Windows) — check actual processes
+      const pids = await findBrowserPidsByProfileDir(profileDir)
+      if (pids.length === 0) {
+        markStopped()
+      }
+    } finally {
+      polling = false
+    }
+  }, POLL_INTERVAL_MS)
+
+  activeBrowsers.set(profileId, { profileId, profileDir, isFirefox, pollTimer })
+}
+
+function stopBrowserPolling(profileId: string): void {
+  const active = activeBrowsers.get(profileId)
+  if (active) {
+    clearInterval(active.pollTimer)
+    activeBrowsers.delete(profileId)
+  }
+}
+
+export async function killAllBrowsers(): Promise<void> {
+  const kills: Promise<void>[] = []
+  for (const [profileId, active] of activeBrowsers) {
+    clearInterval(active.pollTimer)
+    kills.push(killBrowserByProfileDir(active.profileDir))
+    removeSession(profileId, null)
+  }
+  activeBrowsers.clear()
+  await Promise.all(kills)
+}
+
+export function isProfileBrowserActive(profileId: string): boolean {
+  return activeBrowsers.has(profileId)
+}
+
+// ─── Launch / Stop ──────────────────────────────────────────────────────
+
+export async function launchBrowser(
   db: Database.Database,
   profileId: string,
   profilesDir: string,
   mainWindow: Electron.BrowserWindow | null
-): { pid: number } {
-  if (isRunning(profileId)) throw new Error('Profile is already running')
+): Promise<{ pid: number }> {
+  if (isRunning(profileId) || isProfileBrowserActive(profileId)) {
+    throw new Error('Profile is already running')
+  }
 
   const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as
     | Profile
@@ -166,7 +362,15 @@ export function launchBrowser(
   ) as Fingerprint | undefined
   if (!fingerprint) throw new Error(`Fingerprint not found for profile: ${profileId}`)
 
-  // Set "starting" state immediately
+  const profileDir = join(profilesDir, profileId)
+  const isFirefox = profile.browser_type === 'firefox'
+
+  // Check if another browser is already using this profile dir
+  if (isBrowserProfileActive(profileDir, isFirefox)) {
+    throw new Error('Browser profile directory is already in use by another process')
+  }
+
+  // Set "starting" state
   db.prepare(
     `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
   ).run('starting', profileId)
@@ -193,10 +397,8 @@ export function launchBrowser(
 
     const browserType = profile.browser_type
     const exePath = findBrowserPath(browserType)
-    const profileDir = join(profilesDir, profileId)
     mkdirSync(profileDir, { recursive: true })
 
-    const isFirefox = browserType === 'firefox'
     const args: string[] = []
 
     if (isFirefox) {
@@ -208,10 +410,8 @@ export function launchBrowser(
       args.push('--disable-default-apps')
       args.push('--disable-background-networking')
 
-      // DNS-over-HTTPS
       args.push('--dns-over-https-mode=automatic')
 
-      // TLS fingerprint diversification
       const tlsCiphers = [
         'TLS_AES_128_GCM_SHA256',
         'TLS_AES_256_GCM_SHA384',
@@ -234,15 +434,11 @@ export function launchBrowser(
         args.push(`--proxy-server=${proxyUrl}`)
       }
 
-      // Build extensions list
       const extDirs: string[] = []
-
-      // Fingerprint injection extension
       const fpExtDir = join(profileDir, '_lux_ext')
       writeChromiumExtension(fpExtDir, activeFp)
       extDirs.push(fpExtDir)
 
-      // Proxy auth extension (if proxy has credentials)
       if (proxy?.username && proxy?.password) {
         const authDir = writeProxyAuthExtension(profileDir, proxy)
         if (authDir) extDirs.push(authDir)
@@ -252,7 +448,6 @@ export function launchBrowser(
       args.push(`--disable-extensions-except=${extDirs.join(',')}`)
     }
 
-    // Start URL as last arg
     if (profile.start_url?.trim()) {
       args.push(profile.start_url.trim())
     }
@@ -268,26 +463,16 @@ export function launchBrowser(
 
     addSession(profileId, pid, browserType, child)
 
+    // IMPORTANT: Don't rely on child.on('exit') — Chrome launcher exits immediately on Windows.
+    // The polling mechanism (startBrowserPolling) handles lifecycle tracking instead.
+    child.on('exit', () => {
+      // No-op: polling handles this
+    })
+
+    // Set running — the browser process has been spawned
     db.prepare(
       `UPDATE profiles SET status = ?, last_used = datetime('now'), updated_at = datetime('now') WHERE id = ?`
     ).run('running', profileId)
-
-    child.on('exit', (code) => {
-      removeSession(profileId, code)
-      try {
-        db.prepare(
-          `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
-        ).run('ready', profileId)
-      } catch {
-        /* db may be closed on app exit */
-      }
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('session:stopped', {
-          profile_id: profileId,
-          exit_code: code
-        })
-      }
-    })
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('session:started', {
@@ -298,16 +483,16 @@ export function launchBrowser(
       })
     }
 
+    // Start polling for browser exit detection
+    startBrowserPolling(profileId, profileDir, isFirefox, db, mainWindow)
+
     return { pid }
   } catch (err) {
-    // Launch failed — set error state
     try {
       db.prepare(
         `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
       ).run('error', profileId)
-    } catch {
-      /* best effort */
-    }
+    } catch { /* best effort */ }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('session:state', {
         profile_id: profileId,
@@ -319,13 +504,15 @@ export function launchBrowser(
   }
 }
 
-export function stopBrowser(
+export async function stopBrowser(
   db: Database.Database,
   profileId: string,
   mainWindow: Electron.BrowserWindow | null
-): void {
-  const session = getSession(profileId)
-  if (!session) throw new Error('Profile is not running')
+): Promise<void> {
+  const activeBrowser = activeBrowsers.get(profileId)
+  if (!activeBrowser && !isRunning(profileId)) {
+    throw new Error('Profile is not running')
+  }
 
   // Set "stopping" state
   db.prepare(
@@ -335,11 +522,33 @@ export function stopBrowser(
     mainWindow.webContents.send('session:state', { profile_id: profileId, status: 'stopping' })
   }
 
-  try {
-    session.process.kill()
-  } catch {
-    /* Process may have already exited */
+  // Stop polling first
+  stopBrowserPolling(profileId)
+
+  // Kill by profile directory (finds real browser PIDs) — ASYNC, no longer blocks main thread
+  if (activeBrowser) {
+    await killBrowserByProfileDir(activeBrowser.profileDir)
   }
 
-  // Don't set ready here — the exit handler will do it and send session:stopped
+  // Also try killing via ChildProcess handle (launcher PID — may already be dead)
+  const session = getSession(profileId)
+  if (session) {
+    try { session.process.kill() } catch { /* already exited */ }
+    // Also try taskkill on the original PID's process tree
+    await killPid(session.pid)
+  }
+
+  removeSession(profileId, 0)
+
+  // Set ready immediately — we've killed everything
+  db.prepare(
+    `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
+  ).run('ready', profileId)
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('session:stopped', {
+      profile_id: profileId,
+      exit_code: 0
+    })
+  }
 }

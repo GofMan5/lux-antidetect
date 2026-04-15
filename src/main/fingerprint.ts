@@ -375,10 +375,7 @@ export function generateDefaultFingerprint(
   }
 }
 
-export function generateFingerprintForApi(
-  browserType: BrowserType,
-  _osHint?: string
-): Omit<Fingerprint, 'id' | 'profile_id'> {
+export function generateFingerprintForApi(browserType: BrowserType): Omit<Fingerprint, 'id' | 'profile_id'> {
   return generateDefaultFingerprint(browserType)
 }
 

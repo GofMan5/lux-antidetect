@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { initDatabase } from './db'
 import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
+import { killAllBrowsers } from './browser'
 
 // Portable mode: if a "data" directory exists next to the executable, use it
 function resolveDataPath(): string {
@@ -91,6 +92,15 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
-  killAllSessions()
+let isQuitting = false
+
+app.on('before-quit', (event) => {
+  if (!isQuitting) {
+    isQuitting = true
+    event.preventDefault()
+    killAllBrowsers().finally(() => {
+      killAllSessions()
+      app.quit()
+    })
+  }
 })

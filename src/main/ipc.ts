@@ -14,7 +14,7 @@ import { launchBrowser, stopBrowser, detectBrowsers } from './browser'
 import { getAllSessions, getSessionHistory, checkProcessHealth } from './sessions'
 import { generateFingerprintForApi } from './fingerprint'
 import { v4 as uuidv4 } from 'uuid'
-import { writeFileSync, existsSync } from 'fs'
+import { writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, ProxyInput, BrowserType, TemplateInput } from './models'
 
@@ -42,11 +42,13 @@ export function registerIpcHandlers(
     duplicateProfile(db, profileId, profilesDir)
   )
 
-  // Browser
-  ipcMain.handle('launch-browser', (_, profileId: string) =>
+  // Browser (async — no longer blocks main thread)
+  ipcMain.handle('launch-browser', async (_, profileId: string) =>
     launchBrowser(db, profileId, profilesDir, mainWindow)
   )
-  ipcMain.handle('stop-browser', (_, profileId: string) => stopBrowser(db, profileId, mainWindow))
+  ipcMain.handle('stop-browser', async (_, profileId: string) =>
+    stopBrowser(db, profileId, mainWindow)
+  )
   ipcMain.handle('get-running-sessions', () => getAllSessions())
   ipcMain.handle('detect-browsers', () => detectBrowsers())
 
@@ -60,8 +62,8 @@ export function registerIpcHandlers(
   ipcMain.handle('test-proxy', (_, proxyId: string) => testProxy(db, proxyId))
 
   // Fingerprint
-  ipcMain.handle('generate-fingerprint', (_, browserType: BrowserType, osHint?: string) =>
-    generateFingerprintForApi(browserType, osHint)
+  ipcMain.handle('generate-fingerprint', (_, browserType: BrowserType) =>
+    generateFingerprintForApi(browserType)
   )
 
   // Settings
@@ -146,12 +148,12 @@ export function registerIpcHandlers(
     getSessionHistory(profileId)
   )
 
-  // Bulk operations
+  // Bulk operations (async — each op yields the main thread between iterations)
   ipcMain.handle('bulk-launch', async (_, profileIds: string[]) => {
     const results: { id: string; ok: boolean; error?: string }[] = []
     for (const id of profileIds) {
       try {
-        launchBrowser(db, id, profilesDir, mainWindow)
+        await launchBrowser(db, id, profilesDir, mainWindow)
         results.push({ id, ok: true })
       } catch (err) {
         results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
@@ -164,7 +166,7 @@ export function registerIpcHandlers(
     const results: { id: string; ok: boolean; error?: string }[] = []
     for (const id of profileIds) {
       try {
-        stopBrowser(db, id, mainWindow)
+        await stopBrowser(db, id, mainWindow)
         results.push({ id, ok: true })
       } catch (err) {
         results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
@@ -207,7 +209,6 @@ export function registerIpcHandlers(
     const profileDir = join(profilesDir, profileId)
     const targetDir = join(profileDir, 'Default')
     if (!existsSync(targetDir)) {
-      const { mkdirSync } = require('fs')
       mkdirSync(targetDir, { recursive: true })
     }
     // Save Netscape format cookie data for later import

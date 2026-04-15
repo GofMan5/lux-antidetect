@@ -54,6 +54,12 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   },
 
   launchBrowser: async (id) => {
+    // Prevent double-launch: only 'ready' or 'error' profiles can be launched
+    const profile = get().profiles.find((p) => p.id === id)
+    if (profile && profile.status !== 'ready' && profile.status !== 'error') {
+      return
+    }
+
     // Clear previous error and set optimistic "starting" state
     set((state) => ({
       profileErrors: { ...state.profileErrors, [id]: '' },
@@ -61,9 +67,13 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
     }))
     try {
       await api.launchBrowser(id)
-      // session:started event will set "running" reactively
+      // IPC call succeeded — browser is launching. Set 'running' immediately as fallback.
+      // The session:started event will also fire, but this guarantees the UI updates
+      // even if event listeners aren't subscribed yet.
+      set((state) => ({
+        profiles: setProfileStatus(state.profiles, id, 'running')
+      }))
     } catch (err) {
-      // session:state 'error' event may have already fired, but set error here too
       const msg = err instanceof Error ? err.message : 'Launch failed'
       set((state) => ({
         profileErrors: { ...state.profileErrors, [id]: msg },
@@ -73,12 +83,23 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   },
 
   stopBrowser: async (id) => {
+    // Prevent double-stop: only 'running' profiles can be stopped
+    const profile = get().profiles.find((p) => p.id === id)
+    if (profile && profile.status !== 'running') {
+      return
+    }
+
     set((state) => ({
       profiles: setProfileStatus(state.profiles, id, 'stopping')
     }))
     try {
       await api.stopBrowser(id)
-      // session:stopped event will set "ready" reactively
+      // The child process 'exit' event fires async and will send session:stopped.
+      // As a safety net, refetch profiles after a short delay to guarantee we
+      // pick up the 'ready' status even if the event is missed.
+      setTimeout(() => {
+        get().fetchProfiles()
+      }, 1500)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Stop failed'
       set((state) => ({
@@ -103,8 +124,18 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   }
 }))
 
-// Reactive session event subscriptions — instant UI updates when browsers start/stop
-if (typeof window !== 'undefined' && window.api) {
+// Reactive session event subscriptions — instant UI updates when browsers start/stop.
+// Use a retry loop because contextBridge may not have exposed window.api yet
+// when this module is first evaluated.
+function initEventListeners(): void {
+  if (typeof window === 'undefined') return
+
+  if (!window.api) {
+    // contextBridge hasn't run yet — retry
+    setTimeout(initEventListeners, 50)
+    return
+  }
+
   window.api.onSessionStarted((data) => {
     const info = data as SessionInfo
     useProfilesStore.setState((state) => ({
@@ -135,3 +166,5 @@ if (typeof window !== 'undefined' && window.api) {
     }))
   })
 }
+
+initEventListeners()

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { Plus, Trash2, FlaskConical, Pencil, X, Loader2 } from 'lucide-react'
 import { useProxiesStore } from '../stores/proxies'
 import { api } from '../lib/api'
-import { INPUT_CLASS, LABEL_CLASS, BTN_PRIMARY, BTN_SECONDARY, BTN_ICON, BTN_DANGER } from '../lib/ui'
+import { INPUT_CLASS, SELECT_CLASS, LABEL_CLASS, BTN_PRIMARY, BTN_SECONDARY, BTN_ICON, BTN_DANGER } from '../lib/ui'
 import type { ProxyProtocol, ProxyResponse } from '../lib/types'
 
 const PROTOCOL_COLORS: Record<ProxyProtocol, string> = {
@@ -148,22 +148,30 @@ export function ProxiesPage(): React.JSX.Element {
   return (
     <div className="p-4 flex flex-col h-full">
       <div className="flex items-center justify-between mb-3">
-        <h1 className="text-lg font-bold text-content">Proxies</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-bold text-content">Proxies</h1>
+          <span className="text-xs text-muted bg-surface-alt px-2 py-0.5 rounded-full">
+            {proxies.length}
+          </span>
+        </div>
         <button onClick={openAdd} className={BTN_PRIMARY}>
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-4 w-4" />
           Add Proxy
         </button>
       </div>
 
       {proxies.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 text-center">
-          <p className="text-muted mb-3 text-sm">No proxies configured</p>
-          <button onClick={openAdd} className={BTN_PRIMARY}>
-            Add Proxy
-          </button>
+          <div className="bg-card rounded-xl p-8 border border-edge">
+            <p className="text-muted mb-4 text-sm">No proxies configured</p>
+            <button onClick={openAdd} className={BTN_PRIMARY}>
+              <Plus className="h-4 w-4" />
+              Add Proxy
+            </button>
+          </div>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto rounded-md border border-edge min-h-0">
+        <div className="flex-1 overflow-auto rounded-lg border border-edge min-h-0 bg-card/30">
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col className="w-[22%]" />
@@ -175,42 +183,42 @@ export function ProxiesPage(): React.JSX.Element {
             </colgroup>
             <thead className="sticky top-0 z-10">
               <tr className="border-b border-edge bg-surface-alt">
-                <th className="text-left px-2 py-1.5 font-medium text-muted text-xs">Name</th>
-                <th className="text-left px-2 py-1.5 font-medium text-muted text-xs">Proto</th>
-                <th className="text-left px-2 py-1.5 font-medium text-muted text-xs">Host:Port</th>
-                <th className="text-left px-2 py-1.5 font-medium text-muted text-xs">User</th>
-                <th className="text-left px-2 py-1.5 font-medium text-muted text-xs">Status</th>
-                <th className="text-right px-2 py-1.5 font-medium text-muted text-xs">Actions</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Name</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Proto</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Host:Port</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">User</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Status</th>
+                <th className="text-right px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Actions</th>
               </tr>
             </thead>
             <tbody>
               {proxies.map((proxy) => (
                 <tr
                   key={proxy.id}
-                  className="border-b border-edge last:border-b-0 hover:bg-elevated transition-colors"
+                  className="border-b border-edge/50 last:border-b-0 hover:bg-elevated/50 transition-colors"
                 >
-                  <td className="px-2 py-1.5 text-content truncate" title={proxy.name}>{proxy.name}</td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-3 py-2.5 text-content font-medium truncate" title={proxy.name}>{proxy.name}</td>
+                  <td className="px-3 py-2.5">
                     <span
-                      className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase ${PROTOCOL_COLORS[proxy.protocol]}`}
+                      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${PROTOCOL_COLORS[proxy.protocol]}`}
                     >
                       {proxy.protocol}
                     </span>
                   </td>
-                  <td className="px-2 py-1.5 text-muted font-mono text-[11px] truncate" title={`${proxy.host}:${proxy.port}`}>
+                  <td className="px-3 py-2.5 text-muted font-mono text-xs truncate" title={`${proxy.host}:${proxy.port}`}>
                     {proxy.host}:{proxy.port}
                   </td>
-                  <td className="px-2 py-1.5 text-muted text-xs truncate">{proxy.username ?? '—'}</td>
-                  <td className="px-2 py-1.5">
-                    <span className="inline-flex items-center gap-1 text-[11px]">
+                  <td className="px-3 py-2.5 text-muted text-xs truncate">{proxy.username ?? <span className="text-muted/50">None</span>}</td>
+                  <td className="px-3 py-2.5">
+                    <span className="inline-flex items-center gap-1.5 text-xs">
                       <span
-                        className={`h-1.5 w-1.5 rounded-full shrink-0 ${proxy.check_ok ? 'bg-ok' : 'bg-err'}`}
+                        className={`h-2 w-2 rounded-full shrink-0 ${proxy.check_ok ? 'bg-ok' : 'bg-err'}`}
                       />
-                      {proxy.check_ok ? 'OK' : 'Fail'}
+                      <span className="text-muted">{proxy.check_ok ? 'OK' : 'Fail'}</span>
                     </span>
                   </td>
-                  <td className="px-2 py-1.5">
-                    <div className="flex items-center justify-end gap-0.5 shrink-0">
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center justify-end gap-1 shrink-0">
                       <button
                         onClick={() => handleTest(proxy.id)}
                         disabled={testingId === proxy.id}
@@ -218,9 +226,9 @@ export function ProxiesPage(): React.JSX.Element {
                         aria-label={`Test ${proxy.name}`}
                       >
                         {testingId === proxy.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          <FlaskConical className="h-3.5 w-3.5" />
+                          <FlaskConical className="h-4 w-4" />
                         )}
                       </button>
                       <button
@@ -228,14 +236,14 @@ export function ProxiesPage(): React.JSX.Element {
                         className={BTN_ICON}
                         aria-label={`Edit ${proxy.name}`}
                       >
-                        <Pencil className="h-3.5 w-3.5" />
+                        <Pencil className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => handleDelete(proxy.id, proxy.name)}
                         className={BTN_DANGER}
                         aria-label={`Delete ${proxy.name}`}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                   </td>
@@ -249,17 +257,17 @@ export function ProxiesPage(): React.JSX.Element {
       {/* Modal */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
           onClick={closeModal}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-label={editingId ? 'Edit proxy' : 'Add proxy'}
-            className="bg-card rounded-lg p-3 w-[90%] max-w-[400px] border border-edge shadow-2xl"
+            className="bg-card rounded-xl p-5 w-[90%] max-w-[440px] border border-edge shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="text-base font-semibold text-content">
                 {editingId ? 'Edit Proxy' : 'Add Proxy'}
               </h2>
@@ -269,7 +277,7 @@ export function ProxiesPage(): React.JSX.Element {
             </div>
 
             {modalError && (
-              <div className="rounded-md bg-err/10 border border-err/30 px-3 py-2 text-xs text-err mb-3">
+              <div className="rounded-lg bg-err/10 border border-err/30 px-3 py-2 text-xs text-err mb-4">
                 {modalError}
               </div>
             )}
@@ -286,14 +294,14 @@ export function ProxiesPage(): React.JSX.Element {
                   className={INPUT_CLASS}
                   {...register('name')}
                 />
-                {errors.name && <p className="mt-0.5 text-xs text-err">{errors.name.message}</p>}
+                {errors.name && <p className="mt-1 text-xs text-err">{errors.name.message}</p>}
               </div>
 
               <div>
                 <label htmlFor="proxy-protocol" className={LABEL_CLASS}>
                   Protocol
                 </label>
-                <select id="proxy-protocol" className={INPUT_CLASS} {...register('protocol')}>
+                <select id="proxy-protocol" className={SELECT_CLASS} {...register('protocol')}>
                   <option value="http">HTTP</option>
                   <option value="https">HTTPS</option>
                   <option value="socks4">SOCKS4</option>
@@ -313,7 +321,7 @@ export function ProxiesPage(): React.JSX.Element {
                     className={INPUT_CLASS}
                     {...register('host')}
                   />
-                  {errors.host && <p className="mt-0.5 text-xs text-err">{errors.host.message}</p>}
+                  {errors.host && <p className="mt-1 text-xs text-err">{errors.host.message}</p>}
                 </div>
                 <div>
                   <label htmlFor="proxy-port" className={LABEL_CLASS}>
@@ -326,7 +334,7 @@ export function ProxiesPage(): React.JSX.Element {
                     className={INPUT_CLASS}
                     {...register('port', { valueAsNumber: true })}
                   />
-                  {errors.port && <p className="mt-0.5 text-xs text-err">{errors.port.message}</p>}
+                  {errors.port && <p className="mt-1 text-xs text-err">{errors.port.message}</p>}
                 </div>
               </div>
 
@@ -357,9 +365,9 @@ export function ProxiesPage(): React.JSX.Element {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex items-center gap-2 pt-2">
                 <button type="submit" disabled={modalSaving} className={BTN_PRIMARY}>
-                  {modalSaving ? 'Saving...' : editingId ? 'Save' : 'Add'}
+                  {modalSaving ? 'Saving...' : editingId ? 'Save Changes' : 'Add Proxy'}
                 </button>
                 <button type="button" onClick={closeModal} className={BTN_SECONDARY}>
                   Cancel

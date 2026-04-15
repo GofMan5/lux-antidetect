@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { Wand2, ChevronDown, ChevronRight } from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
-import { INPUT_CLASS, LABEL_CLASS, BTN_PRIMARY, BTN_SECONDARY } from '../lib/ui'
+import { INPUT_CLASS, SELECT_CLASS, LABEL_CLASS, TEXTAREA_CLASS, BTN_PRIMARY, BTN_SECONDARY } from '../lib/ui'
 
 const SCREEN_PRESETS = [
   { label: '1920x1080', value: '1920x1080' },
@@ -272,22 +272,18 @@ export function ProfileEditorPanel({
   const isCustomTimezone = !TIMEZONES.includes(timezoneValue as (typeof TIMEZONES)[number])
 
   return (
-    <div className="p-3 overflow-y-auto h-full">
-      <h2 className="text-sm font-bold text-content mb-2">
-        {isEditMode ? 'Edit Profile' : 'New Profile'}
-      </h2>
-
+    <div className="p-4 overflow-y-auto h-full">
       {error && (
-        <div className="rounded-md bg-err/10 border border-err/30 px-2 py-1.5 text-xs text-err mb-2">
+        <div className="rounded-lg bg-err/10 border border-err/30 px-3 py-2 text-xs text-err mb-3">
           {error}
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
         {/* Templates */}
         {!isEditMode && templates.length > 0 && (
-          <div className="flex items-center gap-2 mb-1">
-            <label className="text-[10px] text-muted uppercase tracking-wide">From Template:</label>
+          <div>
+            <label className={LABEL_CLASS}>From Template</label>
             <select
               onChange={async (e) => {
                 if (!e.target.value) return
@@ -300,7 +296,7 @@ export function ProfileEditorPanel({
                   setValue('browser_type', tmpl.browser_type as 'chromium' | 'firefox' | 'edge')
                 } catch { /* ignore */ }
               }}
-              className="rounded border border-edge bg-surface-alt px-2 py-0.5 text-xs text-content"
+              className={SELECT_CLASS}
             >
               <option value="">Select template...</option>
               {templates.map(t => (
@@ -311,8 +307,8 @@ export function ProfileEditorPanel({
         )}
 
         {/* General */}
-        <section className="bg-surface-alt/50 rounded-md border border-edge p-2.5 space-y-1.5">
-          <h3 className="text-xs font-semibold text-content uppercase tracking-wide">General</h3>
+        <section className="bg-surface-alt/50 rounded-lg border border-edge p-3 space-y-2.5">
+          <h3 className="text-xs font-semibold text-muted uppercase tracking-wide">General</h3>
 
           <div>
             <label htmlFor="name" className={LABEL_CLASS}>
@@ -325,15 +321,15 @@ export function ProfileEditorPanel({
               className={INPUT_CLASS}
               {...register('name')}
             />
-            {errors.name && <p className="mt-0.5 text-xs text-err">{errors.name.message}</p>}
+            {errors.name && <p className="mt-1 text-xs text-err">{errors.name.message}</p>}
           </div>
 
-          <div className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
+          <div className="grid grid-cols-[1fr_1fr_48px] gap-2">
             <div>
               <label htmlFor="browser_type" className={LABEL_CLASS}>
                 Browser
               </label>
-              <select id="browser_type" className={INPUT_CLASS} {...register('browser_type')}>
+              <select id="browser_type" className={SELECT_CLASS} {...register('browser_type')}>
                 <option value="chromium">Chromium</option>
                 <option value="firefox">Firefox</option>
                 <option value="edge">Edge</option>
@@ -358,7 +354,7 @@ export function ProfileEditorPanel({
               <input
                 id="group_color"
                 type="color"
-                className="h-[30px] w-8 rounded border border-edge bg-transparent cursor-pointer p-0"
+                className="h-[38px] w-full rounded-md border border-edge bg-surface-alt cursor-pointer"
                 {...register('group_color')}
               />
             </div>
@@ -368,7 +364,7 @@ export function ProfileEditorPanel({
             <label htmlFor="proxy_id" className={LABEL_CLASS}>
               Proxy
             </label>
-            <select id="proxy_id" className={INPUT_CLASS} {...register('proxy_id')}>
+            <select id="proxy_id" className={SELECT_CLASS} {...register('proxy_id')}>
               <option value="">None</option>
               {proxies.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -376,19 +372,6 @@ export function ProfileEditorPanel({
                 </option>
               ))}
             </select>
-          </div>
-
-          <div>
-            <label htmlFor="notes" className={LABEL_CLASS}>
-              Notes
-            </label>
-            <textarea
-              id="notes"
-              rows={1}
-              placeholder="Additional notes..."
-              className={`${INPUT_CLASS} resize-none`}
-              {...register('notes')}
-            />
           </div>
 
           <div>
@@ -403,16 +386,29 @@ export function ProfileEditorPanel({
               {...register('start_url')}
             />
           </div>
+
+          <div>
+            <label htmlFor="notes" className={LABEL_CLASS}>
+              Notes
+            </label>
+            <textarea
+              id="notes"
+              rows={2}
+              placeholder="Additional notes..."
+              className={TEXTAREA_CLASS}
+              {...register('notes')}
+            />
+          </div>
         </section>
 
         {/* Fingerprint */}
-        <section className="bg-surface-alt/50 rounded-md border border-edge">
+        <section className="bg-surface-alt/50 rounded-lg border border-edge overflow-hidden">
           <button
             type="button"
             onClick={() => setFpOpen(!fpOpen)}
-            className="flex items-center justify-between w-full px-2.5 py-1.5 text-left"
+            className="flex items-center justify-between w-full px-3 py-2.5 text-left hover:bg-elevated/30 transition-colors"
           >
-            <h3 className="text-xs font-semibold text-content uppercase tracking-wide">Fingerprint</h3>
+            <h3 className="text-xs font-semibold text-muted uppercase tracking-wide">Fingerprint</h3>
             {fpOpen ? (
               <ChevronDown className="h-4 w-4 text-muted" />
             ) : (
@@ -421,18 +417,18 @@ export function ProfileEditorPanel({
           </button>
 
           {fpOpen && (
-            <div className="px-2.5 pb-2.5 space-y-1.5 border-t border-edge pt-1.5">
+            <div className="px-3 pb-3 space-y-2.5 border-t border-edge pt-2.5">
               <button
                 type="button"
                 onClick={handleGenerateFingerprint}
                 disabled={generating}
-                className="inline-flex items-center gap-1.5 rounded-md bg-accent/20 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/30 transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/25 transition-colors disabled:opacity-50"
               >
                 <Wand2 className="h-3.5 w-3.5" />
-                {generating ? 'Generating...' : 'Generate'}
+                {generating ? 'Generating...' : 'Generate Fingerprint'}
               </button>
 
-              <div className="grid grid-cols-1 gap-1.5">
+              <div className="grid grid-cols-1 gap-2.5">
                 <div>
                   <label htmlFor="user_agent" className={LABEL_CLASS}>
                     User Agent
@@ -440,12 +436,12 @@ export function ProfileEditorPanel({
                   <input
                     id="user_agent"
                     type="text"
-                    className={`${INPUT_CLASS} text-xs`}
+                    className={`${INPUT_CLASS} text-xs font-mono`}
                     {...register('user_agent')}
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label htmlFor="platform" className={LABEL_CLASS}>
                       Platform
@@ -462,7 +458,7 @@ export function ProfileEditorPanel({
                     <label htmlFor="screen" className={LABEL_CLASS}>
                       Screen
                     </label>
-                    <select id="screen" className={INPUT_CLASS} {...register('screen')}>
+                    <select id="screen" className={SELECT_CLASS} {...register('screen')}>
                       {SCREEN_PRESETS.map((p) => (
                         <option key={p.value} value={p.value}>
                           {p.label}
@@ -473,12 +469,12 @@ export function ProfileEditorPanel({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label htmlFor="timezone" className={LABEL_CLASS}>
                       Timezone
                     </label>
-                    <select id="timezone" className={INPUT_CLASS} {...register('timezone')}>
+                    <select id="timezone" className={SELECT_CLASS} {...register('timezone')}>
                       {TIMEZONES.map((tz) => (
                         <option key={tz} value={tz}>
                           {tz}
@@ -504,14 +500,14 @@ export function ProfileEditorPanel({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label htmlFor="hardware_concurrency" className={LABEL_CLASS}>
                       CPU Cores
                     </label>
                     <select
                       id="hardware_concurrency"
-                      className={INPUT_CLASS}
+                      className={SELECT_CLASS}
                       {...register('hardware_concurrency', { valueAsNumber: true })}
                     >
                       {HARDWARE_CONCURRENCY_OPTIONS.map((n) => (
@@ -528,7 +524,7 @@ export function ProfileEditorPanel({
                     </label>
                     <select
                       id="device_memory"
-                      className={INPUT_CLASS}
+                      className={SELECT_CLASS}
                       {...register('device_memory', { valueAsNumber: true })}
                     >
                       {DEVICE_MEMORY_OPTIONS.map((n) => (
@@ -540,7 +536,7 @@ export function ProfileEditorPanel({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label htmlFor="webgl_vendor" className={LABEL_CLASS}>
                       WebGL Vendor
@@ -549,7 +545,7 @@ export function ProfileEditorPanel({
                       id="webgl_vendor"
                       type="text"
                       readOnly
-                      className={`${INPUT_CLASS} cursor-default opacity-70 text-xs`}
+                      className={`${INPUT_CLASS} cursor-default opacity-60 text-xs font-mono`}
                       {...register('webgl_vendor')}
                     />
                   </div>
@@ -562,7 +558,7 @@ export function ProfileEditorPanel({
                       id="webgl_renderer"
                       type="text"
                       readOnly
-                      className={`${INPUT_CLASS} cursor-default opacity-70 text-xs`}
+                      className={`${INPUT_CLASS} cursor-default opacity-60 text-xs font-mono`}
                       {...register('webgl_renderer')}
                     />
                   </div>
@@ -570,9 +566,9 @@ export function ProfileEditorPanel({
 
                 <div>
                   <label htmlFor="webrtc_policy" className={LABEL_CLASS}>
-                    WebRTC
+                    WebRTC Policy
                   </label>
-                  <select id="webrtc_policy" className={INPUT_CLASS} {...register('webrtc_policy')}>
+                  <select id="webrtc_policy" className={SELECT_CLASS} {...register('webrtc_policy')}>
                     {WEBRTC_POLICIES.map((p) => (
                       <option key={p.value} value={p.value}>
                         {p.label}
@@ -585,11 +581,11 @@ export function ProfileEditorPanel({
           )}
         </section>
 
-        <div className="flex items-center gap-2">
-          <button type="submit" disabled={saving} className={`${BTN_PRIMARY} text-xs`}>
-            {saving ? 'Saving...' : isEditMode ? 'Save' : 'Create'}
+        <div className="flex items-center gap-2 pt-1">
+          <button type="submit" disabled={saving} className={BTN_PRIMARY}>
+            {saving ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Profile'}
           </button>
-          <button type="button" onClick={onCancel} className={`${BTN_SECONDARY} text-xs`}>
+          <button type="button" onClick={onCancel} className={BTN_SECONDARY}>
             Cancel
           </button>
           {isEditMode && (
@@ -621,7 +617,7 @@ export function ProfileEditorPanel({
                   } as Record<string, unknown>
                 })
               }}
-              className="text-[11px] text-accent hover:text-accent-dim transition-colors"
+              className="ml-auto text-xs text-accent hover:text-accent-dim transition-colors font-medium"
             >
               Save as Template
             </button>
