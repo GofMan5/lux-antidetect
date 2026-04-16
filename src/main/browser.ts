@@ -383,7 +383,7 @@ async function cdpCommand(port: number, targetId: string, method: string, params
 }
 
 /** Background task: continuously ensure CDP injection is active for all pages of this profile. */
-function startCDPInjection(profileDir: string, script: string): { stop: () => void } {
+function startCDPInjection(profileId: string, profileDir: string, script: string): { stop: () => void } {
   let stopped = false
   let port = 0
   const injectedTargets = new Set<string>()
@@ -407,6 +407,9 @@ function startCDPInjection(profileDir: string, script: string): { stop: () => vo
   const run = async (): Promise<void> => {
     try {
       port = await waitForDebugPort(profileDir)
+      // Store CDP port on the active browser for cookie management etc.
+      const ab = activeBrowsers.get(profileId)
+      if (ab) ab.cdpPort = port
     } catch {
       return // browser may have been closed before debug port appeared
     }
@@ -631,6 +634,7 @@ interface ActiveBrowser {
   profileDir: string
   isFirefox: boolean
   pollTimer: ReturnType<typeof setInterval>
+  cdpPort?: number
 }
 
 const activeBrowsers = new Map<string, ActiveBrowser>()
@@ -747,6 +751,146 @@ export function getActiveBrowserProfileIds(): Set<string> {
   return new Set(activeBrowsers.keys())
 }
 
+// ─── Cookie Management via CDP ───────────────────────────────────────────
+
+export interface CdpCookie {
+  name: string
+  value: string
+  domain: string
+  path: string
+  expires: number
+  size: number
+  httpOnly: boolean
+  secure: boolean
+  session: boolean
+  sameSite: string
+}
+
+/** Export all cookies from a running browser via CDP. */
+export async function exportCookiesCDP(profileId: string): Promise<CdpCookie[]> {
+  const ab = activeBrowsers.get(profileId)
+  if (!ab || !ab.cdpPort) throw new Error('Browser is not running or CDP port unavailable')
+
+  const targetsRaw = await httpGet(`http://127.0.0.1:${ab.cdpPort}/json`)
+  const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
+  const page = targets.find((t) => t.type === 'page')
+  if (!page) throw new Error('No page targets found')
+
+  await cdpCommand(ab.cdpPort, page.id, 'Network.enable', {})
+  const result = await cdpCommand(ab.cdpPort, page.id, 'Network.getAllCookies', {}) as { cookies: CdpCookie[] }
+  return result.cookies
+}
+
+/** Import cookies into a running browser via CDP. */
+export async function importCookiesCDP(profileId: string, cookies: CdpCookie[]): Promise<number> {
+  const ab = activeBrowsers.get(profileId)
+  if (!ab || !ab.cdpPort) throw new Error('Browser is not running or CDP port unavailable')
+
+  const targetsRaw = await httpGet(`http://127.0.0.1:${ab.cdpPort}/json`)
+  const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
+  const page = targets.find((t) => t.type === 'page')
+  if (!page) throw new Error('No page targets found')
+
+  await cdpCommand(ab.cdpPort, page.id, 'Network.enable', {})
+  let imported = 0
+  for (const cookie of cookies) {
+    try {
+      await cdpCommand(ab.cdpPort, page.id, 'Network.setCookie', {
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path || '/',
+        secure: cookie.secure ?? false,
+        httpOnly: cookie.httpOnly ?? false,
+        sameSite: cookie.sameSite || 'Lax',
+        expires: cookie.expires && cookie.expires > 0 ? cookie.expires : undefined
+      })
+      imported++
+    } catch { /* skip invalid cookies */ }
+  }
+  return imported
+}
+
+/** Convert Netscape cookie format string to CdpCookie array. */
+export function parseNetscapeCookies(text: string): CdpCookie[] {
+  const cookies: CdpCookie[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const parts = trimmed.split('\t')
+    if (parts.length < 7) continue
+    cookies.push({
+      domain: parts[0],
+      path: parts[2],
+      secure: parts[3].toUpperCase() === 'TRUE',
+      expires: parseInt(parts[4], 10) || 0,
+      name: parts[5],
+      value: parts[6],
+      httpOnly: parts[0].startsWith('#HttpOnly_'),
+      size: parts[5].length + parts[6].length,
+      session: parseInt(parts[4], 10) === 0,
+      sameSite: 'Lax'
+    })
+  }
+  return cookies
+}
+
+/** Convert CdpCookie array to Netscape format string. */
+export function toNetscapeCookies(cookies: CdpCookie[]): string {
+  const lines = ['# Netscape HTTP Cookie File', '# https://curl.se/docs/http-cookies.html', '']
+  for (const c of cookies) {
+    const httpOnlyPrefix = c.httpOnly ? '#HttpOnly_' : ''
+    const domain = httpOnlyPrefix + c.domain
+    const flag = c.domain.startsWith('.') ? 'TRUE' : 'FALSE'
+    const secure = c.secure ? 'TRUE' : 'FALSE'
+    const expires = c.session ? '0' : String(Math.round(c.expires))
+    lines.push(`${domain}\t${flag}\t${c.path}\t${secure}\t${expires}\t${c.name}\t${c.value}`)
+  }
+  return lines.join('\n')
+}
+
+// ─── Automation API (CDP connection info) ────────────────────────────────
+
+export interface CdpConnectionInfo {
+  port: number
+  wsEndpoint: string
+  httpEndpoint: string
+}
+
+/** Get CDP connection info for a running browser, so external tools (Playwright/Puppeteer) can connect. */
+export async function getCdpConnectionInfo(profileId: string): Promise<CdpConnectionInfo> {
+  const ab = activeBrowsers.get(profileId)
+  if (!ab || !ab.cdpPort) throw new Error('Browser is not running or CDP port unavailable')
+  if (ab.isFirefox) throw new Error('CDP automation is only supported for Chromium-based browsers')
+
+  const versionRaw = await httpGet(`http://127.0.0.1:${ab.cdpPort}/json/version`)
+  const versionInfo = JSON.parse(versionRaw) as { webSocketDebuggerUrl?: string }
+  if (!versionInfo.webSocketDebuggerUrl) throw new Error('WebSocket debugger URL not available')
+
+  return {
+    port: ab.cdpPort,
+    wsEndpoint: versionInfo.webSocketDebuggerUrl,
+    httpEndpoint: `http://127.0.0.1:${ab.cdpPort}`
+  }
+}
+
+/** Capture a screenshot of the active tab via CDP. Returns base64-encoded PNG. */
+export async function captureScreenshot(profileId: string): Promise<string> {
+  const ab = activeBrowsers.get(profileId)
+  if (!ab || !ab.cdpPort) throw new Error('Browser is not running or CDP port unavailable')
+
+  const targetsRaw = await httpGet(`http://127.0.0.1:${ab.cdpPort}/json`)
+  const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
+  const page = targets.find((t) => t.type === 'page')
+  if (!page) throw new Error('No page targets found')
+
+  const result = await cdpCommand(ab.cdpPort, page.id, 'Page.captureScreenshot', {
+    format: 'png',
+    quality: 80
+  }) as { data: string }
+  return result.data
+}
+
 // ─── Launch / Stop ──────────────────────────────────────────────────────
 
 export async function launchBrowser(
@@ -797,9 +941,17 @@ export async function launchBrowser(
 
     let proxy: Proxy | undefined
     if (profile.proxy_id) {
-      proxy = db.prepare('SELECT * FROM proxies WHERE id = ?').get(profile.proxy_id) as
+      const assignedProxy = db.prepare('SELECT * FROM proxies WHERE id = ?').get(profile.proxy_id) as
         | Proxy
         | undefined
+      // Proxy rotation: if the assigned proxy belongs to a group, pick a random one from the group
+      if (assignedProxy?.group_tag) {
+        const { getRandomProxyFromGroup } = await import('./proxy')
+        const rotated = getRandomProxyFromGroup(db, assignedProxy.group_tag)
+        proxy = rotated ?? assignedProxy
+      } else {
+        proxy = assignedProxy
+      }
     }
 
     const browserType = profile.browser_type
@@ -822,6 +974,7 @@ export async function launchBrowser(
 
       args.push('--dns-over-https-mode=automatic')
 
+      // TLS fingerprint masking (JA3/JA4): shuffle cipher order and randomize TLS extensions
       const tlsCiphers = [
         'TLS_AES_128_GCM_SHA256',
         'TLS_AES_256_GCM_SHA384',
@@ -830,8 +983,17 @@ export async function launchBrowser(
       const shuffledCiphers = [...tlsCiphers].sort(() => Math.random() - 0.5)
       args.push(`--tls13-ciphers=${shuffledCiphers.join(':')}`)
       args.push('--ssl-version-min=tls1.2')
+      // Permute TLS extension order to randomize JA3/JA4 fingerprints (Chrome 110+)
+      args.push('--enable-features=PermuteTLSExtensions')
 
       args.push(`--lang=${(JSON.parse(activeFp.languages) as string[])[0] || 'en-US'}`)
+
+      // Mobile emulation via Chrome flags
+      if (activeFp.device_type === 'mobile') {
+        args.push(`--window-size=${activeFp.screen_width},${activeFp.screen_height}`)
+        args.push(`--user-agent=${activeFp.user_agent}`)
+        args.push('--enable-touch-events')
+      }
 
       if (activeFp.webrtc_policy === 'disable_non_proxied_udp') {
         args.push('--webrtc-ip-handling-policy=disable_non_proxied_udp')
@@ -849,6 +1011,14 @@ export async function launchBrowser(
       if (proxy?.username && proxy?.password) {
         const authDir = writeProxyAuthExtension(profileDir, proxy)
         if (authDir) extDirs.push(authDir)
+      }
+
+      // Load per-profile extensions
+      const profileExts = db.prepare(
+        'SELECT path FROM profile_extensions WHERE profile_id = ? AND enabled = 1'
+      ).all(profileId) as { path: string }[]
+      for (const ext of profileExts) {
+        if (existsSync(ext.path)) extDirs.push(ext.path)
       }
 
       if (extDirs.length > 0) {
@@ -910,7 +1080,7 @@ export async function launchBrowser(
 
     // Start CDP-based fingerprint injection for Chromium browsers (async, non-blocking)
     if (injectionScript) {
-      const injector = startCDPInjection(profileDir, injectionScript)
+      const injector = startCDPInjection(profileId, profileDir, injectionScript)
       cdpInjectors.set(profileId, injector)
     }
 

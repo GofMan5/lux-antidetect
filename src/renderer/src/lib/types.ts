@@ -40,6 +40,7 @@ export interface Fingerprint {
   video_inputs: number
   audio_inputs: number
   audio_outputs: number
+  device_type: string
 }
 
 export interface ProxyResponse {
@@ -53,6 +54,8 @@ export interface ProxyResponse {
   last_check: string | null
   check_ok: boolean
   check_latency_ms: number | null
+  country: string | null
+  group_tag: string | null
   created_at: string
 }
 

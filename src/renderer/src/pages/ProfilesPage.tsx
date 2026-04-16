@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
-import { Plus, Play, Square, Copy, Trash2, Loader2, X, AlertCircle, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2, Flame, ClipboardCopy, Pencil, Users } from 'lucide-react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { Plus, Play, Square, Copy, Trash2, Loader2, X, AlertCircle, Search, ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2, Flame, ClipboardCopy, Pencil, Users, Terminal, Camera } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useProfilesStore } from '../stores/profiles'
 import { useProxiesStore } from '../stores/proxies'
@@ -120,6 +120,18 @@ export function ProfilesPage(): React.JSX.Element {
   const [sortKey, setSortKey] = useState<SortKey>('updated_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; profileId: string } | null>(null)
+
+  // Virtual scroll state
+  const ROW_HEIGHT = 44
+  const OVERSCAN = 5
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(600)
+
+  const handleTableScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop)
+    setViewportHeight(e.currentTarget.clientHeight)
+  }, [])
 
   useEffect(() => {
     fetchProfiles()
@@ -254,6 +266,65 @@ export function ProfilesPage(): React.JSX.Element {
       }
     }
     input.click()
+  }
+
+  const handleExportCookies = async (profileId: string, format: 'json' | 'netscape'): Promise<void> => {
+    try {
+      const result = await window.api.exportCookies(profileId, format)
+      const ext = format === 'json' ? 'json' : 'txt'
+      const blob = new Blob([result.data], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `cookies_${profileId.slice(0, 8)}.${ext}`
+      a.click()
+      URL.revokeObjectURL(url)
+      addToast(`Exported ${result.count} cookies (${format})`, 'success')
+    } catch (err) {
+      addToast(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }
+
+  const handleImportCookies = async (profileId: string): Promise<void> => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json,.txt,.cookies'
+    input.onchange = async (): Promise<void> => {
+      const file = input.files?.[0]
+      if (!file) return
+      try {
+        const text = await file.text()
+        const format = file.name.endsWith('.json') ? 'json' : 'netscape'
+        const result = await window.api.importCookies(profileId, text, format)
+        addToast(`Imported ${result.imported}/${result.total} cookies`, 'success')
+      } catch (err) {
+        addToast(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+      }
+    }
+    input.click()
+  }
+
+  const handleCopyCdpInfo = async (profileId: string): Promise<void> => {
+    try {
+      const info = await window.api.getCdpInfo(profileId)
+      await navigator.clipboard.writeText(info.wsEndpoint)
+      addToast(`CDP endpoint copied — port ${info.port}`, 'success')
+    } catch (err) {
+      addToast(`CDP info: ${err instanceof Error ? err.message : 'Unavailable'}`, 'error')
+    }
+  }
+
+  const handleScreenshot = async (profileId: string): Promise<void> => {
+    try {
+      const base64 = await window.api.captureScreenshot(profileId)
+      const link = document.createElement('a')
+      link.href = `data:image/png;base64,${base64}`
+      link.download = `screenshot_${profileId.slice(0, 8)}_${Date.now()}.png`
+      link.click()
+      addToast('Screenshot saved', 'success')
+    } catch (err) {
+      addToast(`Screenshot failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
+    }
   }
 
   const handleDelete = async (id: string, name: string): Promise<void> => {
@@ -430,7 +501,7 @@ export function ProfilesPage(): React.JSX.Element {
             </div>
           </div>
         ) : (
-          <div className="flex-1 overflow-auto rounded-xl border border-edge min-h-0 bg-card/40">
+          <div ref={scrollRef} onScroll={handleTableScroll} className="flex-1 overflow-auto rounded-xl border border-edge min-h-0 bg-card/40">
             <table className="w-full text-sm table-fixed">
               <colgroup>
                 <col className="w-[36px]" />
@@ -476,7 +547,17 @@ export function ProfilesPage(): React.JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                {filteredProfiles.map((profile) => {
+                {(() => {
+                  const totalHeight = filteredProfiles.length * ROW_HEIGHT
+                  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
+                  const endIdx = Math.min(filteredProfiles.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN)
+                  const topPad = startIdx * ROW_HEIGHT
+                  const bottomPad = Math.max(0, totalHeight - endIdx * ROW_HEIGHT)
+                  const visibleProfiles = filteredProfiles.slice(startIdx, endIdx)
+                  return (
+                    <>
+                      {topPad > 0 && <tr style={{ height: topPad }}><td colSpan={6} /></tr>}
+                      {visibleProfiles.map((profile) => {
                   const proxy = proxyMap.get(profile.proxy_id ?? '')
                   const isSelected = selectedId === profile.id && panelMode === 'edit'
                   return (
@@ -603,6 +684,10 @@ export function ProfilesPage(): React.JSX.Element {
                     </tr>
                   )
                 })}
+                      {bottomPad > 0 && <tr style={{ height: bottomPad }}><td colSpan={6} /></tr>}
+                    </>
+                  )
+                })()}
               </tbody>
             </table>
           </div>
@@ -666,7 +751,7 @@ export function ProfilesPage(): React.JSX.Element {
         {ctxMenu && (() => {
           const profile = profiles.find(p => p.id === ctxMenu.profileId)
           if (!profile) return null
-          const menuY = Math.min(ctxMenu.y, window.innerHeight - 220)
+          const menuY = Math.min(ctxMenu.y, window.innerHeight - 340)
           const menuX = Math.min(ctxMenu.x, window.innerWidth - 180)
           return (
             <div
@@ -711,6 +796,39 @@ export function ProfilesPage(): React.JSX.Element {
               >
                 <ClipboardCopy className="h-3.5 w-3.5" /> Copy ID
               </button>
+              {profile.status === 'running' && (
+                <>
+                  <div className="border-t border-edge my-1 mx-2" />
+                  <button
+                    onClick={() => { handleExportCookies(profile.id, 'json'); setCtxMenu(null) }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
+                    style={{ width: 'calc(100% - 4px)' }}
+                  >
+                    <Download className="h-3.5 w-3.5" /> Export Cookies
+                  </button>
+                  <button
+                    onClick={() => { handleImportCookies(profile.id); setCtxMenu(null) }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
+                    style={{ width: 'calc(100% - 4px)' }}
+                  >
+                    <Upload className="h-3.5 w-3.5" /> Import Cookies
+                  </button>
+                  <button
+                    onClick={() => { handleCopyCdpInfo(profile.id); setCtxMenu(null) }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-accent transition-colors flex items-center gap-2.5"
+                    style={{ width: 'calc(100% - 4px)' }}
+                  >
+                    <Terminal className="h-3.5 w-3.5" /> Copy CDP Endpoint
+                  </button>
+                  <button
+                    onClick={() => { handleScreenshot(profile.id); setCtxMenu(null) }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
+                    style={{ width: 'calc(100% - 4px)' }}
+                  >
+                    <Camera className="h-3.5 w-3.5" /> Screenshot
+                  </button>
+                </>
+              )}
               <div className="border-t border-edge my-1 mx-2" />
               <button
                 onClick={() => { handleDelete(profile.id, profile.name); setCtxMenu(null) }}

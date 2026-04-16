@@ -9,8 +9,8 @@ import {
   deleteProfile,
   duplicateProfile
 } from './profile'
-import { listProxies, createProxy, updateProxy, deleteProxy, testProxy } from './proxy'
-import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds } from './browser'
+import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, updateProxyCountry } from './proxy'
+import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
 import { generateFingerprintForApi } from './fingerprint'
 import { checkForUpdates, installUpdate } from './updater'
@@ -22,7 +22,6 @@ import {
   cancelDownload
 } from './browser-manager'
 import { v4 as uuidv4 } from 'uuid'
-import { writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, ProxyInput, BrowserType, TemplateInput } from './models'
 
@@ -126,6 +125,13 @@ export function registerIpcHandlers(
 
   ipcMain.handle('test-proxy', (_, proxyId: string) => testProxy(db, proxyId))
 
+  ipcMain.handle('proxy-groups', () => getProxyGroups(db))
+
+  ipcMain.handle('lookup-proxy-country', async (_, proxyId: string) => {
+    assertUuid(proxyId)
+    return updateProxyCountry(db, proxyId)
+  })
+
   // Bulk proxy test
   ipcMain.handle('bulk-test-proxies', async (_, proxyIds: string[]) => {
     const results: { id: string; ok: boolean }[] = []
@@ -163,6 +169,61 @@ export function registerIpcHandlers(
       key,
       JSON.stringify(value)
     )
+  })
+
+  // Profile Extensions
+  ipcMain.handle('list-profile-extensions', (_, profileId: string) => {
+    assertUuid(profileId)
+    return db.prepare('SELECT * FROM profile_extensions WHERE profile_id = ? ORDER BY created_at DESC').all(profileId)
+  })
+
+  ipcMain.handle('add-profile-extension', (_, profileId: string, name: string, extPath: string) => {
+    assertUuid(profileId)
+    if (!name.trim()) throw new Error('Extension name is required')
+    if (!extPath.trim()) throw new Error('Extension path is required')
+    const id = uuidv4()
+    db.prepare(
+      'INSERT INTO profile_extensions (id, profile_id, name, path, enabled) VALUES (?, ?, ?, ?, 1)'
+    ).run(id, profileId, name.trim(), extPath.trim())
+    return db.prepare('SELECT * FROM profile_extensions WHERE id = ?').get(id)
+  })
+
+  ipcMain.handle('toggle-profile-extension', (_, extId: string, enabled: boolean) => {
+    assertUuid(extId)
+    db.prepare('UPDATE profile_extensions SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, extId)
+    return { ok: true }
+  })
+
+  ipcMain.handle('remove-profile-extension', (_, extId: string) => {
+    assertUuid(extId)
+    db.prepare('DELETE FROM profile_extensions WHERE id = ?').run(extId)
+    return { ok: true }
+  })
+
+  // Screenshot
+  ipcMain.handle('capture-screenshot', async (_, profileId: string) => {
+    assertUuid(profileId)
+    return captureScreenshot(profileId)
+  })
+
+  // Profile Bookmarks
+  ipcMain.handle('list-bookmarks', (_, profileId: string) => {
+    assertUuid(profileId)
+    return db.prepare('SELECT * FROM profile_bookmarks WHERE profile_id = ? ORDER BY created_at DESC').all(profileId)
+  })
+
+  ipcMain.handle('add-bookmark', (_, profileId: string, title: string, url: string) => {
+    assertUuid(profileId)
+    if (!url.trim()) throw new Error('URL is required')
+    const id = uuidv4()
+    db.prepare('INSERT INTO profile_bookmarks (id, profile_id, title, url) VALUES (?, ?, ?, ?)').run(id, profileId, title.trim() || url.trim(), url.trim())
+    return db.prepare('SELECT * FROM profile_bookmarks WHERE id = ?').get(id)
+  })
+
+  ipcMain.handle('remove-bookmark', (_, bookmarkId: string) => {
+    assertUuid(bookmarkId)
+    db.prepare('DELETE FROM profile_bookmarks WHERE id = ?').run(bookmarkId)
+    return { ok: true }
   })
 
   // Templates
@@ -278,38 +339,36 @@ export function registerIpcHandlers(
     return results
   })
 
-  // Cookie import/export
-  ipcMain.handle('export-cookies', (_, profileId: string) => {
+  // Cookie import/export via CDP (browser must be running)
+  ipcMain.handle('export-cookies', async (_, profileId: string, format: string = 'json') => {
     assertUuid(profileId)
-    const profileDir = join(profilesDir, profileId)
-    // Chromium: try to read Cookies file (it's an SQLite DB, but we'll export a summary)
-    const cookiePaths = [
-      join(profileDir, 'Default', 'Cookies'),
-      join(profileDir, 'Default', 'Network', 'Cookies'),
-      join(profileDir, 'cookies.sqlite') // Firefox
-    ]
-    for (const cp of cookiePaths) {
-      if (existsSync(cp)) {
-        return { path: cp, exists: true }
-      }
+    const cookies = await exportCookiesCDP(profileId)
+    if (format === 'netscape') {
+      return { data: toNetscapeCookies(cookies), count: cookies.length, format: 'netscape' }
     }
-    return { path: '', exists: false }
+    return { data: JSON.stringify(cookies, null, 2), count: cookies.length, format: 'json' }
   })
 
-  ipcMain.handle('import-cookies', (_, profileId: string, cookieData: string) => {
+  ipcMain.handle('import-cookies', async (_, profileId: string, cookieData: string, format: string = 'json') => {
     assertUuid(profileId)
-    // Validate size (max 5MB)
     if (cookieData.length > 5 * 1024 * 1024) {
       throw new Error('Cookie data too large (max 5MB)')
     }
-    const profileDir = join(profilesDir, profileId)
-    const targetDir = join(profileDir, 'Default')
-    if (!existsSync(targetDir)) {
-      mkdirSync(targetDir, { recursive: true })
+    let cookies
+    if (format === 'netscape') {
+      cookies = parseNetscapeCookies(cookieData)
+    } else {
+      cookies = JSON.parse(cookieData)
     }
-    // Save Netscape format cookie data for later import
-    writeFileSync(join(targetDir, 'imported_cookies.txt'), cookieData)
-    return { ok: true }
+    if (!Array.isArray(cookies)) throw new Error('Invalid cookie data: expected array')
+    const imported = await importCookiesCDP(profileId, cookies)
+    return { ok: true, imported, total: cookies.length }
+  })
+
+  // Automation API — get CDP connection info for external tools (Playwright/Puppeteer)
+  ipcMain.handle('get-cdp-info', async (_, profileId: string) => {
+    assertUuid(profileId)
+    return getCdpConnectionInfo(profileId)
   })
 
   // Process health — check which sessions have lost their browser process

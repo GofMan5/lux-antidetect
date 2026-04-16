@@ -52,6 +52,8 @@ export interface LuxAPI {
   updateProxy(id: string, input: ProxyInput): Promise<ProxyResponse>
   deleteProxy(id: string): Promise<void>
   testProxy(id: string): Promise<boolean>
+  getProxyGroups(): Promise<string[]>
+  lookupProxyCountry(id: string): Promise<string | null>
   parseProxyString(raw: string): Promise<{ ok: boolean; data?: ProxyInput; error?: string }[]>
   bulkTestProxies(ids: string[]): Promise<{ id: string; ok: boolean }[]>
 
@@ -77,8 +79,21 @@ export interface LuxAPI {
   bulkStop(ids: string[]): Promise<{ id: string; ok: boolean; error?: string }[]>
   bulkDelete(ids: string[]): Promise<{ id: string; ok: boolean; error?: string }[]>
 
-  exportCookies(profileId: string): Promise<{ path: string; exists: boolean }>
-  importCookies(profileId: string, data: string): Promise<{ ok: boolean }>
+  exportCookies(profileId: string, format?: string): Promise<{ data: string; count: number; format: string }>
+  importCookies(profileId: string, data: string, format?: string): Promise<{ ok: boolean; imported: number; total: number }>
+
+  getCdpInfo(profileId: string): Promise<{ port: number; wsEndpoint: string; httpEndpoint: string }>
+
+  listProfileExtensions(profileId: string): Promise<Array<{ id: string; profile_id: string; name: string; path: string; enabled: number; created_at: string }>>
+  addProfileExtension(profileId: string, name: string, path: string): Promise<{ id: string; profile_id: string; name: string; path: string; enabled: number }>
+  toggleProfileExtension(extId: string, enabled: boolean): Promise<{ ok: boolean }>
+  removeProfileExtension(extId: string): Promise<{ ok: boolean }>
+
+  captureScreenshot(profileId: string): Promise<string>
+
+  listBookmarks(profileId: string): Promise<Array<{ id: string; profile_id: string; title: string; url: string; created_at: string }>>
+  addBookmark(profileId: string, title: string, url: string): Promise<{ id: string; profile_id: string; title: string; url: string }>
+  removeBookmark(bookmarkId: string): Promise<{ ok: boolean }>
 
   checkProcessHealth(): Promise<{ dead: string[] }>
   validateFingerprint(profileId: string): Promise<{ valid: boolean; issues: string[] }>

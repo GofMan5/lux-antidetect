@@ -118,7 +118,7 @@ export function Layout(): React.JSX.Element {
 
         {!collapsed && (
           <div className="px-3 py-2.5 text-[10px] text-muted/50 border-t border-edge font-mono">
-            v1.0.3
+            v1.0.4
           </div>
         )}
       </aside>

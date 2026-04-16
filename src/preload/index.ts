@@ -30,6 +30,8 @@ const api: LuxAPI = {
   updateProxy: (id: string, input: UpdateProxyInput) => ipcRenderer.invoke('update-proxy', id, input),
   deleteProxy: (id: string) => ipcRenderer.invoke('delete-proxy', id),
   testProxy: (id: string) => ipcRenderer.invoke('test-proxy', id),
+  getProxyGroups: () => ipcRenderer.invoke('proxy-groups'),
+  lookupProxyCountry: (id: string) => ipcRenderer.invoke('lookup-proxy-country', id),
   parseProxyString: (raw: string) => ipcRenderer.invoke('parse-proxy-string', raw),
   bulkTestProxies: (ids: string[]) => ipcRenderer.invoke('bulk-test-proxies', ids),
 
@@ -56,9 +58,26 @@ const api: LuxAPI = {
   bulkStop: (ids: string[]) => ipcRenderer.invoke('bulk-stop', ids),
   bulkDelete: (ids: string[]) => ipcRenderer.invoke('bulk-delete', ids),
 
-  // Cookie import/export
-  exportCookies: (profileId: string) => ipcRenderer.invoke('export-cookies', profileId),
-  importCookies: (profileId: string, data: string) => ipcRenderer.invoke('import-cookies', profileId, data),
+  // Cookie import/export (browser must be running)
+  exportCookies: (profileId: string, format?: string) => ipcRenderer.invoke('export-cookies', profileId, format || 'json'),
+  importCookies: (profileId: string, data: string, format?: string) => ipcRenderer.invoke('import-cookies', profileId, data, format || 'json'),
+
+  // Automation API
+  getCdpInfo: (profileId: string) => ipcRenderer.invoke('get-cdp-info', profileId),
+
+  // Profile Extensions
+  listProfileExtensions: (profileId: string) => ipcRenderer.invoke('list-profile-extensions', profileId),
+  addProfileExtension: (profileId: string, name: string, path: string) => ipcRenderer.invoke('add-profile-extension', profileId, name, path),
+  toggleProfileExtension: (extId: string, enabled: boolean) => ipcRenderer.invoke('toggle-profile-extension', extId, enabled),
+  removeProfileExtension: (extId: string) => ipcRenderer.invoke('remove-profile-extension', extId),
+
+  // Screenshots
+  captureScreenshot: (profileId: string) => ipcRenderer.invoke('capture-screenshot', profileId),
+
+  // Profile Bookmarks
+  listBookmarks: (profileId: string) => ipcRenderer.invoke('list-bookmarks', profileId),
+  addBookmark: (profileId: string, title: string, url: string) => ipcRenderer.invoke('add-bookmark', profileId, title, url),
+  removeBookmark: (bookmarkId: string) => ipcRenderer.invoke('remove-bookmark', bookmarkId),
 
   // Health & Validation
   checkProcessHealth: () => ipcRenderer.invoke('check-process-health'),

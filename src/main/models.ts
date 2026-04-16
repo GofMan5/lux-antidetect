@@ -40,6 +40,7 @@ export interface Fingerprint {
   video_inputs: number
   audio_inputs: number
   audio_outputs: number
+  device_type: string // 'desktop' | 'mobile'
 }
 
 export interface Proxy {
@@ -53,6 +54,8 @@ export interface Proxy {
   last_check: string | null
   check_ok: number // 0 or 1 for sqlite
   check_latency_ms: number | null
+  country: string | null
+  group_tag: string | null
   created_at: string
 }
 
@@ -67,6 +70,8 @@ export interface ProxyResponse {
   last_check: string | null
   check_ok: boolean
   check_latency_ms: number | null
+  country: string | null
+  group_tag: string | null
   created_at: string
 }
 
@@ -126,6 +131,8 @@ export interface ProxyInput {
   port: number
   username?: string
   password?: string
+  country?: string
+  group_tag?: string
 }
 
 export interface SessionHistoryEntry {
@@ -135,6 +142,15 @@ export interface SessionHistoryEntry {
   stopped_at: string | null
   duration_seconds: number | null
   exit_code: number | null
+  created_at: string
+}
+
+export interface ProfileExtension {
+  id: string
+  profile_id: string
+  name: string
+  path: string
+  enabled: boolean
   created_at: string
 }
 
@@ -182,6 +198,8 @@ export function toProxyResponse(row: Proxy): ProxyResponse {
     last_check: row.last_check,
     check_ok: !!row.check_ok,
     check_latency_ms: row.check_latency_ms ?? null,
+    country: row.country ?? null,
+    group_tag: row.group_tag ?? null,
     created_at: row.created_at
   }
 }

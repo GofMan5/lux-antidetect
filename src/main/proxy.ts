@@ -19,8 +19,8 @@ export function createProxy(db: Database.Database, input: ProxyInput): ProxyResp
 
   const id = uuidv4()
   db.prepare(
-    `INSERT INTO proxies (id, name, protocol, host, port, username, password, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+    `INSERT INTO proxies (id, name, protocol, host, port, username, password, country, group_tag, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
   ).run(
     id,
     input.name,
@@ -28,7 +28,9 @@ export function createProxy(db: Database.Database, input: ProxyInput): ProxyResp
     input.host.trim(),
     input.port,
     input.username ?? null,
-    input.password ?? null
+    input.password ?? null,
+    input.country ?? null,
+    input.group_tag ?? null
   )
 
   return toProxyResponse(
@@ -50,7 +52,7 @@ export function updateProxy(
 
   if (input.password !== undefined) {
     db.prepare(
-      `UPDATE proxies SET name = ?, protocol = ?, host = ?, port = ?, username = ?, password = ? WHERE id = ?`
+      `UPDATE proxies SET name = ?, protocol = ?, host = ?, port = ?, username = ?, password = ?, country = ?, group_tag = ? WHERE id = ?`
     ).run(
       input.name,
       input.protocol,
@@ -58,17 +60,21 @@ export function updateProxy(
       input.port,
       input.username ?? null,
       input.password ?? null,
+      input.country ?? null,
+      input.group_tag ?? null,
       proxyId
     )
   } else {
     db.prepare(
-      `UPDATE proxies SET name = ?, protocol = ?, host = ?, port = ?, username = ? WHERE id = ?`
+      `UPDATE proxies SET name = ?, protocol = ?, host = ?, port = ?, username = ?, country = ?, group_tag = ? WHERE id = ?`
     ).run(
       input.name,
       input.protocol,
       input.host.trim(),
       input.port,
       input.username ?? null,
+      input.country ?? null,
+      input.group_tag ?? null,
       proxyId
     )
   }
@@ -126,4 +132,49 @@ export function testProxy(db: Database.Database, proxyId: string): Promise<boole
       resolve(false)
     })
   })
+}
+
+/** Pick a random proxy from a group (for proxy rotation). */
+export function getRandomProxyFromGroup(db: Database.Database, groupTag: string): Proxy | null {
+  const proxies = db.prepare(
+    'SELECT * FROM proxies WHERE group_tag = ? AND check_ok = 1'
+  ).all(groupTag) as Proxy[]
+  if (proxies.length === 0) {
+    // Fall back to all proxies in the group regardless of check status
+    const all = db.prepare('SELECT * FROM proxies WHERE group_tag = ?').all(groupTag) as Proxy[]
+    if (all.length === 0) return null
+    return all[Math.floor(Math.random() * all.length)]
+  }
+  return proxies[Math.floor(Math.random() * proxies.length)]
+}
+
+/** Get all unique proxy group tags. */
+export function getProxyGroups(db: Database.Database): string[] {
+  const rows = db.prepare(
+    'SELECT DISTINCT group_tag FROM proxies WHERE group_tag IS NOT NULL AND group_tag != \'\' ORDER BY group_tag'
+  ).all() as { group_tag: string }[]
+  return rows.map(r => r.group_tag)
+}
+
+/** Lookup country for a proxy host using ip-api.com (free, no key). */
+export async function lookupProxyCountry(host: string): Promise<string | null> {
+  try {
+    const resp = await fetch(`http://ip-api.com/json/${encodeURIComponent(host)}?fields=countryCode`)
+    if (!resp.ok) return null
+    const data = await resp.json() as { countryCode?: string }
+    return data.countryCode ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Update proxy country after geo-lookup. */
+export async function updateProxyCountry(db: Database.Database, proxyId: string): Promise<string | null> {
+  const proxy = db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as Proxy | undefined
+  if (!proxy) return null
+  const country = await lookupProxyCountry(proxy.host)
+  if (country) {
+    db.prepare('UPDATE proxies SET country = ? WHERE id = ?').run(country, proxyId)
+  }
+  return country
 }

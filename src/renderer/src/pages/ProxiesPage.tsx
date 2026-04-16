@@ -23,7 +23,9 @@ const proxySchema = z.object({
   host: z.string().min(1, 'Host is required'),
   port: z.number().min(1).max(65535),
   username: z.string(),
-  password: z.string()
+  password: z.string(),
+  country: z.string(),
+  group_tag: z.string()
 })
 
 type ProxyFormData = z.infer<typeof proxySchema>
@@ -34,7 +36,9 @@ const DEFAULT_PROXY: ProxyFormData = {
   host: '',
   port: 8080,
   username: '',
-  password: ''
+  password: '',
+  country: '',
+  group_tag: ''
 }
 
 export function ProxiesPage(): React.JSX.Element {
@@ -102,7 +106,9 @@ export function ProxiesPage(): React.JSX.Element {
       host: proxy.host,
       port: proxy.port,
       username: proxy.username ?? '',
-      password: ''
+      password: '',
+      country: proxy.country ?? '',
+      group_tag: proxy.group_tag ?? ''
     })
     setEditingId(proxy.id)
     setModalError(null)
@@ -268,6 +274,8 @@ export function ProxiesPage(): React.JSX.Element {
                 <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Proto</th>
                 <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Host:Port</th>
                 <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">User</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Geo</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Group</th>
                 <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Status</th>
                 <th className="text-right px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Actions</th>
               </tr>
@@ -288,6 +296,14 @@ export function ProxiesPage(): React.JSX.Element {
                     {proxy.host}:{proxy.port}
                   </td>
                   <td className="px-3 py-2.5 text-muted text-xs truncate">{proxy.username ?? <span className="text-muted/40">—</span>}</td>
+                  <td className="px-3 py-2.5 text-xs">
+                    {proxy.country ? (
+                      <span className="bg-accent/10 text-accent px-1.5 py-0.5 rounded font-mono text-[10px] font-medium">{proxy.country}</span>
+                    ) : (
+                      <span className="text-muted/40">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-xs text-muted truncate">{proxy.group_tag ?? <span className="text-muted/40">—</span>}</td>
                   <td className="px-3 py-2.5">
                     <span className="inline-flex items-center gap-1.5 text-xs">
                       {testResult?.id === proxy.id ? (
@@ -399,6 +415,17 @@ export function ProxiesPage(): React.JSX.Element {
                 <div>
                   <label htmlFor="proxy-password" className={LABEL_CLASS}>Password</label>
                   <input id="proxy-password" type="password" placeholder="optional" className={INPUT_CLASS} {...register('password')} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="proxy-country" className={LABEL_CLASS}>Country</label>
+                  <input id="proxy-country" type="text" placeholder="US, DE, etc." className={INPUT_CLASS} {...register('country')} maxLength={2} />
+                </div>
+                <div>
+                  <label htmlFor="proxy-group" className={LABEL_CLASS}>Group tag</label>
+                  <input id="proxy-group" type="text" placeholder="rotation-group" className={INPUT_CLASS} {...register('group_tag')} />
                 </div>
               </div>
 

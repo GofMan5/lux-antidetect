@@ -62,7 +62,8 @@ const profileSchema = z.object({
   languages: z.string(),
   tags: z.string(),
   color_depth: z.number(),
-  pixel_ratio: z.number()
+  pixel_ratio: z.number(),
+  device_type: z.enum(['desktop', 'mobile'])
 })
 
 type ProfileFormData = z.infer<typeof profileSchema>
@@ -87,7 +88,8 @@ const DEFAULT_VALUES: ProfileFormData = {
   languages: 'en-US',
   tags: '',
   color_depth: 24,
-  pixel_ratio: 1.0
+  pixel_ratio: 1.0,
+  device_type: 'desktop' as const
 }
 
 function parseScreen(value: string): { width: number; height: number } {
@@ -196,7 +198,8 @@ export function ProfileEditorPanel({
             } catch {
               return detail.fingerprint.languages
             }
-          })()
+          })(),
+          device_type: (detail.fingerprint.device_type as 'desktop' | 'mobile') || 'desktop'
         })
       })
       .catch((err: unknown) => {
@@ -282,7 +285,8 @@ export function ProfileEditorPanel({
             webgl_vendor: data.webgl_vendor,
             webgl_renderer: data.webgl_renderer,
             webrtc_policy: data.webrtc_policy,
-            languages: JSON.stringify(languagesArray)
+            languages: JSON.stringify(languagesArray),
+            device_type: data.device_type
           }
         })
       }
@@ -351,6 +355,13 @@ export function ProfileEditorPanel({
                 <option value="chromium">Chromium</option>
                 <option value="firefox">Firefox</option>
                 <option value="edge">Edge</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="device_type" className={LABEL_CLASS}>Device</label>
+              <select id="device_type" className={SELECT_CLASS} {...register('device_type')}>
+                <option value="desktop">Desktop</option>
+                <option value="mobile">Mobile</option>
               </select>
             </div>
             <div>

@@ -120,6 +120,33 @@ const MAC_GPUS: GpuConfig[] = [
   }
 ]
 
+// ─── Mobile device configs ───────────────────────────────────────────────
+
+const MOBILE_SCREENS: [number, number][] = [
+  [412, 915], [393, 873], [414, 896], [390, 844], [375, 812],
+  [360, 800], [428, 926], [430, 932], [384, 854], [360, 780]
+]
+
+const ANDROID_DEVICES = [
+  { model: 'Pixel 8', brand: 'google' },
+  { model: 'Pixel 7', brand: 'google' },
+  { model: 'SM-S918B', brand: 'samsung' }, // Galaxy S23 Ultra
+  { model: 'SM-S911B', brand: 'samsung' }, // Galaxy S23
+  { model: 'SM-A546B', brand: 'samsung' }, // Galaxy A54
+  { model: '22101316G', brand: 'xiaomi' }, // 13
+  { model: 'CPH2451', brand: 'oppo' }, // Find X6
+]
+
+const MOBILE_GPUS: GpuConfig[] = [
+  { vendor: 'Qualcomm', renderers: ['Adreno (TM) 740', 'Adreno (TM) 730', 'Adreno (TM) 660', 'Adreno (TM) 650'] },
+  { vendor: 'ARM', renderers: ['Mali-G710 MC10', 'Mali-G78 MC20', 'Mali-G77 MC9'] }
+]
+
+const MOBILE_FONTS_POOL = [
+  'Roboto', 'Noto Sans', 'Droid Sans', 'Droid Sans Mono', 'Droid Serif',
+  'Cutive Mono', 'Coming Soon', 'Dancing Script', 'Carrois Gothic SC'
+]
+
 // ─── Timezones (weighted by real usage) ──────────────────────────────────
 
 const US_TIMEZONES = [
@@ -242,12 +269,11 @@ const MAC_FONTS_POOL = [
   'San Francisco', 'Skia', 'Snell Roundhand', 'Zapfino'
 ] as const
 
-function randomFontSubset(pool: readonly string[]): string[] {
-  // Pick 8-15 fonts from the pool, always including the first 5 (common)
-  const common = pool.slice(0, 5)
-  const rest = pool.slice(5)
+function randomFontSubset(pool: readonly string[], minCommon = 5, maxExtra = 10): string[] {
+  const common = pool.slice(0, Math.min(minCommon, pool.length))
+  const rest = pool.slice(minCommon)
   const shuffled = [...rest].sort(() => Math.random() - 0.5)
-  const extraCount = randInt(3, 10)
+  const extraCount = randInt(Math.min(3, rest.length), Math.min(maxExtra, rest.length))
   return [...common, ...shuffled.slice(0, extraCount)]
 }
 
@@ -304,6 +330,13 @@ export function generateDefaultFingerprint(
   _browserType: BrowserType,
   overrides?: Partial<Fingerprint>
 ): Omit<Fingerprint, 'id' | 'profile_id'> {
+  const deviceType = overrides?.device_type ?? 'desktop'
+  const isMobile = deviceType === 'mobile'
+
+  if (isMobile) {
+    return generateMobileFingerprint(overrides)
+  }
+
   const isWindows = Math.random() > 0.35 // ~65% Windows, ~35% Mac (real-world distribution)
 
   // OS-specific User-Agent
@@ -370,7 +403,48 @@ export function generateDefaultFingerprint(
     webrtc_policy: overrides?.webrtc_policy ?? 'disable_non_proxied_udp',
     video_inputs: media.video,
     audio_inputs: media.audioIn,
-    audio_outputs: media.audioOut
+    audio_outputs: media.audioOut,
+    device_type: 'desktop'
+  }
+}
+
+function generateMobileFingerprint(
+  overrides?: Partial<Fingerprint>
+): Omit<Fingerprint, 'id' | 'profile_id'> {
+  const chromeVer = randomChromeVersion()
+  const device = pick(ANDROID_DEVICES)
+  const [screenW, screenH] = pick(MOBILE_SCREENS)
+  const gpuConfig = pick(MOBILE_GPUS)
+
+  const userAgent = `Mozilla/5.0 (Linux; Android 14; ${device.model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Mobile Safari/537.36`
+  const platform = 'Linux armv81'
+
+  const timezone = overrides?.timezone ?? pick(ALL_TIMEZONES)
+  const languages = getLanguagesForTimezone(timezone)
+  const hw = pickWeighted(HARDWARE_CONFIGS)
+  const fonts = randomFontSubset(MOBILE_FONTS_POOL, 5, 8)
+
+  return {
+    user_agent: overrides?.user_agent ?? userAgent,
+    platform: overrides?.platform ?? platform,
+    hardware_concurrency: overrides?.hardware_concurrency ?? Math.min(hw.concurrency, 8),
+    device_memory: overrides?.device_memory ?? Math.min(hw.memory, 8),
+    languages: overrides?.languages ?? JSON.stringify(languages),
+    screen_width: overrides?.screen_width ?? screenW,
+    screen_height: overrides?.screen_height ?? screenH,
+    color_depth: 24,
+    pixel_ratio: pick([2.0, 2.625, 3.0, 3.5]),
+    timezone,
+    canvas_noise_seed: Math.floor(Math.random() * 2147483647),
+    webgl_vendor: overrides?.webgl_vendor ?? gpuConfig.vendor,
+    webgl_renderer: overrides?.webgl_renderer ?? pick(gpuConfig.renderers),
+    audio_context_noise: Math.random() * 0.0001,
+    fonts_list: JSON.stringify(fonts),
+    webrtc_policy: overrides?.webrtc_policy ?? 'disable_non_proxied_udp',
+    video_inputs: 1,
+    audio_inputs: 1,
+    audio_outputs: 1,
+    device_type: 'mobile'
   }
 }
 
@@ -466,7 +540,7 @@ var _navProps={
   deviceMemory:${fp.device_memory},
   languages:Object.freeze(${languagesJson}),
   language:${JSON.stringify(languages[0] || 'en-US')},
-  maxTouchPoints:0,
+  maxTouchPoints:${fp.device_type === 'mobile' ? 5 : 0},
   vendor:'Google Inc.',
   appVersion:${JSON.stringify(fp.user_agent.replace('Mozilla/', ''))}
 };
@@ -1388,21 +1462,22 @@ try{
   var _uaPlatform=_isWinUA?'Windows':_isMacUA?'macOS':'Linux';
   // Derive platformVersion deterministically from seed (no DB field needed)
   var _isW11=(_seed%4===0);
-  var _platVer=_isWinUA?(_isW11?'15.0.0':'10.0.0'):_isMacUA?'14.5.0':'6.5.0';
+  var _isMobile=${fp.device_type === 'mobile'};
+  var _platVer=_isWinUA?(_isW11?'15.0.0':'10.0.0'):_isMacUA?'14.5.0':_isMobile?'14.0.0':'6.5.0';
   var _uaData={
     brands:_brands,
-    mobile:false,
+    mobile:_isMobile,
     platform:_uaPlatform,
     toJSON:function(){return{brands:this.brands,mobile:this.mobile,platform:this.platform};}
   };
   _uaData.getHighEntropyValues=function(hints){
-    var r={brands:_brands,mobile:false,platform:_uaPlatform};
+    var r={brands:_brands,mobile:_isMobile,platform:_uaPlatform};
     for(var _hi=0;_hi<hints.length;_hi++){
       var h=hints[_hi];
       if(h==='architecture')r.architecture='x86';
       if(h==='bitness')r.bitness='64';
       if(h==='fullVersionList')r.fullVersionList=_fullBrands;
-      if(h==='model')r.model='';
+      if(h==='model')r.model=_isMobile?${JSON.stringify(fp.user_agent.match(/Android[^;]*;\s*([^)]+)\)/)?.[1] ?? '')}:'';
       if(h==='platformVersion')r.platformVersion=_platVer;
       if(h==='uaFullVersion')r.uaFullVersion=_fVer;
       if(h==='wow64')r.wow64=false;
@@ -1490,7 +1565,10 @@ export function regenerateFingerprint(
   profileId: string,
   browserType: BrowserType
 ): Fingerprint {
-  const newFp = generateDefaultFingerprint(browserType)
+  // Preserve existing device_type when regenerating
+  const existing = db.prepare('SELECT device_type FROM fingerprints WHERE profile_id = ?').get(profileId) as { device_type?: string } | undefined
+  const deviceType = existing?.device_type || 'desktop'
+  const newFp = generateDefaultFingerprint(browserType, { device_type: deviceType } as Partial<Fingerprint>)
 
   db.prepare(`
     UPDATE fingerprints SET
@@ -1498,7 +1576,8 @@ export function regenerateFingerprint(
       languages = ?, screen_width = ?, screen_height = ?, color_depth = ?,
       pixel_ratio = ?, timezone = ?, canvas_noise_seed = ?, webgl_vendor = ?,
       webgl_renderer = ?, audio_context_noise = ?, fonts_list = ?,
-      webrtc_policy = ?, video_inputs = ?, audio_inputs = ?, audio_outputs = ?
+      webrtc_policy = ?, video_inputs = ?, audio_inputs = ?, audio_outputs = ?,
+      device_type = ?
     WHERE profile_id = ?
   `).run(
     newFp.user_agent,
@@ -1520,6 +1599,7 @@ export function regenerateFingerprint(
     newFp.video_inputs,
     newFp.audio_inputs,
     newFp.audio_outputs,
+    newFp.device_type,
     profileId
   )
 

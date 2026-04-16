@@ -146,6 +146,23 @@ export function initDatabase(userDataPath: string): Database.Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS profile_extensions (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS profile_bookmarks (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `)
 
   // Migration: add check_latency_ms column to proxies
@@ -153,6 +170,32 @@ export function initDatabase(userDataPath: string): Database.Database {
     db.prepare('SELECT check_latency_ms FROM proxies LIMIT 0').get()
   } catch {
     db.exec('ALTER TABLE proxies ADD COLUMN check_latency_ms INTEGER')
+  }
+
+  // Migration: add country and group_tag columns to proxies
+  try {
+    db.prepare('SELECT country FROM proxies LIMIT 0').get()
+  } catch {
+    db.exec('ALTER TABLE proxies ADD COLUMN country TEXT')
+  }
+  try {
+    db.prepare('SELECT group_tag FROM proxies LIMIT 0').get()
+  } catch {
+    db.exec('ALTER TABLE proxies ADD COLUMN group_tag TEXT')
+  }
+
+  // Migration: add rotation_group column to profiles (for proxy rotation)
+  try {
+    db.prepare('SELECT rotation_group FROM profiles LIMIT 0').get()
+  } catch {
+    db.exec('ALTER TABLE profiles ADD COLUMN rotation_group TEXT')
+  }
+
+  // Migration: add device_type column to fingerprints
+  try {
+    db.prepare('SELECT device_type FROM fingerprints LIMIT 0').get()
+  } catch {
+    db.exec("ALTER TABLE fingerprints ADD COLUMN device_type TEXT DEFAULT 'desktop'")
   }
 
   return db
