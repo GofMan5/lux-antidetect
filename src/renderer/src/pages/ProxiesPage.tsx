@@ -263,12 +263,14 @@ export function ProxiesPage(): React.JSX.Element {
         <div className="flex-1 overflow-auto rounded-xl border border-edge min-h-0 bg-card/40">
           <table className="w-full text-sm table-fixed">
             <colgroup>
-              <col className="w-[22%]" />
-              <col className="w-[13%]" />
-              <col className="w-[25%]" />
-              <col className="w-[12%]" />
-              <col className="w-[10%]" />
               <col className="w-[18%]" />
+              <col className="w-[10%]" />
+              <col className="w-[20%]" />
+              <col className="w-[10%]" />
+              <col className="w-[8%]" />
+              <col className="w-[10%]" />
+              <col className="w-[8%]" />
+              <col className="w-[16%]" />
             </colgroup>
             <thead className="sticky top-0 z-10">
               <tr className="border-b border-edge bg-card">
@@ -283,7 +285,11 @@ export function ProxiesPage(): React.JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {filteredProxies.map((proxy) => (
+              {filteredProxies.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-xs text-muted/60">No matching proxies</td>
+                </tr>
+              ) : filteredProxies.map((proxy) => (
                 <tr
                   key={proxy.id}
                   className="border-b border-edge/40 last:border-b-0 hover:bg-elevated/40 transition-colors"

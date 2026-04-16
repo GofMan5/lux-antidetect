@@ -533,11 +533,11 @@ export function ProfilesPage(): React.JSX.Element {
             <table className="w-full text-sm table-fixed">
               <colgroup>
                 <col className="w-[36px]" />
-                <col className="w-[28%]" />
-                <col className="w-[14%]" />
-                <col className="w-[12%]" />
-                <col className="w-[18%]" />
-                <col className="w-[26%]" />
+                <col />
+                <col className="w-[100px]" />
+                <col className="w-[110px]" />
+                <col className="w-[120px]" />
+                <col className="w-[180px]" />
               </colgroup>
               <thead className="sticky top-0 z-10">
                 <tr className="border-b border-edge bg-card">
@@ -723,12 +723,17 @@ export function ProfilesPage(): React.JSX.Element {
 
         {/* Bulk action bar */}
         {selectedIds.size > 0 && (
-          <div className="absolute bottom-5 left-5 right-5 flex items-center gap-3 bg-card border border-edge rounded-2xl px-5 py-3.5 shadow-2xl z-20 animate-scaleIn">
+          <div className="absolute bottom-5 left-5 right-5 flex items-center gap-3 bg-card border border-edge rounded-2xl px-5 py-3.5 shadow-2xl z-30 animate-scaleIn">
             <span className="text-sm text-content font-semibold">{selectedIds.size} selected</span>
             <div className="flex-1" />
             <button
               onClick={async () => {
-                try { await api.bulkLaunch(Array.from(selectedIds)) } catch { /* best effort */ }
+                try {
+                  const results = await api.bulkLaunch(Array.from(selectedIds))
+                  const failed = results.filter(r => !r.ok).length
+                  if (failed > 0) addToast(`${results.length - failed} launched, ${failed} failed`, 'warning')
+                  else addToast(`${results.length} profiles launched`, 'success')
+                } catch { addToast('Bulk launch failed', 'error') }
                 setSelectedIds(new Set())
                 fetchProfiles()
               }}
@@ -738,7 +743,12 @@ export function ProfilesPage(): React.JSX.Element {
             </button>
             <button
               onClick={async () => {
-                try { await api.bulkStop(Array.from(selectedIds)) } catch { /* best effort */ }
+                try {
+                  const results = await api.bulkStop(Array.from(selectedIds))
+                  const failed = results.filter(r => !r.ok).length
+                  if (failed > 0) addToast(`${results.length - failed} stopped, ${failed} failed`, 'warning')
+                  else addToast(`${results.length} profiles stopped`, 'success')
+                } catch { addToast('Bulk stop failed', 'error') }
                 setSelectedIds(new Set())
                 fetchProfiles()
               }}
@@ -755,7 +765,12 @@ export function ProfilesPage(): React.JSX.Element {
                   danger: true
                 })
                 if (!ok) return
-                try { await api.bulkDelete(Array.from(selectedIds)) } catch { /* best effort */ }
+                try {
+                  const results = await api.bulkDelete(Array.from(selectedIds))
+                  const failed = results.filter(r => !r.ok).length
+                  if (failed > 0) addToast(`${results.length - failed} deleted, ${failed} failed`, 'warning')
+                  else addToast(`${results.length} profiles deleted`, 'success')
+                } catch { addToast('Bulk delete failed', 'error') }
                 setSelectedIds(new Set())
                 setPanelMode(null)
                 setSelectedId(null)
@@ -783,44 +798,39 @@ export function ProfilesPage(): React.JSX.Element {
           const menuX = Math.min(ctxMenu.x, window.innerWidth - 180)
           return (
             <div
-              className="fixed z-50 bg-card border border-edge rounded-xl shadow-2xl py-1.5 min-w-[170px] text-sm animate-scaleIn"
-              style={{ left: menuX, top: menuY }}
+              className="fixed bg-card border border-edge rounded-xl shadow-2xl py-1.5 min-w-[170px] text-sm animate-scaleIn"
+              style={{ left: menuX, top: menuY, zIndex: 9999 }}
             >
               {profile.status === 'running' ? (
                 <button
-                  onClick={() => { actions.stop(profile.id); setCtxMenu(null) }}
-                  className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-warn transition-colors flex items-center gap-2.5"
-                  style={{ width: 'calc(100% - 4px)' }}
+                  onClick={() => { handleStop(profile.id); setCtxMenu(null) }}
+                  className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-warn"
                 >
                   <Square className="h-3.5 w-3.5" /> Stop
                 </button>
               ) : (
                 <button
-                  onClick={() => { actions.launch(profile.id); setCtxMenu(null) }}
-                  className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-ok transition-colors flex items-center gap-2.5"
-                  style={{ width: 'calc(100% - 4px)' }}
+                  onClick={() => { handleLaunch(profile.id); setCtxMenu(null) }}
+                  className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-ok"
                 >
                   <Play className="h-3.5 w-3.5" /> Launch
                 </button>
               )}
               <button
                 onClick={() => { handleRowClick(profile.id); setCtxMenu(null) }}
-                className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
-                style={{ width: 'calc(100% - 4px)' }}
+                className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-content"
               >
                 <Pencil className="h-3.5 w-3.5" /> Edit
               </button>
               <button
                 onClick={() => { actions.duplicate(profile.id).then(() => addToast('Profile duplicated', 'success')).catch((e: Error) => addToast(e.message, 'error')); setCtxMenu(null) }}
-                className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
-                style={{ width: 'calc(100% - 4px)' }}
+                className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-content"
               >
                 <Copy className="h-3.5 w-3.5" /> Duplicate
               </button>
               <button
                 onClick={() => { navigator.clipboard.writeText(profile.id); addToast('ID copied', 'info'); setCtxMenu(null) }}
-                className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
-                style={{ width: 'calc(100% - 4px)' }}
+                className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-content"
               >
                 <ClipboardCopy className="h-3.5 w-3.5" /> Copy ID
               </button>
@@ -829,29 +839,25 @@ export function ProfilesPage(): React.JSX.Element {
                   <div className="border-t border-edge my-1 mx-2" />
                   <button
                     onClick={() => { handleExportCookies(profile.id, 'json'); setCtxMenu(null) }}
-                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
-                    style={{ width: 'calc(100% - 4px)' }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-content"
                   >
                     <Download className="h-3.5 w-3.5" /> Export Cookies
                   </button>
                   <button
                     onClick={() => { handleImportCookies(profile.id); setCtxMenu(null) }}
-                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
-                    style={{ width: 'calc(100% - 4px)' }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-content"
                   >
                     <Upload className="h-3.5 w-3.5" /> Import Cookies
                   </button>
                   <button
                     onClick={() => { handleCopyCdpInfo(profile.id); setCtxMenu(null) }}
-                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-accent transition-colors flex items-center gap-2.5"
-                    style={{ width: 'calc(100% - 4px)' }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-accent"
                   >
                     <Terminal className="h-3.5 w-3.5" /> Copy CDP Endpoint
                   </button>
                   <button
                     onClick={() => { handleScreenshot(profile.id); setCtxMenu(null) }}
-                    className="w-full text-left px-3 py-2 hover:bg-elevated rounded-lg mx-0.5 text-content transition-colors flex items-center gap-2.5"
-                    style={{ width: 'calc(100% - 4px)' }}
+                    className="w-full text-left px-3 py-2 hover:bg-elevated transition-colors flex items-center gap-2.5 text-content"
                   >
                     <Camera className="h-3.5 w-3.5" /> Screenshot
                   </button>
@@ -860,8 +866,7 @@ export function ProfilesPage(): React.JSX.Element {
               <div className="border-t border-edge my-1 mx-2" />
               <button
                 onClick={() => { handleDelete(profile.id, profile.name); setCtxMenu(null) }}
-                className="w-full text-left px-3 py-2 hover:bg-err/10 rounded-lg mx-0.5 text-err transition-colors flex items-center gap-2.5"
-                style={{ width: 'calc(100% - 4px)' }}
+                className="w-full text-left px-3 py-2 hover:bg-err/10 transition-colors flex items-center gap-2.5 text-err"
               >
                 <Trash2 className="h-3.5 w-3.5" /> Delete
               </button>

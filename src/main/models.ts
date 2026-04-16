@@ -102,6 +102,7 @@ export interface CreateProfileInput {
 
 export interface UpdateProfileInput {
   name?: string
+  browser_type?: BrowserType
   group_name?: string | null
   group_color?: string | null
   tags?: string[]

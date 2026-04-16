@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { Bell, CheckCircle2, XCircle, Info, AlertTriangle, Check, Trash2 } from 'lucide-react'
 import { useNotificationStore } from '../stores/notifications'
 import type { Notification, NotificationType } from '../stores/notifications'
@@ -58,6 +59,7 @@ function NotificationItem({ n, onRead }: { n: Notification; onRead: () => void }
 
 export function NotificationCenter(): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const bellRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const notifications = useNotificationStore((s) => s.notifications)
   const unreadCount = useNotificationStore((s) => s.unreadCount)
@@ -65,22 +67,42 @@ export function NotificationCenter(): React.JSX.Element {
   const markAllRead = useNotificationStore((s) => s.markAllRead)
   const clearAll = useNotificationStore((s) => s.clearAll)
 
+  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null)
+
+  const updatePos = useCallback(() => {
+    if (!bellRef.current) return
+    const rect = bellRef.current.getBoundingClientRect()
+    setPos({
+      left: rect.left,
+      bottom: window.innerHeight - rect.top + 8
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    updatePos()
+    window.addEventListener('resize', updatePos)
+    return () => window.removeEventListener('resize', updatePos)
+  }, [open, updatePos])
+
   // Close on outside click
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const target = e.target as Node
+      if (panelRef.current?.contains(target)) return
+      if (bellRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
   return (
-    <div className="relative" ref={panelRef}>
+    <>
       {/* Bell button */}
       <button
+        ref={bellRef}
         onClick={() => setOpen(!open)}
         className={`relative rounded-lg p-2 transition-all duration-150 ${
           open ? 'bg-accent/15 text-accent' : 'text-muted hover:text-content hover:bg-elevated'
@@ -95,9 +117,18 @@ export function NotificationCenter(): React.JSX.Element {
         )}
       </button>
 
-      {/* Dropdown panel */}
-      {open && (
-        <div className="absolute left-0 top-full mt-2 w-[320px] rounded-xl border border-edge bg-card shadow-2xl shadow-black/50 overflow-hidden animate-scaleIn z-50">
+      {/* Dropdown panel — portal to body so it never clips */}
+      {open && pos && createPortal(
+        <div
+          ref={panelRef}
+          className="w-[320px] rounded-xl border border-edge bg-card shadow-2xl shadow-black/50 overflow-hidden animate-scaleIn"
+          style={{
+            position: 'fixed',
+            left: pos.left,
+            bottom: pos.bottom,
+            zIndex: 9999
+          }}
+        >
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-2.5 border-b border-edge bg-elevated/20">
             <div className="flex items-center gap-2">
@@ -147,8 +178,9 @@ export function NotificationCenter(): React.JSX.Element {
               ))
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   )
 }

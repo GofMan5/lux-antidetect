@@ -244,6 +244,7 @@ export function ProfileEditorPanel({
       if (isEditMode && profileId) {
         await api.updateProfile(profileId, {
           name: data.name,
+          browser_type: data.browser_type,
           group_name: data.group_name || null,
           notes: data.notes,
           proxy_id: data.proxy_id || null,
@@ -348,7 +349,7 @@ export function ProfileEditorPanel({
             {errors.name && <p className="mt-1 text-xs text-err">{errors.name.message}</p>}
           </div>
 
-          <div className="grid grid-cols-[1fr_1fr_48px] gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <div>
               <label htmlFor="browser_type" className={LABEL_CLASS}>Browser</label>
               <select id="browser_type" className={SELECT_CLASS} {...register('browser_type')}>

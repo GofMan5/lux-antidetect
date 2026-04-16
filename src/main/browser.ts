@@ -1031,7 +1031,11 @@ export async function launchBrowser(
     }
 
     if (profile.start_url?.trim()) {
-      args.push(profile.start_url.trim())
+      // Prevent start_url from being interpreted as a browser flag (e.g. "--remote-debugging-port=...")
+      const url = profile.start_url.trim()
+      if (!url.startsWith('-')) {
+        args.push(url)
+      }
     }
 
     // Delete stale DevToolsActivePort before spawning (avoid race condition)

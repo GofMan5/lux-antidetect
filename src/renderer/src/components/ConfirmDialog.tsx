@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { create } from 'zustand'
 import { AlertTriangle } from 'lucide-react'
 
@@ -41,6 +42,15 @@ export const useConfirmStore = create<ConfirmState>((set, get) => ({
 
 export function ConfirmDialog(): React.JSX.Element | null {
   const { open, title, message, confirmLabel, danger, close } = useConfirmStore()
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') close(false)
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [open, close])
 
   if (!open) return null
 

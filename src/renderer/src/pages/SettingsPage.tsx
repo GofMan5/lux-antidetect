@@ -80,7 +80,7 @@ export function SettingsPage(): React.JSX.Element {
   const [editingTheme, setEditingTheme] = useState<Theme | null>(null)
 
   useEffect(() => {
-    api.detectBrowsers().then((result) => { setBrowsers(result); setBrowsersLoading(false) })
+    api.detectBrowsers().then((result) => { setBrowsers(result); setBrowsersLoading(false) }).catch(() => setBrowsersLoading(false))
   }, [])
 
   useEffect(() => {
@@ -383,7 +383,7 @@ export function SettingsPage(): React.JSX.Element {
                   type="checkbox"
                   checked={autostart}
                   onChange={(e) => {
-                    api.setAutostart(e.target.checked).then(setAutostart)
+                    api.setAutostart(e.target.checked).then(setAutostart).catch(() => addToast('Failed to change autostart', 'error'))
                   }}
                   className={CHECKBOX_CLASS}
                 />
@@ -478,8 +478,12 @@ export function SettingsPage(): React.JSX.Element {
               <div className="flex gap-2">
                 <button
                   onClick={async () => {
-                    const result = await api.exportDatabase()
-                    if (result.ok) addToast(`Backup saved: ${result.path}`, 'success')
+                    try {
+                      const result = await api.exportDatabase()
+                      if (result.ok) addToast(`Backup saved: ${result.path}`, 'success')
+                    } catch (err) {
+                      addToast(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+                    }
                   }}
                   className={BTN_SECONDARY + ' text-xs'}
                 >
@@ -488,11 +492,15 @@ export function SettingsPage(): React.JSX.Element {
                 </button>
                 <button
                   onClick={async () => {
-                    const result = await api.importDatabase()
-                    if (result.ok && result.requiresRestart) {
-                      addToast('Database imported! Restart to apply.', 'success')
-                    } else if (result.error) {
-                      addToast(result.error, 'error')
+                    try {
+                      const result = await api.importDatabase()
+                      if (result.ok && result.requiresRestart) {
+                        addToast('Database imported! Restart to apply.', 'success')
+                      } else if (result.error) {
+                        addToast(result.error, 'error')
+                      }
+                    } catch (err) {
+                      addToast(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
                     }
                   }}
                   className={BTN_SECONDARY + ' text-xs'}
@@ -642,7 +650,7 @@ export function SettingsPage(): React.JSX.Element {
                 <h2 className="text-sm font-semibold text-content">Updates</h2>
               </div>
               <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.7</span></p>
+                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.8</span></p>
                 <button
                   onClick={() => api.checkForUpdates()}
                   className={BTN_SECONDARY + ' text-xs'}

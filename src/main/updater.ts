@@ -3,8 +3,12 @@ import type { BrowserWindow } from 'electron'
 import type Database from 'better-sqlite3'
 
 let checkInterval: ReturnType<typeof setInterval> | undefined
+let initialized = false
 
 export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Database): void {
+  // Prevent duplicate listener registration (e.g. on macOS activate)
+  if (initialized) return
+  initialized = true
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 

@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, Tray, Menu, nativeImage, dialog } from 'electron'
 import { join, dirname } from 'path'
-import { existsSync, mkdirSync, copyFileSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync, copyFileSync, openSync, readSync, closeSync } from 'fs'
 import { initDatabase } from './db'
 import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
@@ -81,9 +81,14 @@ function createWindow(): BrowserWindow {
 
 function setupTray(mainWindow: BrowserWindow): void {
   if (tray) return
-  // Use a simple icon — in production, use a proper .ico
-  const icon = nativeImage.createEmpty()
-  tray = new Tray(icon.isEmpty() ? nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAADklEQVQ4jWNgGAWDEwAAAhAAASVfZGwAAAAASUVORK5CYII=') : icon)
+  // Resolve the app icon: packaged builds have it in resources/, dev uses resources/icon.png
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'resources', 'icon.png')
+    : join(__dirname, '../../resources/icon.png')
+  const icon = existsSync(iconPath)
+    ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
+    : nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMklEQVQ4y2P4z8BQz0BAwMDAwMDEQCRgYGBgYCJVMxMDlcCoAaMGjBowasCoAYPOAAA3EgMRLqf/oQAAAABJRU5ErkJggg==')
+  tray = new Tray(icon)
   tray.setToolTip('Lux Antidetect')
   tray.on('click', () => {
     if (mainWindow.isVisible()) {
@@ -158,6 +163,8 @@ app.whenReady().then(async () => {
       filters: [{ name: 'SQLite Database', extensions: ['db'] }]
     })
     if (result.canceled || !result.filePath) return { ok: false }
+    // Checkpoint WAL to ensure all recent writes are in the main DB file
+    try { db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* best effort */ }
     const dbPath = join(userDataPath, 'lux.db')
     copyFileSync(dbPath, result.filePath)
     return { ok: true, path: result.filePath }
@@ -170,12 +177,24 @@ app.whenReady().then(async () => {
       properties: ['openFile']
     })
     if (result.canceled || result.filePaths.length === 0) return { ok: false }
-    // Validate it's a SQLite DB
-    const header = readFileSync(result.filePaths[0]).subarray(0, 16).toString()
-    if (!header.startsWith('SQLite format 3')) {
-      return { ok: false, error: 'Not a valid SQLite database' }
+    // Validate it's a SQLite DB by reading just the header (16 bytes)
+    let fd: number | undefined
+    try {
+      fd = openSync(result.filePaths[0], 'r')
+      const headerBuf = Buffer.alloc(16)
+      readSync(fd, headerBuf, 0, 16, 0)
+      closeSync(fd)
+      fd = undefined
+      if (!headerBuf.toString().startsWith('SQLite format 3')) {
+        return { ok: false, error: 'Not a valid SQLite database' }
+      }
+    } catch (err) {
+      if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ }
+      return { ok: false, error: `Failed to read file: ${err instanceof Error ? err.message : 'Unknown error'}` }
     }
     const dbPath = join(userDataPath, 'lux.db')
+    // Checkpoint WAL before overwriting to avoid stale WAL replay
+    try { db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* best effort */ }
     // Create backup of current DB first
     copyFileSync(dbPath, dbPath + '.bak')
     copyFileSync(result.filePaths[0], dbPath)

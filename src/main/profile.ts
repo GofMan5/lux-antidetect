@@ -127,6 +127,7 @@ export function updateProfile(
   if (!existing) throw new Error(`Profile not found: ${profileId}`)
 
   const name = input.name ?? existing.name
+  const browserType = input.browser_type ?? existing.browser_type
   const groupName = input.group_name !== undefined ? input.group_name : existing.group_name
   const groupColor = input.group_color !== undefined ? input.group_color : existing.group_color
   const tags = input.tags !== undefined ? JSON.stringify(input.tags) : existing.tags
@@ -136,8 +137,8 @@ export function updateProfile(
   const now = new Date().toISOString()
 
   db.prepare(
-    `UPDATE profiles SET name = ?, group_name = ?, group_color = ?, tags = ?, notes = ?, proxy_id = ?, start_url = ?, updated_at = ? WHERE id = ?`
-  ).run(name, groupName, groupColor, tags, notes, proxyId, startUrl, now, profileId)
+    `UPDATE profiles SET name = ?, browser_type = ?, group_name = ?, group_color = ?, tags = ?, notes = ?, proxy_id = ?, start_url = ?, updated_at = ? WHERE id = ?`
+  ).run(name, browserType, groupName, groupColor, tags, notes, proxyId, startUrl, now, profileId)
 
   return db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as Profile
 }

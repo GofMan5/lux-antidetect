@@ -59,7 +59,11 @@ function patchErrors(): void {
   })
 }
 
+let _initialized = false
+
 export function initDebugCapture(): void {
+  if (_initialized) return
+  _initialized = true
   patchConsole()
   patchErrors()
   useLogStore.getState().addLog('Debug capture initialized', 'debug', 'system')

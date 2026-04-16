@@ -46,14 +46,16 @@ export function ThemeEditor({ editingTheme, onClose }: ThemeEditorProps): React.
     originalThemeRef.current = activeThemeId
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Live preview — apply colors as they change
+  // Live preview — apply colors as they change; restore on unmount
   useEffect(() => {
     const previewTheme: Theme = { id: '__preview__', name: 'Preview', colors }
     applyTheme(previewTheme)
     return () => {
-      // Cleanup only happens on unmount
+      // Restore original theme when component unmounts (e.g. navigation away)
+      const real = findTheme(originalThemeRef.current, customThemes) ?? getDefaultTheme()
+      applyTheme(real)
     }
-  }, [colors])
+  }, [colors]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // On close/cancel — restore the real active theme
   const handleCancel = useCallback(() => {
