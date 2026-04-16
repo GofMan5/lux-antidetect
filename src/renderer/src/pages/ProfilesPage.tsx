@@ -112,6 +112,34 @@ export function ProfilesPage(): React.JSX.Element {
   const confirm = useConfirmStore((s) => s.show)
   const addToast = useToastStore((s) => s.addToast)
 
+  const handleLaunch = useCallback(async (id: string): Promise<void> => {
+    const p = profiles.find(x => x.id === id)
+    const name = p?.name ?? 'Profile'
+    try {
+      await actions.launch(id)
+      // Only toast if it actually started (status changed)
+      const updated = useProfilesStore.getState().profiles.find(x => x.id === id)
+      if (updated?.status === 'error') {
+        addToast(`Failed to launch ${name}`, 'error')
+      } else if (updated?.status === 'running' || updated?.status === 'starting') {
+        addToast(`${name} launched`, 'success')
+      }
+    } catch (err) {
+      addToast(`Launch failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
+    }
+  }, [actions, profiles, addToast])
+
+  const handleStop = useCallback(async (id: string): Promise<void> => {
+    const p = profiles.find(x => x.id === id)
+    const name = p?.name ?? 'Profile'
+    try {
+      await actions.stop(id)
+      addToast(`${name} stopped`, 'info')
+    } catch (err) {
+      addToast(`Stop failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
+    }
+  }, [actions, profiles, addToast])
+
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [panelMode, setPanelMode] = useState<'edit' | 'create' | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -640,7 +668,7 @@ export function ProfilesPage(): React.JSX.Element {
                             </button>
                           ) : profile.status === 'running' ? (
                             <button
-                              onClick={() => actions.stop(profile.id)}
+                              onClick={() => handleStop(profile.id)}
                               className={`${BTN_ICON} text-warn hover:text-warn hover:bg-warn/10`}
                               aria-label={`Stop ${profile.name}`}
                             >
@@ -648,7 +676,7 @@ export function ProfilesPage(): React.JSX.Element {
                             </button>
                           ) : (
                             <button
-                              onClick={() => actions.launch(profile.id)}
+                              onClick={() => handleLaunch(profile.id)}
                               className={`${BTN_ICON} text-ok hover:text-ok hover:bg-ok/10`}
                               aria-label={`Launch ${profile.name}`}
                             >

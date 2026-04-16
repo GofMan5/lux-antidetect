@@ -167,9 +167,11 @@ export function ProxiesPage(): React.JSX.Element {
       await fetchProxies()
       const updated = useProxiesStore.getState().proxies.find(p => p.id === id)
       setTestResult({ id, ok: !!updated?.check_ok })
+      addToast(updated?.check_ok ? `Proxy test passed` : `Proxy test failed`, updated?.check_ok ? 'success' : 'error')
       setTimeout(() => setTestResult(null), 3000)
     } catch {
       setTestResult({ id, ok: false })
+      addToast('Proxy test failed', 'error')
       setTimeout(() => setTestResult(null), 3000)
     }
     setTestingId(null)

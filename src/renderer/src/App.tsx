@@ -7,6 +7,10 @@ import { SettingsPage } from './pages/SettingsPage'
 import { useSettingsStore } from './stores/settings'
 import { ToastContainer } from './components/Toast'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { initDebugCapture } from './stores/debug'
+
+// Init debug capture once
+initDebugCapture()
 
 export default function App(): React.JSX.Element {
   useEffect(() => {

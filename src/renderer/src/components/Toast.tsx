@@ -1,12 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
-import { CheckCircle2, XCircle, Info, X } from 'lucide-react'
+import { CheckCircle2, XCircle, Info, AlertTriangle, X } from 'lucide-react'
+import { useNotificationStore } from '../stores/notifications'
 
 /* ------------------------------------------------------------------ */
 /*  Store                                                              */
 /* ------------------------------------------------------------------ */
 
-type ToastType = 'success' | 'error' | 'info'
+type ToastType = 'success' | 'error' | 'info' | 'warning'
 
 interface Toast {
   id: number
@@ -30,6 +31,8 @@ export const useToastStore = create<ToastStore>((set) => ({
     set((s) => ({
       toasts: [...s.toasts.slice(-4), { id, message, type }]
     }))
+    // Also save to persistent notification history
+    useNotificationStore.getState().addNotification(message, type)
   },
 
   removeToast: (id) => {
@@ -44,19 +47,22 @@ export const useToastStore = create<ToastStore>((set) => ({
 const typeStyles: Record<ToastType, string> = {
   success: 'border-ok/30 bg-ok/8',
   error: 'border-err/30 bg-err/8',
-  info: 'border-accent/30 bg-accent/8'
+  info: 'border-accent/30 bg-accent/8',
+  warning: 'border-warn/30 bg-warn/8'
 }
 
 const typeIcons: Record<ToastType, typeof CheckCircle2> = {
   success: CheckCircle2,
   error: XCircle,
-  info: Info
+  info: Info,
+  warning: AlertTriangle
 }
 
 const iconColors: Record<ToastType, string> = {
   success: 'text-ok',
   error: 'text-err',
-  info: 'text-accent'
+  info: 'text-accent',
+  warning: 'text-warn'
 }
 
 function ToastItem({ toast }: { toast: Toast }) {

@@ -21,3 +21,5 @@ release/
 *.db
 *.db-wal
 *.db-shm
+.lint-output.txt
+.requested-diff.patch

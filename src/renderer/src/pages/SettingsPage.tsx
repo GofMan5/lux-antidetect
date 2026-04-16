@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
-import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw, Pencil } from 'lucide-react'
+import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw, Pencil, Bug } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
 import { useProfilesStore } from '../stores/profiles'
@@ -10,13 +10,16 @@ import type { ManagedBrowserResponse, AvailableBrowser } from '../lib/types'
 import { useToastStore } from '../components/Toast'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { ThemeEditor } from '../components/ThemeEditor'
+import { useLogStore } from '../stores/debug'
+import type { LogLevel } from '../stores/debug'
 
-type SettingsTab = 'appearance' | 'browsers' | 'general'
+type SettingsTab = 'appearance' | 'browsers' | 'general' | 'debug'
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'browsers', label: 'Browsers', icon: HardDrive },
-  { id: 'general', label: 'General', icon: Settings2 }
+  { id: 'general', label: 'General', icon: Settings2 },
+  { id: 'debug', label: 'Debug', icon: Bug }
 ]
 
 export function SettingsPage(): React.JSX.Element {
@@ -494,7 +497,7 @@ export function SettingsPage(): React.JSX.Element {
                 <h2 className="text-sm font-semibold text-content">Updates</h2>
               </div>
               <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.5</span></p>
+                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.6</span></p>
                 <button
                   onClick={() => api.checkForUpdates()}
                   className={BTN_SECONDARY + ' text-xs'}
@@ -521,7 +524,148 @@ export function SettingsPage(): React.JSX.Element {
             </section>
           </div>
         )}
+
+        {activeTab === 'debug' && <DebugPanel />}
       </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Debug Panel                                                        */
+/* ------------------------------------------------------------------ */
+
+const LOG_LEVEL_STYLES: Record<LogLevel, string> = {
+  info: 'text-accent',
+  warn: 'text-warn',
+  error: 'text-err',
+  debug: 'text-muted'
+}
+
+function DebugPanel(): React.JSX.Element {
+  const logs = useLogStore((s) => s.logs)
+  const clearLogs = useLogStore((s) => s.clear)
+  const addLog = useLogStore((s) => s.addLog)
+  const [filter, setFilter] = useState<LogLevel | 'all'>('all')
+  const logEndRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [logs.length])
+
+  const filteredLogs = filter === 'all' ? logs : logs.filter((l) => l.level === filter)
+
+  const handleCheckHealth = async (): Promise<void> => {
+    try {
+      const { dead } = await api.checkProcessHealth()
+      if (dead.length === 0) {
+        addLog('Process health: all sessions healthy', 'info', 'health')
+      } else {
+        addLog(`Process health: ${dead.length} dead session(s): ${dead.join(', ')}`, 'warn', 'health')
+      }
+    } catch (err) {
+      addLog(`Health check failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error', 'health')
+    }
+  }
+
+  return (
+    <div className="max-w-3xl space-y-4">
+      {/* System info */}
+      <section className="rounded-xl border border-edge bg-card p-4">
+        <h2 className="text-sm font-semibold text-content mb-3 flex items-center gap-2">
+          <Bug className="h-4 w-4 text-accent" />
+          System Info
+        </h2>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+            <span className="text-muted">Platform</span>
+            <span className="text-content font-mono">{navigator.platform}</span>
+          </div>
+          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+            <span className="text-muted">User Agent</span>
+            <span className="text-content font-mono truncate max-w-[200px]" title={navigator.userAgent}>
+              {navigator.userAgent.includes('Electron') ? 'Electron ' + navigator.userAgent.match(/Electron\/([\d.]+)/)?.[1] : 'Unknown'}
+            </span>
+          </div>
+          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+            <span className="text-muted">Chrome</span>
+            <span className="text-content font-mono">{navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] ?? 'N/A'}</span>
+          </div>
+          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+            <span className="text-muted">Memory</span>
+            <span className="text-content font-mono">
+              {(performance as unknown as { memory?: { usedJSHeapSize: number } }).memory
+                ? `${Math.round(((performance as unknown as { memory: { usedJSHeapSize: number } }).memory.usedJSHeapSize / 1024 / 1024))}MB`
+                : 'N/A'}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* Actions */}
+      <section className="flex gap-2">
+        <button onClick={handleCheckHealth} className={BTN_SECONDARY + ' text-xs'}>
+          Check Process Health
+        </button>
+        <button
+          onClick={() => addLog('Manual log entry — testing debug panel', 'info', 'manual')}
+          className={BTN_SECONDARY + ' text-xs'}
+        >
+          Test Log
+        </button>
+      </section>
+
+      {/* Log viewer */}
+      <section className="rounded-xl border border-edge bg-card overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-edge bg-elevated/20">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-content">Console Logs</h2>
+            <span className="text-[10px] text-muted font-mono">{filteredLogs.length} entries</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value as LogLevel | 'all')}
+              className="rounded-md border border-edge bg-surface px-2 py-1 text-[10px] text-content focus:outline-none focus:ring-1 focus:ring-accent/40 appearance-none cursor-pointer"
+            >
+              <option value="all">All</option>
+              <option value="info">Info</option>
+              <option value="warn">Warn</option>
+              <option value="error">Error</option>
+              <option value="debug">Debug</option>
+            </select>
+            <button onClick={clearLogs} className="text-[10px] text-muted hover:text-err transition-colors">
+              Clear
+            </button>
+          </div>
+        </div>
+        <div className="h-[300px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+          {filteredLogs.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-muted/40 text-xs">
+              No logs yet
+            </div>
+          ) : (
+            filteredLogs.map((log) => (
+              <div
+                key={log.id}
+                className="flex items-start gap-2 px-3 py-1 border-b border-edge/20 hover:bg-elevated/20 transition-colors"
+              >
+                <span className="text-muted/40 shrink-0 w-16 tabular-nums">
+                  {new Date(log.timestamp).toLocaleTimeString()}
+                </span>
+                <span className={`shrink-0 w-10 uppercase font-bold text-[9px] ${LOG_LEVEL_STYLES[log.level]}`}>
+                  {log.level}
+                </span>
+                {log.source && (
+                  <span className="shrink-0 text-muted/50 text-[9px]">[{log.source}]</span>
+                )}
+                <span className="text-content min-w-0 break-all">{log.message}</span>
+              </div>
+            ))
+          )}
+          <div ref={logEndRef} />
+        </div>
+      </section>
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
 import { Users, Globe, Settings, Shield, Download, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
+import { NotificationCenter } from './NotificationCenter'
 
 const NAV_ITEMS = [
   { to: '/profiles', label: 'Profiles', icon: Users },
@@ -105,6 +106,11 @@ export function Layout(): React.JSX.Element {
           ))}
         </nav>
 
+        {/* Notification bell */}
+        <div className={`px-2 mb-1 ${collapsed ? 'flex justify-center' : ''}`}>
+          <NotificationCenter />
+        </div>
+
         <UpdateBanner />
 
         {/* Collapse toggle */}
@@ -118,7 +124,7 @@ export function Layout(): React.JSX.Element {
 
         {!collapsed && (
           <div className="px-3 py-2.5 text-[10px] text-muted/50 border-t border-edge font-mono">
-            v1.0.5
+            v1.0.6
           </div>
         )}
       </aside>
