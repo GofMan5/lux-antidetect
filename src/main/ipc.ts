@@ -1,5 +1,9 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
 import type Database from 'better-sqlite3'
+import { promises as fsp } from 'fs'
+import * as fs from 'fs'
+import * as path from 'path'
+import { installCrxIntoProfile } from './crx'
 import {
   listProfiles,
   getProfile,
@@ -29,6 +33,44 @@ import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, Pr
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function assertUuid(id: string): void {
   if (!UUID_RE.test(id)) throw new Error('Invalid ID format')
+}
+
+function assertLocalExtDir(p: unknown, profilesDir: string, profileId: string): string {
+  if (typeof p !== 'string' || p.trim().length === 0) {
+    throw new Error('Extension path is required')
+  }
+  const abs = path.resolve(p)
+  const allowedRoot = path.resolve(path.join(profilesDir, profileId))
+  if (!(abs + path.sep).startsWith(allowedRoot + path.sep)) {
+    throw new Error('Extension path is outside the profile directory')
+  }
+  let st: fs.Stats
+  try {
+    st = fs.statSync(abs)
+  } catch {
+    throw new Error('Extension path does not exist')
+  }
+  if (!st.isDirectory()) {
+    throw new Error('Extension path must be a directory')
+  }
+  if (!fs.existsSync(path.join(abs, 'manifest.json'))) {
+    throw new Error('Extension directory is missing manifest.json')
+  }
+  return abs
+}
+
+function readManifestNameSync(extDir: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(extDir, 'manifest.json'), 'utf8')
+    const parsed = JSON.parse(raw) as { name?: unknown }
+    if (typeof parsed.name === 'string') {
+      const name = parsed.name.trim()
+      if (name.length > 0 && !name.startsWith('__MSG_')) return name
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 const BULK_TEST_CONCURRENCY = 25
@@ -223,14 +265,14 @@ export function registerIpcHandlers(
     return db.prepare('SELECT * FROM profile_extensions WHERE profile_id = ? ORDER BY created_at DESC').all(profileId)
   })
 
-  ipcMain.handle('add-profile-extension', (_, profileId: string, name: string, extPath: string) => {
+  ipcMain.handle('add-profile-extension', (_, profileId: string, extPath: string) => {
     assertUuid(profileId)
-    if (!name.trim()) throw new Error('Extension name is required')
-    if (!extPath.trim()) throw new Error('Extension path is required')
+    const normalizedPath = assertLocalExtDir(extPath, profilesDir, profileId)
+    const name = readManifestNameSync(normalizedPath) ?? path.basename(normalizedPath)
     const id = uuidv4()
     db.prepare(
       'INSERT INTO profile_extensions (id, profile_id, name, path, enabled) VALUES (?, ?, ?, ?, 1)'
-    ).run(id, profileId, name.trim(), extPath.trim())
+    ).run(id, profileId, name, normalizedPath)
     return db.prepare('SELECT * FROM profile_extensions WHERE id = ?').get(id)
   })
 
@@ -244,6 +286,45 @@ export function registerIpcHandlers(
     assertUuid(extId)
     db.prepare('DELETE FROM profile_extensions WHERE id = ?').run(extId)
     return { ok: true }
+  })
+
+  ipcMain.handle('install-crx-from-file', async (_, payload: { profileId: string; crxPath: string }) => {
+    if (!payload || typeof payload !== 'object') throw new Error('Invalid payload')
+    const { profileId, crxPath } = payload
+    assertUuid(profileId)
+    if (typeof crxPath !== 'string' || crxPath.trim().length === 0) {
+      throw new Error('CRX path is required')
+    }
+    if (!crxPath.toLowerCase().endsWith('.crx')) {
+      throw new Error('File must have .crx extension')
+    }
+    const profileRow = db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profileRow) throw new Error('Profile not found')
+    const installed = await installCrxIntoProfile(crxPath, profileId, profilesDir)
+    const id = uuidv4()
+    try {
+      db.prepare(
+        'INSERT INTO profile_extensions (id, profile_id, name, path, enabled) VALUES (?, ?, ?, ?, 1)'
+      ).run(id, profileId, installed.extensionName, installed.extensionDir)
+    } catch (err) {
+      await fsp.rm(installed.extensionDir, { recursive: true, force: true }).catch(() => {})
+      throw err
+    }
+    return db.prepare('SELECT * FROM profile_extensions WHERE id = ?').get(id)
+  })
+
+  // File dialogs
+  ipcMain.handle('dialog-open-crx', async () => {
+    const parent = BrowserWindow.getFocusedWindow() ?? getMainWindow()
+    const result = await dialog.showOpenDialog(parent, {
+      title: 'Select Chrome extension (.crx)',
+      properties: ['openFile'],
+      filters: [{ name: 'Chrome Extensions', extensions: ['crx'] }]
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true, filePath: null }
+    }
+    return { canceled: false, filePath: result.filePaths[0] }
   })
 
   // Screenshot
@@ -407,8 +488,22 @@ export function registerIpcHandlers(
       cookies = JSON.parse(cookieData)
     }
     if (!Array.isArray(cookies)) throw new Error('Invalid cookie data: expected array')
-    const imported = await importCookiesCDP(profileId, cookies)
-    return { ok: true, imported, total: cookies.length }
+    const MAX_COOKIE_COUNT = 10_000
+    if (cookies.length > MAX_COOKIE_COUNT) {
+      throw new Error(`Too many cookies (max ${MAX_COOKIE_COUNT})`)
+    }
+    const isCookieShape = (c: unknown): boolean =>
+      !!c &&
+      typeof c === 'object' &&
+      typeof (c as { name?: unknown }).name === 'string' &&
+      ((c as { name: string }).name).length <= 4096 &&
+      typeof (c as { value?: unknown }).value === 'string' &&
+      ((c as { value: string }).value).length <= 8192 &&
+      typeof (c as { domain?: unknown }).domain === 'string' &&
+      ((c as { domain: string }).domain).length <= 253
+    const valid = cookies.filter(isCookieShape)
+    const imported = await importCookiesCDP(profileId, valid)
+    return { ok: true, imported, total: valid.length }
   })
 
   // Automation API — get CDP connection info for external tools (Playwright/Puppeteer)

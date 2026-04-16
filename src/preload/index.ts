@@ -72,9 +72,14 @@ const api: LuxAPI = {
 
   // Profile Extensions
   listProfileExtensions: (profileId: string) => ipcRenderer.invoke('list-profile-extensions', profileId),
-  addProfileExtension: (profileId: string, name: string, path: string) => ipcRenderer.invoke('add-profile-extension', profileId, name, path),
+  addProfileExtension: (profileId: string, path: string) => ipcRenderer.invoke('add-profile-extension', profileId, path),
   toggleProfileExtension: (extId: string, enabled: boolean) => ipcRenderer.invoke('toggle-profile-extension', extId, enabled),
   removeProfileExtension: (extId: string) => ipcRenderer.invoke('remove-profile-extension', extId),
+  installCrxFromFile: (profileId: string, crxPath: string) =>
+    ipcRenderer.invoke('install-crx-from-file', { profileId, crxPath }),
+
+  // File dialogs
+  dialogOpenCrx: () => ipcRenderer.invoke('dialog-open-crx'),
 
   // Screenshots
   captureScreenshot: (profileId: string) => ipcRenderer.invoke('capture-screenshot', profileId),

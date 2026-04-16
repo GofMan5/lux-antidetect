@@ -6,9 +6,17 @@ export interface ToggleProps {
   label?: string
   description?: string
   disabled?: boolean
+  'aria-label'?: string
 }
 
-export function Toggle({ checked, onChange, label, description, disabled }: ToggleProps) {
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  description,
+  disabled,
+  'aria-label': ariaLabel
+}: ToggleProps) {
   return (
     <label
       className={cn(
@@ -20,6 +28,7 @@ export function Toggle({ checked, onChange, label, description, disabled }: Togg
         role="switch"
         type="button"
         aria-checked={checked}
+        aria-label={ariaLabel}
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(

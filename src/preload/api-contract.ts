@@ -21,6 +21,16 @@ import type { PresetDescriptor } from '../main/fingerprint-presets'
 
 export type { PresetDescriptor } from '../main/fingerprint-presets'
 
+// Canonical IPC shape for profile extensions. Stored as integer in SQLite, so `enabled` is `0 | 1`.
+export interface ProfileExtension {
+  id: string
+  profile_id: string
+  name: string
+  path: string
+  enabled: number
+  created_at: string
+}
+
 // Reuse the canonical session payload to keep preload and main in lockstep.
 export type SessionStartedEvent = SessionInfo
 
@@ -35,6 +45,15 @@ export interface SessionStateEvent {
   profile_id: SessionEventProfileId
   status: ProfileStatus
   error?: string
+}
+
+export interface ProfileExtension {
+  id: string
+  profile_id: string
+  name: string
+  path: string
+  enabled: number
+  created_at: string
 }
 
 export interface LuxAPI {
@@ -95,10 +114,16 @@ export interface LuxAPI {
 
   getCdpInfo(profileId: string): Promise<{ port: number; wsEndpoint: string; httpEndpoint: string }>
 
-  listProfileExtensions(profileId: string): Promise<Array<{ id: string; profile_id: string; name: string; path: string; enabled: number; created_at: string }>>
-  addProfileExtension(profileId: string, name: string, path: string): Promise<{ id: string; profile_id: string; name: string; path: string; enabled: number }>
+  listProfileExtensions(profileId: string): Promise<ProfileExtension[]>
+  addProfileExtension(profileId: string, path: string): Promise<ProfileExtension>
   toggleProfileExtension(extId: string, enabled: boolean): Promise<{ ok: boolean }>
   removeProfileExtension(extId: string): Promise<{ ok: boolean }>
+  installCrxFromFile(
+    profileId: string,
+    crxPath: string
+  ): Promise<ProfileExtension>
+
+  dialogOpenCrx(): Promise<{ canceled: boolean; filePath: string | null }>
 
   captureScreenshot(profileId: string): Promise<string>
 

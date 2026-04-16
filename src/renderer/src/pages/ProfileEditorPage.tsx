@@ -19,7 +19,9 @@ import {
   MapPin,
   X,
   Plus,
-  ExternalLink
+  ExternalLink,
+  Cookie,
+  Puzzle
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
@@ -29,6 +31,8 @@ import { cn } from '../lib/utils'
 import { Button, Input, Select, Card, Toggle, Tabs, Badge, Tooltip } from '../components/ui'
 import { TEXTAREA, LABEL } from '../lib/ui'
 import { validateProfileFingerprint } from '../lib/fingerprint-validator'
+import { CookiesTab } from '../components/profile/CookiesTab'
+import { ExtensionsTab } from '../components/profile/ExtensionsTab'
 import type { Fingerprint } from '../lib/types'
 
 // Verification test sites for launched profiles
@@ -117,12 +121,21 @@ const PIXEL_RATIO_OPTIONS = [
   { value: '3', label: '3.0×' }
 ]
 
-const FORM_TABS = [
+const BASE_FORM_TABS = [
   { id: 'general', label: 'General', icon: <Settings className="h-3.5 w-3.5" /> },
   { id: 'browser', label: 'Browser', icon: <Monitor className="h-3.5 w-3.5" /> },
   { id: 'proxy', label: 'Proxy', icon: <Globe className="h-3.5 w-3.5" /> },
   { id: 'fingerprint', label: 'Fingerprint', icon: <Shield className="h-3.5 w-3.5" /> }
 ]
+
+// Tabs that require a saved profileId — only shown in edit mode.
+const EDIT_ONLY_FORM_TABS = [
+  { id: 'cookies', label: 'Cookies', icon: <Cookie className="h-3.5 w-3.5" /> },
+  { id: 'extensions', label: 'Extensions', icon: <Puzzle className="h-3.5 w-3.5" /> }
+]
+
+const FORM_TABS_CREATE = BASE_FORM_TABS
+const FORM_TABS_EDIT = [...BASE_FORM_TABS, ...EDIT_ONLY_FORM_TABS]
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -929,7 +942,7 @@ export function ProfileEditorPanel({
 
       {/* ── Tabs ────────────────────────────────────────────────────────── */}
       <Tabs
-        tabs={FORM_TABS}
+        tabs={isEditMode ? FORM_TABS_EDIT : FORM_TABS_CREATE}
         activeTab={activeTab}
         onChange={setActiveTab}
         className="px-4 pt-3"
@@ -1434,6 +1447,16 @@ export function ProfileEditorPanel({
               )}
             </Card>
           </div>
+        )}
+
+        {/* ═══ Cookies ═══ */}
+        {activeTab === 'cookies' && isEditMode && profileId && (
+          <CookiesTab profileId={profileId} profileName={getValues('name')} />
+        )}
+
+        {/* ═══ Extensions ═══ */}
+        {activeTab === 'extensions' && isEditMode && profileId && (
+          <ExtensionsTab profileId={profileId} />
         )}
       </div>
     </form>
