@@ -1,25 +1,39 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
-import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, Upload, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw, Pencil, Bug, Monitor, Database, Power } from 'lucide-react'
+import {
+  CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText,
+  Download, Upload, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw,
+  Pencil, Bug, Monitor, Database, Power, Info
+} from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
 import { useProfilesStore } from '../stores/profiles'
 import { THEME_PRESETS } from '../lib/themes'
 import type { Theme, ThemeColors } from '../lib/themes'
-import { BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER, CHECKBOX_CLASS } from '../lib/ui'
 import type { ManagedBrowserResponse, AvailableBrowser } from '../lib/types'
 import { useToastStore } from '../components/Toast'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { ThemeEditor } from '../components/ThemeEditor'
 import { useLogStore } from '../stores/debug'
 import type { LogLevel } from '../stores/debug'
+import { cn } from '../lib/utils'
+import { Tabs } from '../components/ui/Tabs'
+import { Card } from '../components/ui/Card'
+import { Button } from '../components/ui/Button'
+import { Toggle } from '../components/ui/Toggle'
+import { Badge } from '../components/ui/Badge'
+import { Select } from '../components/ui/Select'
 
-type SettingsTab = 'appearance' | 'browsers' | 'general' | 'debug'
 
-const TABS: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
-  { id: 'appearance', label: 'Appearance', icon: Palette },
-  { id: 'browsers', label: 'Browsers', icon: HardDrive },
-  { id: 'general', label: 'General', icon: Settings2 },
-  { id: 'debug', label: 'Debug', icon: Bug }
+type SettingsTab = 'appearance' | 'browsers' | 'general' | 'fingerprint' | 'data' | 'about' | 'debug'
+
+const TAB_ITEMS: { id: string; label: string; icon: React.ReactNode }[] = [
+  { id: 'appearance', label: 'Appearance', icon: <Palette className="h-4 w-4" /> },
+  { id: 'browsers', label: 'Browsers', icon: <HardDrive className="h-4 w-4" /> },
+  { id: 'general', label: 'General', icon: <Settings2 className="h-4 w-4" /> },
+  { id: 'fingerprint', label: 'Fingerprint', icon: <Fingerprint className="h-4 w-4" /> },
+  { id: 'data', label: 'Data', icon: <Database className="h-4 w-4" /> },
+  { id: 'about', label: 'About', icon: <Info className="h-4 w-4" /> },
+  { id: 'debug', label: 'Debug', icon: <Bug className="h-4 w-4" /> }
 ]
 
 export function SettingsPage(): React.JSX.Element {
@@ -183,503 +197,681 @@ export function SettingsPage(): React.JSX.Element {
   const browserEntries = Object.entries(browsers)
 
   return (
-    <div className="flex h-full overflow-hidden">
-      {/* Tab sidebar */}
-      <div className="w-[180px] shrink-0 border-r border-edge bg-surface-alt/50 p-3 flex flex-col gap-1">
-        <h1 className="text-lg font-bold text-content px-2 mb-3">Settings</h1>
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => setActiveTab(id)}
-            className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-all duration-150 w-full text-left ${
-              activeTab === id
-                ? 'bg-accent/15 text-accent'
-                : 'text-muted hover:bg-elevated hover:text-content'
-            }`}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            {label}
-          </button>
-        ))}
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Header */}
+      <div className="shrink-0 px-6 pt-6 pb-0">
+        <h1 className="text-2xl font-bold text-content mb-4">Settings</h1>
+        <Tabs
+          tabs={TAB_ITEMS}
+          activeTab={activeTab}
+          onChange={(id) => setActiveTab(id as SettingsTab)}
+        />
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-5">
-        {activeTab === 'appearance' && (
-          <div className="max-w-2xl space-y-5">
-            {/* Themes */}
-            <section>
-              <h2 className="text-sm font-semibold text-content mb-3">Theme</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mb-3">
-                {allThemes.map((theme) => (
-                  <button
-                    key={theme.id}
-                    onClick={() => setActiveTheme(theme.id)}
-                    className={`relative rounded-xl border p-3 text-left transition-all duration-150 ${
-                      activeThemeId === theme.id
-                        ? 'border-accent bg-accent/8 ring-1 ring-accent/30 shadow-sm shadow-accent/10'
-                        : 'border-edge hover:border-muted/50 hover:bg-elevated/30'
-                    }`}
-                  >
-                    {activeThemeId === theme.id && (
-                      <Check className="absolute top-2.5 right-2.5 h-3.5 w-3.5 text-accent" />
-                    )}
-                    <p className="text-xs font-medium text-content mb-2.5 truncate">{theme.name}</p>
-                    <div className="flex gap-1.5">
-                      {['surface', 'card', 'accent', 'content'].map(k => (
-                        <div
-                          key={k}
-                          className="h-5 w-5 rounded-md border border-white/5"
-                          style={{ backgroundColor: theme.colors[k as keyof ThemeColors] }}
-                        />
-                      ))}
-                    </div>
-                    {theme.isCustom && (
-                      <div className="absolute bottom-2 right-2 flex gap-1">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleEditTheme(theme) }}
-                          className="rounded-lg p-1.5 text-muted hover:text-accent hover:bg-accent/10 active:scale-95 transition-all duration-150"
-                          title="Edit theme"
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); deleteCustomTheme(theme.id) }}
-                          className={BTN_DANGER}
-                          title="Delete theme"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      </div>
-                    )}
-                  </button>
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="max-w-2xl">
+          {activeTab === 'appearance' && (
+            <AppearanceTab
+              allThemes={allThemes}
+              activeThemeId={activeThemeId}
+              setActiveTheme={setActiveTheme}
+              deleteCustomTheme={deleteCustomTheme}
+              onEditTheme={handleEditTheme}
+              onCreateTheme={() => { setEditingTheme(null); setShowThemeEditor(true) }}
+            />
+          )}
+
+          {activeTab === 'browsers' && (
+            <BrowsersTab
+              managedBrowsers={managedBrowsers}
+              availableBrowsers={availableBrowsers}
+              downloading={downloading}
+              browsers={browsers}
+              browserEntries={browserEntries}
+              browsersLoading={browsersLoading}
+              onDownload={handleDownloadBrowser}
+              onRemove={handleRemoveBrowser}
+            />
+          )}
+
+          {activeTab === 'general' && (
+            <GeneralTab
+              autostart={autostart}
+              setAutostart={setAutostart}
+              minimizeToTray={minimizeToTray}
+              setMinimizeToTray={setMinimizeToTray}
+              maxConcurrent={maxConcurrent}
+              setMaxConcurrent={setMaxConcurrent}
+              maxConcurrentRef={maxConcurrentRef}
+              sessionTimeout={sessionTimeout}
+              setSessionTimeout={setSessionTimeout}
+              sessionTimeoutRef={sessionTimeoutRef}
+              autoStartProfileIds={autoStartProfileIds}
+              setAutoStartProfileIds={setAutoStartProfileIds}
+              profiles={profiles}
+              addToast={addToast}
+            />
+          )}
+
+          {activeTab === 'fingerprint' && (
+            <FingerprintTab
+              autoRegenFingerprint={autoRegenFingerprint}
+              setAutoRegenFingerprint={setAutoRegenFingerprint}
+            />
+          )}
+
+          {activeTab === 'data' && (
+            <DataTab
+              profiles={profiles}
+              templates={templates}
+              setTemplates={setTemplates}
+              sessionHistory={sessionHistory}
+              historyLoading={historyLoading}
+              profileNameMap={profileNameMap}
+              formatDuration={formatDuration}
+              addToast={addToast}
+            />
+          )}
+
+          {activeTab === 'about' && (
+            <AboutTab
+              autoCheckUpdates={autoCheckUpdates}
+              setAutoCheckUpdates={setAutoCheckUpdates}
+            />
+          )}
+
+          {activeTab === 'debug' && <DebugPanel />}
+        </div>
+      </div>
+
+      {/* Theme Editor Modal */}
+      <ThemeEditor
+        open={showThemeEditor}
+        editingTheme={editingTheme}
+        onClose={handleCloseEditor}
+      />
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Appearance Tab                                                      */
+/* ------------------------------------------------------------------ */
+
+function AppearanceTab({
+  allThemes, activeThemeId, setActiveTheme, deleteCustomTheme, onEditTheme, onCreateTheme
+}: {
+  allThemes: Theme[]
+  activeThemeId: string
+  setActiveTheme: (id: string) => Promise<void>
+  deleteCustomTheme: (id: string) => Promise<void>
+  onEditTheme: (theme: Theme) => void
+  onCreateTheme: () => void
+}): React.JSX.Element {
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-sm font-semibold text-content mb-1">Theme</h2>
+        <p className="text-xs text-muted mb-4">Choose a theme or create your own.</p>
+
+        <div className="grid grid-cols-3 gap-3">
+          {allThemes.map((theme) => (
+            <button
+              key={theme.id}
+              onClick={() => setActiveTheme(theme.id)}
+              className={cn(
+                'group relative rounded-[--radius-lg] border p-3.5 text-left transition-all duration-150',
+                activeThemeId === theme.id
+                  ? 'border-accent bg-accent/8 ring-1 ring-accent/30 shadow-sm shadow-accent/10'
+                  : 'border-edge hover:border-muted/50 hover:bg-elevated/30'
+              )}
+            >
+              {activeThemeId === theme.id && (
+                <div className="absolute top-2.5 right-2.5 h-5 w-5 rounded-full bg-accent flex items-center justify-center">
+                  <Check className="h-3 w-3 text-white" />
+                </div>
+              )}
+              <div className="flex gap-1.5 mb-3">
+                {(['surface', 'card', 'elevated', 'accent', 'content'] as const).map(k => (
+                  <div
+                    key={k}
+                    className="h-5 w-5 rounded-[--radius-sm] border border-white/5"
+                    style={{ backgroundColor: theme.colors[k as keyof ThemeColors] }}
+                  />
                 ))}
               </div>
-
-              {!showThemeEditor ? (
-                <button
-                  onClick={() => { setEditingTheme(null); setShowThemeEditor(true) }}
-                  className="inline-flex items-center gap-1.5 text-xs text-accent hover:text-accent-dim transition-colors font-medium"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Create Custom Theme
-                </button>
-              ) : (
-                <ThemeEditor editingTheme={editingTheme} onClose={handleCloseEditor} />
-              )}
-            </section>
-          </div>
-        )}
-
-        {activeTab === 'browsers' && (
-          <div className="max-w-2xl space-y-5">
-            {/* Managed browsers */}
-            <section>
-              <h2 className="text-sm font-semibold text-content mb-3">Installed Browsers</h2>
-              {managedBrowsers.length === 0 ? (
-                <p className="text-muted text-sm">No managed browsers installed yet</p>
-              ) : (
-                <div className="space-y-2">
-                  {managedBrowsers.map((b) => (
-                    <div key={`${b.browser}-${b.buildId}`} className="flex items-center gap-3 rounded-xl bg-card border border-edge px-4 py-3">
-                      <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-content capitalize">{b.browser}</p>
-                        <p className="text-xs text-muted truncate font-mono">{b.buildId} — {b.platform}</p>
-                      </div>
-                      <button onClick={() => handleRemoveBrowser(b.browser, b.buildId)} className={BTN_DANGER} title="Remove">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
+              <p className="text-xs font-medium text-content truncate">{theme.name}</p>
+              {theme.isCustom && (
+                <div className="absolute bottom-2.5 right-2.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onEditTheme(theme) }}
+                    className="rounded-[--radius-sm] p-1.5 text-muted hover:text-accent hover:bg-accent/10 active:scale-95 transition-all"
+                    title="Edit theme"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); deleteCustomTheme(theme.id) }}
+                    className="rounded-[--radius-sm] p-1.5 text-muted hover:text-err hover:bg-err/10 active:scale-95 transition-all"
+                    title="Delete theme"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
                 </div>
               )}
-            </section>
+            </button>
+          ))}
 
-            {/* Download */}
-            <section>
-              <h2 className="text-sm font-semibold text-content mb-3">Download Browsers</h2>
-              {availableBrowsers.length === 0 ? (
-                <div className="flex items-center gap-2 text-muted text-sm">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Checking available downloads...
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {availableBrowsers.map((ab) => {
-                    const dlKey = `${ab.browser}-${ab.buildId}`
-                    const isDownloading = downloading[dlKey] !== undefined
-                    const percent = downloading[dlKey] ?? 0
-                    const isInstalled = managedBrowsers.some(m => m.browser === ab.browser && m.buildId === ab.buildId)
-                    return (
-                      <div key={dlKey} className="flex items-center gap-3 rounded-xl bg-card border border-edge px-4 py-3">
-                        <Download className="h-4 w-4 shrink-0 text-accent" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-content capitalize">{ab.browserType}</p>
-                          <p className="text-xs text-muted font-mono">{ab.channel} — {ab.buildId}</p>
-                          {isDownloading && (
-                            <div className="mt-2 w-full bg-elevated rounded-full h-1.5 overflow-hidden">
-                              <div className="bg-accent h-1.5 rounded-full transition-all duration-300" style={{ width: `${percent}%` }} />
-                            </div>
-                          )}
-                        </div>
-                        {isInstalled ? (
-                          <span className="text-xs text-ok font-medium px-2.5 py-1 rounded-lg bg-ok/10 ring-1 ring-ok/20">Installed</span>
-                        ) : isDownloading ? (
-                          <span className="flex items-center gap-1.5 text-xs text-accent font-medium tabular-nums">
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            {percent}%
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => handleDownloadBrowser(ab.browserType, ab.channel, ab.browser, ab.buildId)}
-                            className={BTN_PRIMARY + ' text-xs !px-3 !py-1.5'}
-                          >
-                            Download
-                          </button>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </section>
-
-            {/* System browsers */}
-            <section>
-              <h2 className="text-sm font-semibold text-content mb-3">System Browsers</h2>
-              {browsersLoading ? (
-                <p className="text-muted text-sm">Detecting...</p>
-              ) : browserEntries.length === 0 ? (
-                <div className="flex items-center gap-2">
-                  <XCircle className="h-3.5 w-3.5 text-err" />
-                  <p className="text-sm text-muted">No system browsers detected</p>
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {browserEntries.map(([name, path]) => (
-                    <div key={name} className="flex items-center gap-2.5 text-xs">
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-ok" />
-                      <span className="text-content capitalize font-medium">{name}</span>
-                      <span className="text-muted truncate font-mono">{path}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        )}
-
-        {activeTab === 'general' && (
-          <div className="max-w-2xl space-y-5">
-            {/* System */}
-            <section className="rounded-xl border border-edge bg-card p-4 space-y-3">
-              <div className="flex items-center gap-2 mb-1">
-                <Monitor className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">System</h2>
-              </div>
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autostart}
-                  onChange={(e) => {
-                    api.setAutostart(e.target.checked).then(setAutostart).catch(() => addToast('Failed to change autostart', 'error'))
-                  }}
-                  className={CHECKBOX_CLASS}
-                />
-                <span className="text-sm text-content">Launch on system startup</span>
-              </label>
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={minimizeToTray}
-                  onChange={(e) => {
-                    const val = e.target.checked
-                    setMinimizeToTray(val)
-                    api.setSetting('minimize_to_tray', val)
-                    api.setMinimizeToTray(val)
-                  }}
-                  className={CHECKBOX_CLASS}
-                />
-                <span className="text-sm text-content">Minimize to system tray on close</span>
-              </label>
-            </section>
-
-            {/* Session limits */}
-            <section className="rounded-xl border border-edge bg-card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Power className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Session Limits</h2>
-              </div>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <p className="text-sm text-content">Max concurrent sessions</p>
-                  <p className="text-xs text-muted mt-0.5">0 = unlimited</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={0}
-                    max={50}
-                    value={maxConcurrent}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value) || 0
-                      setMaxConcurrent(val)
-                      clearTimeout(maxConcurrentRef.current)
-                      maxConcurrentRef.current = setTimeout(() => {
-                        api.setSetting('max_concurrent_sessions', val)
-                      }, 500)
-                    }}
-                    className="w-20 rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-content text-center focus:outline-none focus:ring-2 focus:ring-accent/40"
-                  />
-                </div>
-              </div>
-            </section>
-
-            {/* Auto-start profiles */}
-            <section className="rounded-xl border border-edge bg-card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Power className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Auto-Launch Profiles</h2>
-              </div>
-              <p className="text-xs text-muted mb-2">Selected profiles will launch automatically when the app starts.</p>
-              {profiles.length === 0 ? (
-                <p className="text-xs text-muted/50">No profiles yet</p>
-              ) : (
-                <div className="max-h-40 overflow-y-auto space-y-1">
-                  {profiles.map((p) => (
-                    <label key={p.id} className="flex items-center gap-2.5 cursor-pointer rounded-lg px-2 py-1.5 hover:bg-elevated/30 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={autoStartProfileIds.includes(p.id)}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                            ? [...autoStartProfileIds, p.id]
-                            : autoStartProfileIds.filter(x => x !== p.id)
-                          setAutoStartProfileIds(next)
-                          api.setSetting('auto_start_profiles', next)
-                        }}
-                        className={CHECKBOX_CLASS}
-                      />
-                      <span className="text-xs text-content truncate">{p.name}</span>
-                      <span className="text-[10px] text-muted capitalize">{p.browser_type}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* Database backup */}
-            <section className="rounded-xl border border-edge bg-card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Database className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Database Backup</h2>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={async () => {
-                    try {
-                      const result = await api.exportDatabase()
-                      if (result.ok) addToast(`Backup saved: ${result.path}`, 'success')
-                    } catch (err) {
-                      addToast(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
-                    }
-                  }}
-                  className={BTN_SECONDARY + ' text-xs'}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Export Database
-                </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      const result = await api.importDatabase()
-                      if (result.ok && result.requiresRestart) {
-                        addToast('Database imported! Restart to apply.', 'success')
-                      } else if (result.error) {
-                        addToast(result.error, 'error')
-                      }
-                    } catch (err) {
-                      addToast(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
-                    }
-                  }}
-                  className={BTN_SECONDARY + ' text-xs'}
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Import Database
-                </button>
-              </div>
-              <p className="text-xs text-muted mt-2">Export saves all profiles, proxies, settings. Import requires app restart.</p>
-            </section>
-
-            {/* Fingerprint */}
-            <section className="rounded-xl border border-edge bg-card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Fingerprint className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Fingerprint</h2>
-              </div>
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoRegenFingerprint}
-                  onChange={(e) => setAutoRegenFingerprint(e.target.checked)}
-                  className={CHECKBOX_CLASS}
-                />
-                <span className="text-sm text-content">Auto-regenerate fingerprint on each launch</span>
-              </label>
-              <p className="text-xs text-muted mt-1.5 ml-[26px]">
-                Creates a unique fingerprint for every browser session.
-              </p>
-            </section>
-
-            {/* Session timeout */}
-            <section className="rounded-xl border border-edge bg-card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Settings2 className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Session Timeout</h2>
-              </div>
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-muted">Auto-stop browsers after this duration (0 = disabled)</p>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={0}
-                    max={1440}
-                    value={sessionTimeout}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value) || 0
-                      setSessionTimeout(val)
-                      clearTimeout(sessionTimeoutRef.current)
-                      sessionTimeoutRef.current = setTimeout(() => {
-                        api.setSetting('session_timeout_minutes', val)
-                      }, 500)
-                    }}
-                    className="w-20 rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-content text-center focus:outline-none focus:ring-2 focus:ring-accent/40"
-                  />
-                  <span className="text-xs text-muted">min</span>
-                </div>
-              </div>
-            </section>
-
-            {/* Session History */}
-            <section>
-              <div className="flex items-center gap-2 mb-3">
-                <History className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Session History</h2>
-              </div>
-              {historyLoading ? (
-                <p className="text-muted text-sm">Loading...</p>
-              ) : sessionHistory.length === 0 ? (
-                <p className="text-muted text-sm">No session history yet</p>
-              ) : (
-                <div className="max-h-60 overflow-y-auto rounded-xl border border-edge">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0">
-                      <tr className="border-b border-edge bg-card">
-                        <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Profile</th>
-                        <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Date</th>
-                        <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Duration</th>
-                        <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Exit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sessionHistory.slice(0, 20).map((h, i) => (
-                        <tr key={h.id} className={`border-b border-edge/40 last:border-0 ${i % 2 === 1 ? 'bg-elevated/15' : ''}`}>
-                          <td className="px-3 py-2 text-content text-xs truncate max-w-[140px]" title={profileNameMap.get(h.profile_id) ?? h.profile_id}>
-                            {profileNameMap.get(h.profile_id) ?? <span className="text-muted/50 font-mono">{h.profile_id.slice(0, 8)}</span>}
-                          </td>
-                          <td className="px-3 py-2 text-content text-xs tabular-nums">
-                            {new Date(h.started_at).toLocaleString()}
-                          </td>
-                          <td className="px-3 py-2 text-content text-xs font-mono tabular-nums">
-                            {formatDuration(h.duration_seconds)}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className={`inline-flex items-center gap-1 text-xs ${h.exit_code === 0 || h.exit_code === null ? 'text-ok' : 'text-warn'}`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${h.exit_code === 0 || h.exit_code === null ? 'bg-ok' : 'bg-warn'}`} />
-                              {h.exit_code ?? '\u2014'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-
-            {/* Templates */}
-            <section>
-              <div className="flex items-center gap-2 mb-3">
-                <FileText className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Templates</h2>
-              </div>
-              {templates.length === 0 ? (
-                <p className="text-muted text-sm">No templates yet. Save a profile as template from the editor.</p>
-              ) : (
-                <div className="space-y-2">
-                  {templates.map((t) => (
-                    <div key={t.id} className="flex items-center justify-between rounded-xl bg-card border border-edge px-4 py-3">
-                      <div>
-                        <p className="text-sm text-content font-medium">{t.name}</p>
-                        <p className="text-xs text-muted">{t.browser_type} — {t.description || 'No description'}</p>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          try {
-                            await api.deleteTemplate(t.id)
-                            setTemplates(prev => prev.filter(x => x.id !== t.id))
-                          } catch (err) {
-                            addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
-                          }
-                        }}
-                        className={BTN_DANGER}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {/* About & Updates */}
-            <section className="rounded-xl border border-edge bg-card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <RefreshCw className="h-4 w-4 text-accent" />
-                <h2 className="text-sm font-semibold text-content">Updates</h2>
-              </div>
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.8</span></p>
-                <button
-                  onClick={() => api.checkForUpdates()}
-                  className={BTN_SECONDARY + ' text-xs'}
-                >
-                  Check for Updates
-                </button>
-              </div>
-              <label className="flex items-center gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoCheckUpdates}
-                  onChange={(e) => {
-                    const val = e.target.checked
-                    setAutoCheckUpdates(val)
-                    api.setSetting('auto_check_updates', val)
-                  }}
-                  className={CHECKBOX_CLASS}
-                />
-                <span className="text-sm text-content">Auto-check for updates on startup</span>
-              </label>
-              <p className="text-xs text-muted mt-1.5 ml-[26px]">
-                Checks every 30 minutes in the background. Takes effect on next launch.
-              </p>
-            </section>
-          </div>
-        )}
-
-        {activeTab === 'debug' && <DebugPanel />}
+          {/* Create custom card */}
+          <button
+            onClick={onCreateTheme}
+            className={cn(
+              'rounded-[--radius-lg] border border-dashed border-edge p-3.5 text-left transition-all duration-150',
+              'hover:border-accent/50 hover:bg-accent/5 group'
+            )}
+          >
+            <div className="flex items-center justify-center h-5 mb-3">
+              <Plus className="h-5 w-5 text-muted group-hover:text-accent transition-colors" />
+            </div>
+            <p className="text-xs font-medium text-muted group-hover:text-content transition-colors">Custom Theme</p>
+          </button>
+        </div>
       </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Browsers Tab                                                        */
+/* ------------------------------------------------------------------ */
+
+function BrowsersTab({
+  managedBrowsers, availableBrowsers, downloading, browsers: _browsers, browserEntries, browsersLoading,
+  onDownload, onRemove
+}: {
+  managedBrowsers: ManagedBrowserResponse[]
+  availableBrowsers: AvailableBrowser[]
+  downloading: Record<string, number>
+  browsers: Record<string, string>
+  browserEntries: [string, string][]
+  browsersLoading: boolean
+  onDownload: (browserType: string, channel: string, browser: string, buildId: string) => Promise<void>
+  onRemove: (browser: string, buildId: string) => Promise<void>
+}): React.JSX.Element {
+  return (
+    <div className="space-y-6">
+      {/* Managed browsers */}
+      <Card title="Installed Browsers" description="Browsers downloaded and managed by Lux.">
+        {managedBrowsers.length === 0 ? (
+          <p className="text-muted text-sm">No managed browsers installed yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {managedBrowsers.map((b) => (
+              <div key={`${b.browser}-${b.buildId}`} className="flex items-center gap-3 rounded-[--radius-md] bg-surface border border-edge px-4 py-3">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-content capitalize">{b.browser}</p>
+                  <p className="text-xs text-muted truncate font-mono">{b.buildId} — {b.platform}</p>
+                </div>
+                <Button variant="danger" size="sm" icon={<Trash2 className="h-3.5 w-3.5" />} onClick={() => onRemove(b.browser, b.buildId)} />
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Download */}
+      <Card title="Download Browsers" description="Download additional browser engines.">
+        {availableBrowsers.length === 0 ? (
+          <div className="flex items-center gap-2 text-muted text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Checking available downloads...
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {availableBrowsers.map((ab) => {
+              const dlKey = `${ab.browser}-${ab.buildId}`
+              const isDownloading = downloading[dlKey] !== undefined
+              const percent = downloading[dlKey] ?? 0
+              const isInstalled = managedBrowsers.some(m => m.browser === ab.browser && m.buildId === ab.buildId)
+              return (
+                <div key={dlKey} className="flex items-center gap-3 rounded-[--radius-md] bg-surface border border-edge px-4 py-3">
+                  <Download className="h-4 w-4 shrink-0 text-accent" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-content capitalize">{ab.browserType}</p>
+                    <p className="text-xs text-muted font-mono">{ab.channel} — {ab.buildId}</p>
+                    {isDownloading && (
+                      <div className="mt-2 w-full bg-elevated rounded-full h-1.5 overflow-hidden">
+                        <div className="bg-accent h-1.5 rounded-full transition-all duration-300" style={{ width: `${percent}%` }} />
+                      </div>
+                    )}
+                  </div>
+                  {isInstalled ? (
+                    <Badge variant="success" dot>Installed</Badge>
+                  ) : isDownloading ? (
+                    <span className="flex items-center gap-1.5 text-xs text-accent font-medium tabular-nums">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      {percent}%
+                    </span>
+                  ) : (
+                    <Button size="sm" onClick={() => onDownload(ab.browserType, ab.channel, ab.browser, ab.buildId)}>
+                      Download
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* System browsers */}
+      <Card title="System Browsers" description="Browsers detected on your system.">
+        {browsersLoading ? (
+          <p className="text-muted text-sm">Detecting...</p>
+        ) : browserEntries.length === 0 ? (
+          <div className="flex items-center gap-2">
+            <XCircle className="h-3.5 w-3.5 text-err" />
+            <p className="text-sm text-muted">No system browsers detected</p>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {browserEntries.map(([name, path]) => (
+              <div key={name} className="flex items-center gap-2.5 text-xs">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-ok" />
+                <span className="text-content capitalize font-medium">{name}</span>
+                <span className="text-muted truncate font-mono">{path}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  General Tab                                                         */
+/* ------------------------------------------------------------------ */
+
+function GeneralTab({
+  autostart, setAutostart, minimizeToTray, setMinimizeToTray,
+  maxConcurrent, setMaxConcurrent, maxConcurrentRef,
+  sessionTimeout, setSessionTimeout, sessionTimeoutRef,
+  autoStartProfileIds, setAutoStartProfileIds,
+  profiles, addToast
+}: {
+  autostart: boolean
+  setAutostart: (val: boolean) => void
+  minimizeToTray: boolean
+  setMinimizeToTray: (val: boolean) => void
+  maxConcurrent: number
+  setMaxConcurrent: (val: number) => void
+  maxConcurrentRef: React.MutableRefObject<ReturnType<typeof setTimeout> | undefined>
+  sessionTimeout: number
+  setSessionTimeout: (val: number) => void
+  sessionTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | undefined>
+  autoStartProfileIds: string[]
+  setAutoStartProfileIds: (val: string[]) => void
+  profiles: { id: string; name: string; browser_type: string }[]
+  addToast: (msg: string, type: 'success' | 'error') => void
+}): React.JSX.Element {
+  return (
+    <div className="space-y-5">
+      {/* System */}
+      <Card
+        title="System"
+        description="Control how Lux starts and behaves."
+        actions={<Monitor className="h-4 w-4 text-accent" />}
+      >
+        <div className="space-y-4">
+          <Toggle
+            checked={autostart}
+            onChange={(val) => {
+              api.setAutostart(val).then(setAutostart).catch(() => addToast('Failed to change autostart', 'error'))
+            }}
+            label="Launch on system startup"
+            description="Start Lux automatically when you log in."
+          />
+          <Toggle
+            checked={minimizeToTray}
+            onChange={(val) => {
+              setMinimizeToTray(val)
+              api.setSetting('minimize_to_tray', val)
+              api.setMinimizeToTray(val)
+            }}
+            label="Minimize to system tray on close"
+            description="Keep Lux running in the background."
+          />
+        </div>
+      </Card>
+
+      {/* Session Limits */}
+      <Card
+        title="Session Limits"
+        description="Control concurrent sessions and timeouts."
+        actions={<Power className="h-4 w-4 text-accent" />}
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-content">Max concurrent sessions</p>
+              <p className="text-xs text-muted mt-0.5">0 = unlimited</p>
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={50}
+              value={maxConcurrent}
+              onChange={(e) => {
+                const val = parseInt(e.target.value) || 0
+                setMaxConcurrent(val)
+                clearTimeout(maxConcurrentRef.current)
+                maxConcurrentRef.current = setTimeout(() => {
+                  api.setSetting('max_concurrent_sessions', val)
+                }, 500)
+              }}
+              className="w-20 h-9 rounded-[--radius-md] border border-edge bg-surface px-2 text-sm text-content text-center focus:outline-none focus:ring-1 focus:ring-accent/20 focus:border-accent/50"
+            />
+          </div>
+          <div className="h-px bg-edge" />
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-content">Session timeout</p>
+              <p className="text-xs text-muted mt-0.5">Auto-stop browsers after this duration. 0 = disabled.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                max={1440}
+                value={sessionTimeout}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 0
+                  setSessionTimeout(val)
+                  clearTimeout(sessionTimeoutRef.current)
+                  sessionTimeoutRef.current = setTimeout(() => {
+                    api.setSetting('session_timeout_minutes', val)
+                  }, 500)
+                }}
+                className="w-20 h-9 rounded-[--radius-md] border border-edge bg-surface px-2 text-sm text-content text-center focus:outline-none focus:ring-1 focus:ring-accent/20 focus:border-accent/50"
+              />
+              <span className="text-xs text-muted">min</span>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Auto-launch profiles */}
+      <Card
+        title="Auto-Launch Profiles"
+        description="Selected profiles will launch automatically when the app starts."
+        actions={<Power className="h-4 w-4 text-accent" />}
+      >
+        {profiles.length === 0 ? (
+          <p className="text-xs text-muted/50">No profiles yet</p>
+        ) : (
+          <div className="max-h-40 overflow-y-auto space-y-1">
+            {profiles.map((p) => (
+              <label key={p.id} className="flex items-center gap-2.5 cursor-pointer rounded-[--radius-md] px-2 py-1.5 hover:bg-elevated/30 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={autoStartProfileIds.includes(p.id)}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                      ? [...autoStartProfileIds, p.id]
+                      : autoStartProfileIds.filter(x => x !== p.id)
+                    setAutoStartProfileIds(next)
+                    api.setSetting('auto_start_profiles', next)
+                  }}
+                  className="h-4 w-4 rounded-[--radius-sm] border-edge bg-surface accent-accent cursor-pointer"
+                />
+                <span className="text-xs text-content truncate">{p.name}</span>
+                <Badge variant="default">{p.browser_type}</Badge>
+              </label>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Fingerprint Tab                                                     */
+/* ------------------------------------------------------------------ */
+
+function FingerprintTab({
+  autoRegenFingerprint, setAutoRegenFingerprint
+}: {
+  autoRegenFingerprint: boolean
+  setAutoRegenFingerprint: (val: boolean) => Promise<void>
+}): React.JSX.Element {
+  return (
+    <div className="space-y-5">
+      <Card
+        title="Fingerprint Generation"
+        description="Configure how browser fingerprints are generated for your profiles."
+        actions={<Fingerprint className="h-4 w-4 text-accent" />}
+      >
+        <div className="space-y-4">
+          <Toggle
+            checked={autoRegenFingerprint}
+            onChange={(val) => setAutoRegenFingerprint(val)}
+            label="Auto-regenerate fingerprint on each launch"
+            description="Creates a unique fingerprint for every browser session."
+          />
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Data Tab                                                            */
+/* ------------------------------------------------------------------ */
+
+function DataTab({
+  profiles, templates, setTemplates, sessionHistory, historyLoading, profileNameMap, formatDuration, addToast
+}: {
+  profiles: { id: string; name: string }[]
+  templates: Array<{ id: string; name: string; description: string; browser_type: string; created_at: string }>
+  setTemplates: (fn: (prev: typeof templates) => typeof templates) => void
+  sessionHistory: Array<{
+    id: string; profile_id: string; started_at: string; stopped_at: string | null;
+    duration_seconds: number | null; exit_code: number | null
+  }>
+  historyLoading: boolean
+  profileNameMap: Map<string, string>
+  formatDuration: (seconds: number | null) => string
+  addToast: (msg: string, type: 'success' | 'error') => void
+}): React.JSX.Element {
+  return (
+    <div className="space-y-5">
+      {/* Storage overview */}
+      <Card title="Storage" description="Overview of your data.">
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-[--radius-md] bg-surface border border-edge px-4 py-3 text-center">
+            <p className="text-lg font-bold text-content">{profiles.length}</p>
+            <p className="text-xs text-muted">Profiles</p>
+          </div>
+          <div className="rounded-[--radius-md] bg-surface border border-edge px-4 py-3 text-center">
+            <p className="text-lg font-bold text-content">{templates.length}</p>
+            <p className="text-xs text-muted">Templates</p>
+          </div>
+          <div className="rounded-[--radius-md] bg-surface border border-edge px-4 py-3 text-center">
+            <p className="text-lg font-bold text-content">{sessionHistory.length}</p>
+            <p className="text-xs text-muted">Sessions</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Database Backup */}
+      <Card
+        title="Database Backup"
+        description="Export saves all profiles, proxies, and settings. Import requires app restart."
+        actions={<Database className="h-4 w-4 text-accent" />}
+      >
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Download className="h-3.5 w-3.5" />}
+            onClick={async () => {
+              try {
+                const result = await api.exportDatabase()
+                if (result.ok) addToast(`Backup saved: ${result.path}`, 'success')
+              } catch (err) {
+                addToast(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+              }
+            }}
+          >
+            Export Database
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Upload className="h-3.5 w-3.5" />}
+            onClick={async () => {
+              try {
+                const result = await api.importDatabase()
+                if (result.ok && result.requiresRestart) {
+                  addToast('Database imported! Restart to apply.', 'success')
+                } else if (result.error) {
+                  addToast(result.error, 'error')
+                }
+              } catch (err) {
+                addToast(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+              }
+            }}
+          >
+            Import Database
+          </Button>
+        </div>
+      </Card>
+
+      {/* Session History */}
+      <Card title="Session History" actions={<History className="h-4 w-4 text-accent" />}>
+        {historyLoading ? (
+          <p className="text-muted text-sm">Loading...</p>
+        ) : sessionHistory.length === 0 ? (
+          <p className="text-muted text-sm">No session history yet.</p>
+        ) : (
+          <div className="max-h-60 overflow-y-auto rounded-[--radius-md] border border-edge">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0">
+                <tr className="border-b border-edge bg-card">
+                  <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Profile</th>
+                  <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Date</th>
+                  <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Duration</th>
+                  <th className="text-left px-3 py-2.5 text-muted font-medium text-[11px] uppercase tracking-wider">Exit</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessionHistory.slice(0, 20).map((h, i) => (
+                  <tr key={h.id} className={cn('border-b border-edge/40 last:border-0', i % 2 === 1 && 'bg-elevated/15')}>
+                    <td className="px-3 py-2 text-content text-xs truncate max-w-[140px]" title={profileNameMap.get(h.profile_id) ?? h.profile_id}>
+                      {profileNameMap.get(h.profile_id) ?? <span className="text-muted/50 font-mono">{h.profile_id.slice(0, 8)}</span>}
+                    </td>
+                    <td className="px-3 py-2 text-content text-xs tabular-nums">
+                      {new Date(h.started_at).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-content text-xs font-mono tabular-nums">
+                      {formatDuration(h.duration_seconds)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={cn('inline-flex items-center gap-1 text-xs', h.exit_code === 0 || h.exit_code === null ? 'text-ok' : 'text-warn')}>
+                        <span className={cn('h-1.5 w-1.5 rounded-full', h.exit_code === 0 || h.exit_code === null ? 'bg-ok' : 'bg-warn')} />
+                        {h.exit_code ?? '\u2014'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {/* Templates */}
+      <Card title="Templates" description="Saved profile templates." actions={<FileText className="h-4 w-4 text-accent" />}>
+        {templates.length === 0 ? (
+          <p className="text-muted text-sm">No templates yet. Save a profile as template from the editor.</p>
+        ) : (
+          <div className="space-y-2">
+            {templates.map((t) => (
+              <div key={t.id} className="flex items-center justify-between rounded-[--radius-md] bg-surface border border-edge px-4 py-3">
+                <div>
+                  <p className="text-sm text-content font-medium">{t.name}</p>
+                  <p className="text-xs text-muted">{t.browser_type} — {t.description || 'No description'}</p>
+                </div>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon={<Trash2 className="h-3.5 w-3.5" />}
+                  onClick={async () => {
+                    try {
+                      await api.deleteTemplate(t.id)
+                      setTemplates(prev => prev.filter(x => x.id !== t.id))
+                    } catch (err) {
+                      addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+                    }
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  About Tab                                                           */
+/* ------------------------------------------------------------------ */
+
+function AboutTab({
+  autoCheckUpdates, setAutoCheckUpdates
+}: {
+  autoCheckUpdates: boolean
+  setAutoCheckUpdates: (val: boolean) => void
+}): React.JSX.Element {
+  return (
+    <div className="space-y-5">
+      <Card
+        title="Lux Antidetect Browser"
+        description="Version information and updates."
+        actions={<Info className="h-4 w-4 text-accent" />}
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-content">Current version</p>
+              <p className="text-xs text-muted font-mono mt-0.5">v1.0.8</p>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
+              onClick={() => api.checkForUpdates()}
+            >
+              Check for Updates
+            </Button>
+          </div>
+          <div className="h-px bg-edge" />
+          <Toggle
+            checked={autoCheckUpdates}
+            onChange={(val) => {
+              setAutoCheckUpdates(val)
+              api.setSetting('auto_check_updates', val)
+            }}
+            label="Auto-check for updates on startup"
+            description="Checks every 30 minutes in the background. Takes effect on next launch."
+          />
+        </div>
+      </Card>
     </div>
   )
 }
@@ -722,29 +914,25 @@ function DebugPanel(): React.JSX.Element {
   }
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="space-y-4">
       {/* System info */}
-      <section className="rounded-xl border border-edge bg-card p-4">
-        <h2 className="text-sm font-semibold text-content mb-3 flex items-center gap-2">
-          <Bug className="h-4 w-4 text-accent" />
-          System Info
-        </h2>
+      <Card title="System Info" actions={<Bug className="h-4 w-4 text-accent" />}>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+          <div className="flex justify-between rounded-[--radius-md] bg-surface border border-edge px-3 py-2">
             <span className="text-muted">Platform</span>
             <span className="text-content font-mono">{navigator.platform}</span>
           </div>
-          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+          <div className="flex justify-between rounded-[--radius-md] bg-surface border border-edge px-3 py-2">
             <span className="text-muted">User Agent</span>
             <span className="text-content font-mono truncate max-w-[200px]" title={navigator.userAgent}>
               {navigator.userAgent.includes('Electron') ? 'Electron ' + navigator.userAgent.match(/Electron\/([\d.]+)/)?.[1] : 'Unknown'}
             </span>
           </div>
-          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+          <div className="flex justify-between rounded-[--radius-md] bg-surface border border-edge px-3 py-2">
             <span className="text-muted">Chrome</span>
             <span className="text-content font-mono">{navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] ?? 'N/A'}</span>
           </div>
-          <div className="flex justify-between rounded-lg bg-elevated/30 px-3 py-2">
+          <div className="flex justify-between rounded-[--radius-md] bg-surface border border-edge px-3 py-2">
             <span className="text-muted">Memory</span>
             <span className="text-content font-mono">
               {(performance as unknown as { memory?: { usedJSHeapSize: number } }).memory
@@ -753,46 +941,48 @@ function DebugPanel(): React.JSX.Element {
             </span>
           </div>
         </div>
-      </section>
+      </Card>
 
       {/* Actions */}
-      <section className="flex gap-2">
-        <button onClick={handleCheckHealth} className={BTN_SECONDARY + ' text-xs'}>
+      <div className="flex gap-2">
+        <Button variant="secondary" size="sm" onClick={handleCheckHealth}>
           Check Process Health
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => addLog('Manual log entry — testing debug panel', 'info', 'manual')}
-          className={BTN_SECONDARY + ' text-xs'}
         >
           Test Log
-        </button>
-      </section>
+        </Button>
+      </div>
 
       {/* Log viewer */}
-      <section className="rounded-xl border border-edge bg-card overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-edge bg-elevated/20">
+      <Card>
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <h2 className="text-xs font-semibold text-content">Console Logs</h2>
+            <h3 className="text-xs font-semibold text-content">Console Logs</h3>
             <span className="text-[10px] text-muted font-mono">{filteredLogs.length} entries</span>
           </div>
           <div className="flex items-center gap-2">
-            <select
+            <Select
               value={filter}
               onChange={(e) => setFilter(e.target.value as LogLevel | 'all')}
-              className="rounded-md border border-edge bg-surface px-2 py-1 text-[10px] text-content focus:outline-none focus:ring-1 focus:ring-accent/40 appearance-none cursor-pointer"
-            >
-              <option value="all">All</option>
-              <option value="info">Info</option>
-              <option value="warn">Warn</option>
-              <option value="error">Error</option>
-              <option value="debug">Debug</option>
-            </select>
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'info', label: 'Info' },
+                { value: 'warn', label: 'Warn' },
+                { value: 'error', label: 'Error' },
+                { value: 'debug', label: 'Debug' }
+              ]}
+              className="w-24 !h-7 !text-[10px]"
+            />
             <button onClick={clearLogs} className="text-[10px] text-muted hover:text-err transition-colors">
               Clear
             </button>
           </div>
         </div>
-        <div className="h-[300px] overflow-y-auto font-mono text-[11px] leading-relaxed">
+        <div className="h-[300px] overflow-y-auto rounded-[--radius-md] border border-edge font-mono text-[11px] leading-relaxed">
           {filteredLogs.length === 0 ? (
             <div className="flex items-center justify-center h-full text-muted/40 text-xs">
               No logs yet
@@ -806,7 +996,7 @@ function DebugPanel(): React.JSX.Element {
                 <span className="text-muted/40 shrink-0 w-16 tabular-nums">
                   {new Date(log.timestamp).toLocaleTimeString()}
                 </span>
-                <span className={`shrink-0 w-10 uppercase font-bold text-[9px] ${LOG_LEVEL_STYLES[log.level]}`}>
+                <span className={cn('shrink-0 w-10 uppercase font-bold text-[9px]', LOG_LEVEL_STYLES[log.level])}>
                   {log.level}
                 </span>
                 {log.source && (
@@ -818,7 +1008,7 @@ function DebugPanel(): React.JSX.Element {
           )}
           <div ref={logEndRef} />
         </div>
-      </section>
+      </Card>
     </div>
   )
 }

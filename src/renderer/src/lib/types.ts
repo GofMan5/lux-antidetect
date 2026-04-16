@@ -102,6 +102,9 @@ export interface UpdateFingerprintInput {
   languages?: string[]
   screen_width?: number
   screen_height?: number
+  color_depth?: number
+  pixel_ratio?: number
+  device_type?: string
   timezone?: string
   webgl_vendor?: string
   webgl_renderer?: string

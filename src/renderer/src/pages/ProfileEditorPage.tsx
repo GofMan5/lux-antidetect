@@ -1,20 +1,40 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Wand2, ChevronDown, ChevronRight, Save, Bookmark } from 'lucide-react'
+import {
+  ArrowLeft,
+  Save,
+  Wand2,
+  Bookmark,
+  Globe,
+  Monitor,
+  Shield,
+  Settings,
+  Zap,
+  Check,
+  AlertTriangle,
+  X,
+  Plus
+} from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
-import { INPUT_CLASS, SELECT_CLASS, LABEL_CLASS, TEXTAREA_CLASS, BTN_PRIMARY, BTN_SECONDARY } from '../lib/ui'
+import { cn } from '../lib/utils'
+import { Button, Input, Select, Card, Toggle, Tabs, Badge, Tooltip } from '../components/ui'
+import { TEXTAREA, LABEL } from '../lib/ui'
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const SCREEN_PRESETS = [
-  { label: '1920x1080', value: '1920x1080' },
-  { label: '2560x1440', value: '2560x1440' },
-  { label: '1366x768', value: '1366x768' },
-  { label: '1536x864', value: '1536x864' },
-  { label: '1440x900', value: '1440x900' },
-  { label: '1280x720', value: '1280x720' }
-] as const
+  { value: '1920x1080', label: '1920×1080' },
+  { value: '2560x1440', label: '2560×1440' },
+  { value: '1366x768', label: '1366×768' },
+  { value: '1536x864', label: '1536×864' },
+  { value: '1440x900', label: '1440×900' },
+  { value: '1280x720', label: '1280×720' }
+]
 
 const TIMEZONES = [
   'America/New_York',
@@ -33,14 +53,60 @@ const TIMEZONES = [
   'Pacific/Auckland'
 ] as const
 
-const HARDWARE_CONCURRENCY_OPTIONS = [4, 8, 12, 16] as const
-const DEVICE_MEMORY_OPTIONS = [4, 8, 16] as const
+const BROWSER_OPTIONS = [
+  { value: 'chromium', label: 'Chromium' },
+  { value: 'firefox', label: 'Firefox' },
+  { value: 'edge', label: 'Edge' }
+]
+
+const DEVICE_TYPE_OPTIONS = [
+  { value: 'desktop', label: 'Desktop' },
+  { value: 'mobile', label: 'Mobile' }
+]
+
+const HARDWARE_CONCURRENCY_OPTIONS = [
+  { value: '4', label: '4 cores' },
+  { value: '8', label: '8 cores' },
+  { value: '12', label: '12 cores' },
+  { value: '16', label: '16 cores' }
+]
+
+const DEVICE_MEMORY_OPTIONS = [
+  { value: '4', label: '4 GB' },
+  { value: '8', label: '8 GB' },
+  { value: '16', label: '16 GB' }
+]
 
 const WEBRTC_POLICIES = [
-  { label: 'Disable non-proxied UDP', value: 'disable_non_proxied_udp' },
-  { label: 'Default public only', value: 'default_public_interface_only' },
-  { label: 'Default', value: 'default' }
-] as const
+  { value: 'disable_non_proxied_udp', label: 'Disable non-proxied UDP' },
+  { value: 'default_public_interface_only', label: 'Default public only' },
+  { value: 'default', label: 'Default' }
+]
+
+const COLOR_DEPTH_OPTIONS = [
+  { value: '24', label: '24-bit' },
+  { value: '30', label: '30-bit' },
+  { value: '32', label: '32-bit' }
+]
+
+const PIXEL_RATIO_OPTIONS = [
+  { value: '1', label: '1.0×' },
+  { value: '1.25', label: '1.25×' },
+  { value: '1.5', label: '1.5×' },
+  { value: '2', label: '2.0×' },
+  { value: '3', label: '3.0×' }
+]
+
+const FORM_TABS = [
+  { id: 'general', label: 'General', icon: <Settings className="h-3.5 w-3.5" /> },
+  { id: 'browser', label: 'Browser', icon: <Monitor className="h-3.5 w-3.5" /> },
+  { id: 'proxy', label: 'Proxy', icon: <Globe className="h-3.5 w-3.5" /> },
+  { id: 'fingerprint', label: 'Fingerprint', icon: <Shield className="h-3.5 w-3.5" /> }
+]
+
+// ---------------------------------------------------------------------------
+// Schema
+// ---------------------------------------------------------------------------
 
 const profileSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -92,6 +158,10 @@ const DEFAULT_VALUES: ProfileFormData = {
   device_type: 'desktop' as const
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function parseScreen(value: string): { width: number; height: number } {
   const [w, h] = value.split('x').map(Number)
   return { width: w || 1920, height: h || 1080 }
@@ -101,26 +171,34 @@ function toScreenValue(w: number, h: number): string {
   return `${w}x${h}`
 }
 
-interface ProfileEditorPanelProps {
-  profileId?: string | null
-  onSave: () => void
-  onCancel: () => void
-}
-
-function getFingerprintStrength(watchedFields: [string, string, string | number, string, string]): { score: number; issues: string[] } {
+function getFingerprintStrength(
+  watchedFields: [string, string, string | number, string, string]
+): { score: number; issues: string[] } {
   const [ua, platform, pixelRatio, webglVendor, timezone] = watchedFields
   const issues: string[] = []
 
   if (ua.includes('Windows') && platform !== 'Win32') issues.push('UA/Platform mismatch')
   if (ua.includes('Macintosh') && platform !== 'MacIntel') issues.push('UA/Platform mismatch')
-  if (ua.includes('Macintosh') && String(pixelRatio) === '1') issues.push('Mac usually has 2x pixel ratio')
+  if (ua.includes('Macintosh') && String(pixelRatio) === '1')
+    issues.push('Mac usually has 2x pixel ratio')
   if (!ua) issues.push('No User-Agent set')
   if (!webglVendor) issues.push('No WebGL vendor')
   if (!timezone) issues.push('No timezone set')
-  if (ua.includes('Windows') && webglVendor === 'Apple') issues.push('Windows + Apple GPU impossible')
+  if (ua.includes('Windows') && webglVendor === 'Apple')
+    issues.push('Windows + Apple GPU impossible')
 
   const score = Math.max(0, 100 - issues.length * 15)
   return { score, issues }
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+interface ProfileEditorPanelProps {
+  profileId?: string | null
+  onSave: () => void
+  onCancel: () => void
 }
 
 export function ProfileEditorPanel({
@@ -129,16 +207,33 @@ export function ProfileEditorPanel({
   onCancel
 }: ProfileEditorPanelProps): React.JSX.Element {
   const isEditMode = Boolean(profileId)
-  const [fpOpen, setFpOpen] = useState(true)
+
+  // -- Local state --------------------------------------------------------
+  const [activeTab, setActiveTab] = useState('general')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [templateSaved, setTemplateSaved] = useState(false)
-  const [templates, setTemplates] = useState<Array<{ id: string; name: string; browser_type: string }>>([])
+  const [templates, setTemplates] = useState<
+    Array<{ id: string; name: string; browser_type: string }>
+  >([])
+  const [testingProxy, setTestingProxy] = useState(false)
+  const [proxyTestResult, setProxyTestResult] = useState<boolean | null>(null)
+  const [tagInput, setTagInput] = useState('')
 
+  // Fingerprint section toggles (UI-only collapse / expand)
+  const [webrtcOpen, setWebrtcOpen] = useState(true)
+  const [webglOpen, setWebglOpen] = useState(true)
+  const [displayOpen, setDisplayOpen] = useState(true)
+  const [hardwareOpen, setHardwareOpen] = useState(true)
+  const [timezoneOpen, setTimezoneOpen] = useState(true)
+
+  // -- Store --------------------------------------------------------------
   const proxies = useProxiesStore((s) => s.proxies)
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
+  const storeTestProxy = useProxiesStore((s) => s.testProxy)
 
+  // -- Form ---------------------------------------------------------------
   const {
     register,
     handleSubmit,
@@ -146,22 +241,75 @@ export function ProfileEditorPanel({
     setValue,
     getValues,
     watch,
-    formState: { errors }
+    formState: { errors, isDirty }
   } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: DEFAULT_VALUES
   })
 
-  const watchedData = watch(['user_agent', 'platform', 'pixel_ratio', 'webgl_vendor', 'timezone'])
+  const watchedData = watch([
+    'user_agent',
+    'platform',
+    'pixel_ratio',
+    'webgl_vendor',
+    'timezone'
+  ])
+  const watchedProxyId = watch('proxy_id')
+  const watchedTags = watch('tags')
+
+  const selectedProxy = proxies.find((p) => p.id === watchedProxyId)
+  const screenValue = watch('screen')
+  const isCustomScreen = !SCREEN_PRESETS.some((p) => p.value === screenValue)
+  const timezoneValue = watch('timezone')
+  const isCustomTimezone = !(TIMEZONES as readonly string[]).includes(timezoneValue)
+
+  // -- Derived ------------------------------------------------------------
+  const tagsList = watchedTags
+    ? watchedTags
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : []
+
+  const proxyOptions = [
+    { value: '', label: 'No proxy' },
+    ...proxies.map((p) => ({
+      value: p.id,
+      label: `${p.name} (${p.protocol}://${p.host}:${p.port})`
+    }))
+  ]
+
+  const screenOptions = [
+    ...SCREEN_PRESETS,
+    ...(isCustomScreen ? [{ value: screenValue, label: screenValue }] : [])
+  ]
+
+  const timezoneOptions = [
+    ...TIMEZONES.map((tz) => ({ value: tz, label: tz })),
+    ...(isCustomTimezone ? [{ value: timezoneValue, label: timezoneValue }] : [])
+  ]
+
+  const fpStrength = (() => {
+    const [ua] = watchedData
+    if (!ua) return null
+    return getFingerprintStrength(
+      watchedData as [string, string, string | number, string, string]
+    )
+  })()
+
+  // -- Effects ------------------------------------------------------------
 
   useEffect(() => {
     fetchProxies()
   }, [fetchProxies])
 
   useEffect(() => {
-    api.listTemplates().then((t: unknown[]) => {
-      setTemplates(t as Array<{ id: string; name: string; browser_type: string }>)
-    }).catch(() => {})
+    api
+      .listTemplates()
+      .then((t: unknown[]) => {
+        setTemplates(t as Array<{ id: string; name: string; browser_type: string }>)
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -183,7 +331,10 @@ export function ProfileEditorPanel({
           tags: detail.profile.tags || '',
           user_agent: detail.fingerprint.user_agent,
           platform: detail.fingerprint.platform,
-          screen: toScreenValue(detail.fingerprint.screen_width, detail.fingerprint.screen_height),
+          screen: toScreenValue(
+            detail.fingerprint.screen_width,
+            detail.fingerprint.screen_height
+          ),
           timezone: detail.fingerprint.timezone,
           hardware_concurrency: detail.fingerprint.hardware_concurrency,
           device_memory: detail.fingerprint.device_memory,
@@ -199,7 +350,8 @@ export function ProfileEditorPanel({
               return detail.fingerprint.languages
             }
           })(),
-          device_type: (detail.fingerprint.device_type as 'desktop' | 'mobile') || 'desktop'
+          device_type:
+            (detail.fingerprint.device_type as 'desktop' | 'mobile') || 'desktop'
         })
       })
       .catch((err: unknown) => {
@@ -207,28 +359,84 @@ export function ProfileEditorPanel({
       })
   }, [profileId, reset])
 
+  // -- Handlers -----------------------------------------------------------
+
+  const handleCancel = (): void => {
+    if (isDirty && !window.confirm('You have unsaved changes. Discard them?')) return
+    onCancel()
+  }
+
   const handleGenerateFingerprint = async (): Promise<void> => {
     try {
       setGenerating(true)
       const browserType = getValues('browser_type')
       const fp = await api.generateFingerprint(browserType)
-      setValue('user_agent', fp.user_agent)
-      setValue('platform', fp.platform)
-      setValue('screen', toScreenValue(fp.screen_width, fp.screen_height))
-      setValue('timezone', fp.timezone)
-      setValue('hardware_concurrency', fp.hardware_concurrency)
-      setValue('device_memory', fp.device_memory)
-      setValue('webgl_vendor', fp.webgl_vendor)
-      setValue('webgl_renderer', fp.webgl_renderer)
-      setValue('webrtc_policy', fp.webrtc_policy)
-      setValue('languages', fp.languages)
-      setValue('color_depth', fp.color_depth ?? 24)
-      setValue('pixel_ratio', fp.pixel_ratio ?? 1.0)
-      setFpOpen(true)
+      setValue('user_agent', fp.user_agent, { shouldDirty: true })
+      setValue('platform', fp.platform, { shouldDirty: true })
+      setValue('screen', toScreenValue(fp.screen_width, fp.screen_height), {
+        shouldDirty: true
+      })
+      setValue('timezone', fp.timezone, { shouldDirty: true })
+      setValue('hardware_concurrency', fp.hardware_concurrency, { shouldDirty: true })
+      setValue('device_memory', fp.device_memory, { shouldDirty: true })
+      setValue('webgl_vendor', fp.webgl_vendor, { shouldDirty: true })
+      setValue('webgl_renderer', fp.webgl_renderer, { shouldDirty: true })
+      setValue('webrtc_policy', fp.webrtc_policy, { shouldDirty: true })
+      setValue('languages', fp.languages, { shouldDirty: true })
+      setValue('color_depth', fp.color_depth ?? 24, { shouldDirty: true })
+      setValue('pixel_ratio', fp.pixel_ratio ?? 1.0, { shouldDirty: true })
+      setActiveTab('fingerprint')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to generate fingerprint')
     } finally {
       setGenerating(false)
+    }
+  }
+
+  const handleTestProxy = async (): Promise<void> => {
+    if (!watchedProxyId) return
+    setTestingProxy(true)
+    setProxyTestResult(null)
+    try {
+      const ok = await storeTestProxy(watchedProxyId)
+      setProxyTestResult(ok)
+    } catch {
+      setProxyTestResult(false)
+    } finally {
+      setTestingProxy(false)
+    }
+  }
+
+  const handleSaveAsTemplate = async (): Promise<void> => {
+    try {
+      const data = getValues()
+      const { width, height } = parseScreen(data.screen)
+      await api.createTemplate({
+        name: `${data.name} Template`,
+        browser_type: data.browser_type,
+        config: {
+          group_name: data.group_name || null,
+          notes: data.notes,
+          start_url: data.start_url,
+          proxy_id: data.proxy_id || null,
+          fingerprint: {
+            user_agent: data.user_agent,
+            platform: data.platform,
+            screen_width: width,
+            screen_height: height,
+            timezone: data.timezone,
+            hardware_concurrency: data.hardware_concurrency,
+            device_memory: data.device_memory,
+            webgl_vendor: data.webgl_vendor,
+            webgl_renderer: data.webgl_renderer,
+            webrtc_policy: data.webrtc_policy
+          }
+        } as Record<string, unknown>
+      })
+      setTemplateSaved(true)
+      setTimeout(() => setTemplateSaved(false), 2000)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save template')
     }
   }
 
@@ -238,7 +446,10 @@ export function ProfileEditorPanel({
       setError(null)
       const { width, height } = parseScreen(data.screen)
       const languagesArray = data.languages
-        ? data.languages.split(',').map((s) => s.trim()).filter(Boolean)
+        ? data.languages
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
         : ['en-US', 'en']
 
       if (isEditMode && profileId) {
@@ -250,7 +461,12 @@ export function ProfileEditorPanel({
           proxy_id: data.proxy_id || null,
           start_url: data.start_url,
           group_color: data.group_color || null,
-          tags: data.tags ? data.tags.split(',').map(s => s.trim()).filter(Boolean) : []
+          tags: data.tags
+            ? data.tags
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : []
         })
         await api.updateFingerprint(profileId, {
           user_agent: data.user_agent,
@@ -263,7 +479,10 @@ export function ProfileEditorPanel({
           webgl_vendor: data.webgl_vendor,
           webgl_renderer: data.webgl_renderer,
           webrtc_policy: data.webrtc_policy,
-          languages: languagesArray
+          languages: languagesArray,
+          color_depth: data.color_depth,
+          pixel_ratio: data.pixel_ratio,
+          device_type: data.device_type
         })
       } else {
         await api.createProfile({
@@ -274,7 +493,12 @@ export function ProfileEditorPanel({
           proxy_id: data.proxy_id || null,
           start_url: data.start_url,
           group_color: data.group_color || null,
-          tags: data.tags ? data.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
+          tags: data.tags
+            ? data.tags
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : [],
           fingerprint: {
             user_agent: data.user_agent,
             platform: data.platform,
@@ -286,9 +510,11 @@ export function ProfileEditorPanel({
             webgl_vendor: data.webgl_vendor,
             webgl_renderer: data.webgl_renderer,
             webrtc_policy: data.webrtc_policy,
-            languages: JSON.stringify(languagesArray),
+            languages: languagesArray,
+            color_depth: data.color_depth,
+            pixel_ratio: data.pixel_ratio,
             device_type: data.device_type
-          }
+          } as Record<string, unknown>
         })
       }
       onSave()
@@ -299,315 +525,564 @@ export function ProfileEditorPanel({
     }
   }
 
-  const screenValue = watch('screen')
-  const isCustomScreen = !SCREEN_PRESETS.some((p) => p.value === screenValue)
-  const timezoneValue = watch('timezone')
-  const isCustomTimezone = !TIMEZONES.includes(timezoneValue as (typeof TIMEZONES)[number])
+  // -- Tag helpers --------------------------------------------------------
 
+  const addTag = (): void => {
+    const tag = tagInput.trim()
+    if (!tag || tagsList.includes(tag)) return
+    setValue('tags', [...tagsList, tag].join(', '), { shouldDirty: true })
+    setTagInput('')
+  }
+
+  const removeTag = (tag: string): void => {
+    setValue(
+      'tags',
+      tagsList.filter((t) => t !== tag).join(', '),
+      { shouldDirty: true }
+    )
+  }
+
+  const handleTagKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      addTag()
+    }
+  }
+
+  // -- Render -------------------------------------------------------------
   return (
-    <div className="p-4 overflow-y-auto h-full">
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col h-full">
+      {/* ── Top Bar ─────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-edge shrink-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<ArrowLeft className="h-4 w-4" />}
+          onClick={handleCancel}
+          type="button"
+          aria-label="Go back"
+        />
+        <h2 className="text-sm font-semibold text-content flex-1 truncate">
+          {isEditMode ? 'Edit Profile' : 'New Profile'}
+        </h2>
+        {isDirty && (
+          <Badge variant="warning" dot>
+            Unsaved
+          </Badge>
+        )}
+        {isEditMode && (
+          <Tooltip content={templateSaved ? 'Saved!' : 'Save as Template'}>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Bookmark className="h-3.5 w-3.5" />}
+              onClick={handleSaveAsTemplate}
+              type="button"
+              aria-label="Save as template"
+            />
+          </Tooltip>
+        )}
+        <Button
+          variant="primary"
+          size="sm"
+          icon={<Save className="h-3.5 w-3.5" />}
+          type="submit"
+          loading={saving}
+        >
+          {isEditMode ? 'Save' : 'Create'}
+        </Button>
+      </div>
+
+      {/* ── Error Banner ────────────────────────────────────────────────── */}
       {error && (
-        <div className="rounded-xl bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err mb-3 font-medium">
-          {error}
+        <div className="mx-4 mt-3 rounded-[--radius-md] bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err font-medium flex items-center gap-2">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">{error}</span>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="text-err/60 hover:text-err transition-colors"
+            aria-label="Dismiss error"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
-        {/* Templates */}
-        {!isEditMode && templates.length > 0 && (
-          <div>
-            <label className={LABEL_CLASS}>From Template</label>
-            <select
-              onChange={async (e) => {
-                if (!e.target.value) return
-                try {
-                  const tmpl = await api.getTemplate(e.target.value) as { config: string; browser_type: string }
-                  const config = JSON.parse(tmpl.config) as Record<string, unknown>
-                  if (config.group_name) setValue('group_name', config.group_name as string)
-                  if (config.notes) setValue('notes', config.notes as string)
-                  if (config.start_url) setValue('start_url', config.start_url as string)
-                  setValue('browser_type', tmpl.browser_type as 'chromium' | 'firefox' | 'edge')
-                } catch { /* ignore */ }
-              }}
-              className={SELECT_CLASS}
-            >
-              <option value="">Select template...</option>
-              {templates.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+      {/* ── Tabs ────────────────────────────────────────────────────────── */}
+      <Tabs
+        tabs={FORM_TABS}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        className="px-4 pt-3"
+      />
+
+      {/* ── Tab Content ─────────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto px-4 py-4">
+        {/* ═══ General ═══ */}
+        {activeTab === 'general' && (
+          <div className="space-y-4">
+            {/* Template selector (create-mode only) */}
+            {!isEditMode && templates.length > 0 && (
+              <Card title="Template">
+                <Select
+                  options={[
+                    { value: '', label: 'Start from scratch' },
+                    ...templates.map((t) => ({ value: t.id, label: t.name }))
+                  ]}
+                  onChange={async (e) => {
+                    const tid = (e.target as HTMLSelectElement).value
+                    if (!tid) return
+                    try {
+                      const tmpl = (await api.getTemplate(tid)) as {
+                        config: string
+                        browser_type: string
+                      }
+                      const config = JSON.parse(tmpl.config) as Record<string, unknown>
+                      if (config.group_name)
+                        setValue('group_name', config.group_name as string)
+                      if (config.notes) setValue('notes', config.notes as string)
+                      if (config.start_url)
+                        setValue('start_url', config.start_url as string)
+                      setValue(
+                        'browser_type',
+                        tmpl.browser_type as 'chromium' | 'firefox' | 'edge'
+                      )
+                      const fp = config.fingerprint as Record<string, unknown> | undefined
+                      if (fp) {
+                        if (fp.user_agent) setValue('user_agent', fp.user_agent as string)
+                        if (fp.platform) setValue('platform', fp.platform as string)
+                        if (fp.screen_width && fp.screen_height)
+                          setValue('screen', toScreenValue(fp.screen_width as number, fp.screen_height as number))
+                        if (fp.timezone) setValue('timezone', fp.timezone as string)
+                        if (fp.languages) setValue('languages', fp.languages as string)
+                        if (fp.webrtc_policy) setValue('webrtc_policy', fp.webrtc_policy as string)
+                        if (fp.webgl_vendor) setValue('webgl_vendor', fp.webgl_vendor as string)
+                        if (fp.webgl_renderer) setValue('webgl_renderer', fp.webgl_renderer as string)
+                        if (fp.hardware_concurrency) setValue('hardware_concurrency', fp.hardware_concurrency as number)
+                        if (fp.device_memory) setValue('device_memory', fp.device_memory as number)
+                        if (fp.color_depth) setValue('color_depth', fp.color_depth as number)
+                        if (fp.pixel_ratio) setValue('pixel_ratio', fp.pixel_ratio as number)
+                        if (fp.device_type) setValue('device_type', fp.device_type as 'desktop' | 'mobile')
+                      }
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                />
+              </Card>
+            )}
+
+            {/* Profile name */}
+            <div>
+              <label className={LABEL}>Profile Name</label>
+              <Input
+                {...register('name')}
+                placeholder="My Profile"
+                error={errors.name?.message}
+                className="!text-base font-medium"
+              />
+            </div>
+
+            {/* Group + Color */}
+            <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+              <div>
+                <label className={LABEL}>Group</label>
+                <Input {...register('group_name')} placeholder="Work, Personal" />
+              </div>
+              <div>
+                <label className={LABEL}>Color</label>
+                <input
+                  type="color"
+                  className="h-9 w-9 rounded-[--radius-md] border border-edge bg-surface cursor-pointer"
+                  {...register('group_color')}
+                />
+              </div>
+            </div>
+
+            {/* Tags */}
+            <div>
+              <label className={LABEL}>Tags</label>
+              {tagsList.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {tagsList.map((tag) => (
+                    <Badge key={tag} variant="accent">
+                      {tag}
+                      <button
+                        type="button"
+                        onClick={() => removeTag(tag)}
+                        className="ml-1 text-accent/60 hover:text-accent transition-colors"
+                        aria-label={`Remove tag ${tag}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Input
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={handleTagKeyDown}
+                    placeholder="Add tag…"
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<Plus className="h-3.5 w-3.5" />}
+                  onClick={addTag}
+                  type="button"
+                >
+                  Add
+                </Button>
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div>
+              <label className={LABEL}>Notes</label>
+              <textarea
+                rows={3}
+                placeholder="Additional notes…"
+                className={TEXTAREA}
+                {...register('notes')}
+              />
+            </div>
+
+            {/* Start URL */}
+            <div>
+              <label className={LABEL}>Start URL</label>
+              <Input
+                {...register('start_url')}
+                placeholder="https://example.com"
+                icon={<Globe className="h-3.5 w-3.5" />}
+              />
+            </div>
           </div>
         )}
 
-        {/* General */}
-        <section className="rounded-xl border border-edge bg-surface p-3.5 space-y-3">
-          <h3 className="text-[11px] font-semibold text-muted/80 uppercase tracking-wider">General</h3>
-
-          <div>
-            <label htmlFor="name" className={LABEL_CLASS}>Name</label>
-            <input id="name" type="text" placeholder="My Profile" className={INPUT_CLASS} {...register('name')} />
-            {errors.name && <p className="mt-1 text-xs text-err">{errors.name.message}</p>}
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label htmlFor="browser_type" className={LABEL_CLASS}>Browser</label>
-              <select id="browser_type" className={SELECT_CLASS} {...register('browser_type')}>
-                <option value="chromium">Chromium</option>
-                <option value="firefox">Firefox</option>
-                <option value="edge">Edge</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="device_type" className={LABEL_CLASS}>Device</label>
-              <select id="device_type" className={SELECT_CLASS} {...register('device_type')}>
-                <option value="desktop">Desktop</option>
-                <option value="mobile">Mobile</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="group_name" className={LABEL_CLASS}>Group</label>
-              <input id="group_name" type="text" placeholder="Work, Personal" className={INPUT_CLASS} {...register('group_name')} />
-            </div>
-            <div>
-              <label htmlFor="group_color" className={LABEL_CLASS}>Color</label>
-              <input id="group_color" type="color" className="h-[38px] w-full rounded-lg border border-edge bg-surface cursor-pointer" {...register('group_color')} />
-            </div>
-          </div>
-
-          <div>
-            <label htmlFor="proxy_id" className={LABEL_CLASS}>Proxy</label>
-            <select id="proxy_id" className={SELECT_CLASS} {...register('proxy_id')}>
-              <option value="">None</option>
-              {proxies.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.protocol}://{p.host}:{p.port})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="tags" className={LABEL_CLASS}>
-              Tags <span className="text-muted/60 font-normal">(comma separated)</span>
-            </label>
-            <input id="tags" type="text" placeholder="social, work, shopping" className={INPUT_CLASS} {...register('tags')} />
-          </div>
-
-          <div>
-            <label htmlFor="start_url" className={LABEL_CLASS}>Start URL</label>
-            <input id="start_url" type="text" placeholder="https://example.com" className={INPUT_CLASS} {...register('start_url')} />
-          </div>
-
-          <div>
-            <label htmlFor="notes" className={LABEL_CLASS}>Notes</label>
-            <textarea id="notes" rows={2} placeholder="Additional notes..." className={TEXTAREA_CLASS} {...register('notes')} />
-          </div>
-        </section>
-
-        {/* Fingerprint */}
-        <section className="rounded-xl border border-edge bg-surface overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setFpOpen(!fpOpen)}
-            className="flex items-center justify-between w-full px-3.5 py-3 text-left hover:bg-elevated/30 transition-colors"
-          >
-            <h3 className="text-[11px] font-semibold text-muted/80 uppercase tracking-wider">Fingerprint</h3>
-            {fpOpen ? <ChevronDown className="h-4 w-4 text-muted" /> : <ChevronRight className="h-4 w-4 text-muted" />}
-          </button>
-
-          {fpOpen && (
-            <div className="px-3.5 pb-3.5 space-y-3 border-t border-edge pt-3">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleGenerateFingerprint}
-                  disabled={generating}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent/12 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 ring-1 ring-accent/20 transition-all disabled:opacity-40"
-                >
-                  <Wand2 className="h-3.5 w-3.5" />
-                  {generating ? 'Generating...' : 'Generate Fingerprint'}
-                </button>
+        {/* ═══ Browser ═══ */}
+        {activeTab === 'browser' && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={LABEL}>Browser</label>
+                <Select options={BROWSER_OPTIONS} {...register('browser_type')} />
               </div>
+              <div>
+                <label className={LABEL}>Device Type</label>
+                <Select options={DEVICE_TYPE_OPTIONS} {...register('device_type')} />
+              </div>
+            </div>
 
-              {(() => {
-                const [ua] = watchedData
-                if (!ua) return null
-                const { score, issues } = getFingerprintStrength(watchedData as [string, string, string | number, string, string])
-                const color = score >= 80 ? 'text-ok' : score >= 50 ? 'text-warn' : 'text-err'
-                const bgColor = score >= 80 ? 'bg-ok' : score >= 50 ? 'bg-warn' : 'bg-err'
-                return (
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex-1 h-1.5 bg-elevated rounded-full overflow-hidden">
-                      <div className={`h-full ${bgColor} rounded-full transition-all duration-300`} style={{ width: `${score}%` }} />
+            <div>
+              <label className={LABEL}>Platform</label>
+              <Input
+                {...register('platform')}
+                placeholder="Win32, MacIntel, Linux x86_64"
+              />
+              <p className="mt-1 text-[10px] text-muted">
+                Auto-filled when generating a fingerprint
+              </p>
+            </div>
+
+            {/* User Agent */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium text-content">User Agent</label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Wand2 className="h-3.5 w-3.5" />}
+                  onClick={handleGenerateFingerprint}
+                  loading={generating}
+                  type="button"
+                >
+                  Generate
+                </Button>
+              </div>
+              <Input
+                {...register('user_agent')}
+                placeholder="Mozilla/5.0 …"
+                className="font-mono text-xs"
+              />
+            </div>
+
+            {/* Languages */}
+            <div>
+              <label className={LABEL}>Languages</label>
+              <Input {...register('languages')} placeholder="en-US, en" />
+              <p className="mt-1 text-[10px] text-muted">
+                Comma-separated language codes
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ Proxy ═══ */}
+        {activeTab === 'proxy' && (
+          <div className="space-y-4">
+            <div>
+              <label className={LABEL}>Select Proxy</label>
+              <Select options={proxyOptions} {...register('proxy_id')} />
+            </div>
+
+            {selectedProxy ? (
+              <Card>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-content truncate">
+                        {selectedProxy.name}
+                      </p>
+                      <p className="text-xs text-muted mt-0.5 truncate">
+                        {selectedProxy.protocol}://{selectedProxy.host}:
+                        {selectedProxy.port}
+                      </p>
                     </div>
-                    <span className={`text-[10px] font-bold tabular-nums ${color}`}>{score}%</span>
-                    {issues.length > 0 && (
-                      <span className="text-[10px] text-muted cursor-help" title={issues.join('\n')}>
-                        {issues.length} issue{issues.length > 1 ? 's' : ''}
-                      </span>
+                    <Badge variant={selectedProxy.check_ok ? 'success' : 'error'} dot>
+                      {selectedProxy.check_ok ? 'Online' : 'Offline'}
+                    </Badge>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Badge variant="default">
+                      {selectedProxy.protocol.toUpperCase()}
+                    </Badge>
+                    {selectedProxy.country && (
+                      <Badge variant="default">{selectedProxy.country}</Badge>
+                    )}
+                    {selectedProxy.check_latency_ms != null && (
+                      <Badge
+                        variant={
+                          selectedProxy.check_latency_ms < 500 ? 'success' : 'warning'
+                        }
+                      >
+                        {selectedProxy.check_latency_ms}ms
+                      </Badge>
                     )}
                   </div>
-                )
-              })()}
 
-              <div className="grid grid-cols-1 gap-2.5">
-                <div>
-                  <label htmlFor="user_agent" className={LABEL_CLASS}>User Agent</label>
-                  <input id="user_agent" type="text" className={`${INPUT_CLASS} text-xs font-mono`} {...register('user_agent')} />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={
+                      testingProxy ? undefined : proxyTestResult === true ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : proxyTestResult === false ? (
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                      ) : (
+                        <Zap className="h-3.5 w-3.5" />
+                      )
+                    }
+                    loading={testingProxy}
+                    onClick={handleTestProxy}
+                    type="button"
+                  >
+                    {proxyTestResult === true
+                      ? 'Connected'
+                      : proxyTestResult === false
+                        ? 'Failed'
+                        : 'Test Connection'}
+                  </Button>
                 </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label htmlFor="platform" className={LABEL_CLASS}>Platform</label>
-                    <input id="platform" type="text" className={INPUT_CLASS} {...register('platform')} />
-                  </div>
-                  <div>
-                    <label htmlFor="screen" className={LABEL_CLASS}>Screen</label>
-                    <select id="screen" className={SELECT_CLASS} {...register('screen')}>
-                      {SCREEN_PRESETS.map((p) => (
-                        <option key={p.value} value={p.value}>{p.label}</option>
-                      ))}
-                      {isCustomScreen && <option value={screenValue}>{screenValue}</option>}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label htmlFor="timezone" className={LABEL_CLASS}>Timezone</label>
-                    <select id="timezone" className={SELECT_CLASS} {...register('timezone')}>
-                      {TIMEZONES.map((tz) => (
-                        <option key={tz} value={tz}>{tz}</option>
-                      ))}
-                      {isCustomTimezone && <option value={timezoneValue}>{timezoneValue}</option>}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="languages" className={LABEL_CLASS}>Languages</label>
-                    <input id="languages" type="text" placeholder="en-US, en" className={INPUT_CLASS} {...register('languages')} />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label htmlFor="hardware_concurrency" className={LABEL_CLASS}>CPU Cores</label>
-                    <select id="hardware_concurrency" className={SELECT_CLASS} {...register('hardware_concurrency', { valueAsNumber: true })}>
-                      {HARDWARE_CONCURRENCY_OPTIONS.map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="device_memory" className={LABEL_CLASS}>Memory (GB)</label>
-                    <select id="device_memory" className={SELECT_CLASS} {...register('device_memory', { valueAsNumber: true })}>
-                      {DEVICE_MEMORY_OPTIONS.map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label htmlFor="color_depth" className={LABEL_CLASS}>Color Depth</label>
-                    <select id="color_depth" className={SELECT_CLASS} {...register('color_depth', { valueAsNumber: true })}>
-                      <option value={24}>24</option>
-                      <option value={30}>30</option>
-                      <option value={32}>32</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="pixel_ratio" className={LABEL_CLASS}>Pixel Ratio</label>
-                    <select id="pixel_ratio" className={SELECT_CLASS} {...register('pixel_ratio', { valueAsNumber: true })}>
-                      <option value={1}>1.0</option>
-                      <option value={1.25}>1.25</option>
-                      <option value={1.5}>1.5</option>
-                      <option value={2}>2.0</option>
-                      <option value={3}>3.0</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label htmlFor="webgl_vendor" className={LABEL_CLASS}>
-                      WebGL Vendor <span className="text-muted/50 font-normal text-[10px]">(auto)</span>
-                    </label>
-                    <input id="webgl_vendor" type="text" readOnly className={`${INPUT_CLASS} cursor-default opacity-50 text-xs font-mono`} {...register('webgl_vendor')} />
-                  </div>
-                  <div>
-                    <label htmlFor="webgl_renderer" className={LABEL_CLASS}>
-                      WebGL Renderer <span className="text-muted/50 font-normal text-[10px]">(auto)</span>
-                    </label>
-                    <input id="webgl_renderer" type="text" readOnly className={`${INPUT_CLASS} cursor-default opacity-50 text-xs font-mono`} {...register('webgl_renderer')} />
-                  </div>
-                </div>
-
-                <div>
-                  <label htmlFor="webrtc_policy" className={LABEL_CLASS}>WebRTC Policy</label>
-                  <select id="webrtc_policy" className={SELECT_CLASS} {...register('webrtc_policy')}>
-                    {WEBRTC_POLICIES.map((p) => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                  </select>
-                </div>
+              </Card>
+            ) : (
+              <div className="rounded-[--radius-lg] border border-dashed border-edge p-8 text-center">
+                <Globe className="h-8 w-8 text-muted/30 mx-auto mb-2" />
+                <p className="text-sm text-muted">No proxy selected</p>
+                <p className="text-xs text-muted/60 mt-1">
+                  Profile will use a direct connection
+                </p>
               </div>
-            </div>
-          )}
-        </section>
+            )}
+          </div>
+        )}
 
-        <div className="flex items-center gap-2 pt-1">
-          <button type="submit" disabled={saving} className={BTN_PRIMARY}>
-            <Save className="h-3.5 w-3.5" />
-            {saving ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Profile'}
-          </button>
-          <button type="button" onClick={onCancel} className={BTN_SECONDARY}>
-            Cancel
-          </button>
-          {isEditMode && (
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  const data = getValues()
-                  const { width, height } = parseScreen(data.screen)
-                  await api.createTemplate({
-                    name: `${data.name} Template`,
-                    browser_type: data.browser_type,
-                    config: {
-                      group_name: data.group_name || null,
-                      notes: data.notes,
-                      start_url: data.start_url,
-                      proxy_id: data.proxy_id || null,
-                      fingerprint: {
-                        user_agent: data.user_agent,
-                        platform: data.platform,
-                        screen_width: width,
-                        screen_height: height,
-                        timezone: data.timezone,
-                        hardware_concurrency: data.hardware_concurrency,
-                        device_memory: data.device_memory,
-                        webgl_vendor: data.webgl_vendor,
-                        webgl_renderer: data.webgl_renderer,
-                        webrtc_policy: data.webrtc_policy
-                      }
-                    } as Record<string, unknown>
-                  })
-                  setTemplateSaved(true)
-                  setTimeout(() => setTemplateSaved(false), 2000)
-                } catch (err: unknown) {
-                  setError(err instanceof Error ? err.message : 'Failed to save template')
-                }
-              }}
-              className="ml-auto inline-flex items-center gap-1.5 text-xs text-accent hover:text-accent-dim transition-colors font-medium"
+        {/* ═══ Fingerprint ═══ */}
+        {activeTab === 'fingerprint' && (
+          <div className="space-y-4">
+            {/* Generate & strength bar */}
+            <div className="flex items-center gap-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Wand2 className="h-3.5 w-3.5" />}
+                onClick={handleGenerateFingerprint}
+                loading={generating}
+                type="button"
+              >
+                Generate All
+              </Button>
+
+              {fpStrength && (
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className="flex-1 h-1.5 bg-elevated rounded-full overflow-hidden">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all duration-300',
+                        fpStrength.score >= 80
+                          ? 'bg-ok'
+                          : fpStrength.score >= 50
+                            ? 'bg-warn'
+                            : 'bg-err'
+                      )}
+                      style={{ width: `${fpStrength.score}%` }}
+                    />
+                  </div>
+                  <Tooltip
+                    content={
+                      fpStrength.issues.length > 0
+                        ? fpStrength.issues.join(', ')
+                        : 'No issues'
+                    }
+                  >
+                    <span
+                      className={cn(
+                        'text-xs font-bold tabular-nums cursor-help',
+                        fpStrength.score >= 80
+                          ? 'text-ok'
+                          : fpStrength.score >= 50
+                            ? 'text-warn'
+                            : 'text-err'
+                      )}
+                    >
+                      {fpStrength.score}%
+                    </span>
+                  </Tooltip>
+                </div>
+              )}
+            </div>
+
+            {/* WebRTC */}
+            <Card
+              title="WebRTC"
+              description="Control WebRTC IP leak behavior"
+              actions={<Toggle checked={webrtcOpen} onChange={setWebrtcOpen} />}
             >
-              <Bookmark className="h-3 w-3" />
-              {templateSaved ? 'Saved!' : 'Save as Template'}
-            </button>
-          )}
-        </div>
-      </form>
-    </div>
+              {webrtcOpen && (
+                <div className="pt-3">
+                  <label className={LABEL}>Policy</label>
+                  <Select options={WEBRTC_POLICIES} {...register('webrtc_policy')} />
+                </div>
+              )}
+            </Card>
+
+            {/* WebGL */}
+            <Card
+              title="WebGL"
+              description="GPU fingerprint spoofing"
+              actions={<Toggle checked={webglOpen} onChange={setWebglOpen} />}
+            >
+              {webglOpen && (
+                <div className="pt-3 space-y-3">
+                  <div>
+                    <label className={LABEL}>
+                      Vendor{' '}
+                      <span className="text-muted/50 font-normal text-[10px]">
+                        (auto-generated)
+                      </span>
+                    </label>
+                    <Input
+                      {...register('webgl_vendor')}
+                      readOnly
+                      className="opacity-60 font-mono text-xs cursor-default"
+                    />
+                  </div>
+                  <div>
+                    <label className={LABEL}>
+                      Renderer{' '}
+                      <span className="text-muted/50 font-normal text-[10px]">
+                        (auto-generated)
+                      </span>
+                    </label>
+                    <Input
+                      {...register('webgl_renderer')}
+                      readOnly
+                      className="opacity-60 font-mono text-xs cursor-default"
+                    />
+                  </div>
+                </div>
+              )}
+            </Card>
+
+            {/* Screen & Display */}
+            <Card
+              title="Screen & Display"
+              description="Resolution and rendering settings"
+              actions={<Toggle checked={displayOpen} onChange={setDisplayOpen} />}
+            >
+              {displayOpen && (
+                <div className="pt-3 space-y-3">
+                  <div>
+                    <label className={LABEL}>Resolution</label>
+                    <Select options={screenOptions} {...register('screen')} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={LABEL}>Color Depth</label>
+                      <Select
+                        options={COLOR_DEPTH_OPTIONS}
+                        {...register('color_depth', { valueAsNumber: true })}
+                      />
+                    </div>
+                    <div>
+                      <label className={LABEL}>Pixel Ratio</label>
+                      <Select
+                        options={PIXEL_RATIO_OPTIONS}
+                        {...register('pixel_ratio', { valueAsNumber: true })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </Card>
+
+            {/* Hardware */}
+            <Card
+              title="Hardware"
+              description="CPU and memory configuration"
+              actions={<Toggle checked={hardwareOpen} onChange={setHardwareOpen} />}
+            >
+              {hardwareOpen && (
+                <div className="pt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={LABEL}>CPU Cores</label>
+                    <Select
+                      options={HARDWARE_CONCURRENCY_OPTIONS}
+                      {...register('hardware_concurrency', { valueAsNumber: true })}
+                    />
+                  </div>
+                  <div>
+                    <label className={LABEL}>Memory</label>
+                    <Select
+                      options={DEVICE_MEMORY_OPTIONS}
+                      {...register('device_memory', { valueAsNumber: true })}
+                    />
+                  </div>
+                </div>
+              )}
+            </Card>
+
+            {/* Timezone */}
+            <Card
+              title="Timezone & Locale"
+              description="Geographic identity settings"
+              actions={<Toggle checked={timezoneOpen} onChange={setTimezoneOpen} />}
+            >
+              {timezoneOpen && (
+                <div className="pt-3">
+                  <label className={LABEL}>Timezone</label>
+                  <Select options={timezoneOptions} {...register('timezone')} />
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+      </div>
+    </form>
   )
 }

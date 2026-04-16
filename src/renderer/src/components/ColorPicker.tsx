@@ -8,6 +8,7 @@ import {
   parseColor,
   rgbaToString
 } from '../lib/themes'
+import { cn } from '../lib/utils'
 
 interface ColorPickerProps {
   value: string
@@ -25,6 +26,11 @@ function useDrag(
 ) {
   const ref = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
+  const cleanupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    return () => { cleanupRef.current?.() }
+  }, [])
 
   const handle = useCallback(
     (e: MouseEvent | React.MouseEvent) => {
@@ -45,12 +51,17 @@ function useDrag(
       const move = (ev: MouseEvent) => { if (dragging.current) handle(ev) }
       const up = () => {
         dragging.current = false
+        cleanupRef.current = null
         onEnd?.()
         document.removeEventListener('mousemove', move)
         document.removeEventListener('mouseup', up)
       }
       document.addEventListener('mousemove', move)
       document.addEventListener('mouseup', up)
+      cleanupRef.current = () => {
+        document.removeEventListener('mousemove', move)
+        document.removeEventListener('mouseup', up)
+      }
     },
     [handle, onEnd]
   )
@@ -140,7 +151,6 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
     emitColor(h)
   }
 
-  // Preset swatches
   const SWATCHES = [
     '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6',
     '#3b82f6', '#8b5cf6', '#ec4899', '#f43f5e', '#6366f1',
@@ -148,28 +158,28 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
   ]
 
   return (
-    <div className="w-[240px] rounded-xl border border-edge bg-card shadow-2xl shadow-black/50 overflow-hidden">
+    <div className="w-[272px] rounded-[--radius-lg] border border-edge bg-card shadow-2xl shadow-black/50 overflow-hidden">
       {label && (
-        <div className="px-3 pt-2.5 pb-1.5 text-[11px] font-medium text-muted">{label}</div>
+        <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-muted">{label}</div>
       )}
 
       {/* SV Palette */}
       <div
         ref={palette.ref}
         onMouseDown={palette.onMouseDown}
-        className="relative h-[160px] mx-2 mt-1.5 rounded-lg cursor-crosshair overflow-hidden select-none"
+        className="relative h-[180px] mx-3 mt-2 rounded-[--radius-md] cursor-crosshair overflow-hidden select-none"
         style={{ backgroundColor: pureHueStr }}
       >
         <div className="absolute inset-0" style={{ background: 'linear-gradient(to right, white, transparent)' }} />
         <div className="absolute inset-0" style={{ background: 'linear-gradient(to bottom, transparent, black)' }} />
         <div
-          className="absolute w-3.5 h-3.5 rounded-full border-2 border-white shadow-md shadow-black/40 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+          className="absolute w-4 h-4 rounded-full border-2 border-white shadow-lg shadow-black/50 -translate-x-1/2 -translate-y-1/2 pointer-events-none ring-1 ring-black/20"
           style={{ left: `${hsva.s}%`, top: `${100 - hsva.v}%`, backgroundColor: rgbaToString(currentRgba) }}
         />
       </div>
 
       {/* Hue slider */}
-      <div className="px-2 mt-2.5">
+      <div className="px-3 mt-3">
         <div
           ref={hueSlider.ref}
           onMouseDown={hueSlider.onMouseDown}
@@ -177,14 +187,14 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
           style={{ background: 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)' }}
         >
           <div
-            className="absolute top-1/2 w-3.5 h-3.5 rounded-full border-2 border-white shadow-md shadow-black/40 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+            className="absolute top-1/2 w-4 h-4 rounded-full border-2 border-white shadow-lg shadow-black/50 -translate-x-1/2 -translate-y-1/2 pointer-events-none ring-1 ring-black/20"
             style={{ left: `${(hsva.h / 360) * 100}%`, backgroundColor: pureHueStr }}
           />
         </div>
       </div>
 
       {/* Alpha slider */}
-      <div className="px-2 mt-2">
+      <div className="px-3 mt-2">
         <div
           ref={alphaSlider.ref}
           onMouseDown={alphaSlider.onMouseDown}
@@ -195,24 +205,22 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
           }}
         >
           <div
-            className="absolute top-1/2 w-3.5 h-3.5 rounded-full border-2 border-white shadow-md shadow-black/40 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+            className="absolute top-1/2 w-4 h-4 rounded-full border-2 border-white shadow-lg shadow-black/50 -translate-x-1/2 -translate-y-1/2 pointer-events-none ring-1 ring-black/20"
             style={{ left: `${hsva.a * 100}%`, backgroundColor: rgbaToString(currentRgba) }}
           />
         </div>
       </div>
 
       {/* Color preview + inputs */}
-      <div className="px-2 mt-2.5 flex items-center gap-2">
+      <div className="px-3 mt-3 flex items-center gap-2">
+        {/* Preview swatch */}
         <div
-          className="w-9 h-9 rounded-lg border border-edge shrink-0"
+          className="w-10 h-10 rounded-[--radius-md] border border-edge shrink-0 overflow-hidden"
           style={{
-            backgroundColor: rgbaToString(currentRgba),
-            backgroundImage: currentRgba.a < 1
-              ? 'repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%) 50% / 8px 8px'
-              : undefined
+            background: 'repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%) 50% / 8px 8px'
           }}
         >
-          <div className="w-full h-full rounded-lg" style={{ backgroundColor: rgbaToString(currentRgba) }} />
+          <div className="w-full h-full" style={{ backgroundColor: rgbaToString(currentRgba) }} />
         </div>
 
         <div className="flex-1 min-w-0">
@@ -222,22 +230,23 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
               value={inputHex}
               onChange={(e) => handleHexInput(e.target.value)}
               spellCheck={false}
-              className="w-full rounded-md border border-edge bg-surface px-2 py-1 text-xs font-mono text-content focus:outline-none focus:ring-1 focus:ring-accent/50"
+              className="w-full h-8 rounded-[--radius-sm] border border-edge bg-surface px-2 text-xs font-mono text-content focus:outline-none focus:ring-1 focus:ring-accent/40 focus:border-accent/50"
             />
           ) : (
             <div className="flex gap-1">
               {(['r', 'g', 'b', 'a'] as const).map((ch) => (
-                <input
-                  key={ch}
-                  type="number"
-                  min={ch === 'a' ? 0 : 0}
-                  max={ch === 'a' ? 1 : 255}
-                  step={ch === 'a' ? 0.01 : 1}
-                  value={ch === 'a' ? currentRgba.a : currentRgba[ch]}
-                  onChange={(e) => handleRgbaInput(ch, e.target.value)}
-                  className="w-full rounded-md border border-edge bg-surface px-1 py-1 text-[10px] font-mono text-content text-center focus:outline-none focus:ring-1 focus:ring-accent/50"
-                  title={ch.toUpperCase()}
-                />
+                <div key={ch} className="flex-1 min-w-0">
+                  <input
+                    type="number"
+                    min={ch === 'a' ? 0 : 0}
+                    max={ch === 'a' ? 1 : 255}
+                    step={ch === 'a' ? 0.01 : 1}
+                    value={ch === 'a' ? currentRgba.a : currentRgba[ch]}
+                    onChange={(e) => handleRgbaInput(ch, e.target.value)}
+                    className="w-full h-8 rounded-[--radius-sm] border border-edge bg-surface px-1 text-[10px] font-mono text-content text-center focus:outline-none focus:ring-1 focus:ring-accent/40 focus:border-accent/50"
+                  />
+                  <div className="text-[9px] text-muted text-center mt-0.5">{ch.toUpperCase()}</div>
+                </div>
               ))}
             </div>
           )}
@@ -245,7 +254,10 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
 
         <button
           onClick={() => setInputMode(inputMode === 'hex' ? 'rgba' : 'hex')}
-          className="text-[9px] font-bold text-muted hover:text-content transition-colors shrink-0 px-1"
+          className={cn(
+            'text-[9px] font-bold shrink-0 px-1.5 py-1 rounded-[--radius-sm] transition-colors',
+            'text-muted hover:text-content hover:bg-elevated'
+          )}
           title="Toggle HEX/RGBA"
         >
           {inputMode === 'hex' ? 'RGBA' : 'HEX'}
@@ -253,8 +265,8 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
       </div>
 
       {/* Swatches */}
-      <div className="px-2 mt-2.5 pb-2.5">
-        <div className="flex flex-wrap gap-1">
+      <div className="px-3 mt-3 pb-3">
+        <div className="flex flex-wrap gap-1.5">
           {SWATCHES.map((sw) => (
             <button
               key={sw}
@@ -264,7 +276,10 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
                 setHsva(h)
                 emitColor(h)
               }}
-              className="w-[18px] h-[18px] rounded-md border border-white/10 hover:scale-110 transition-transform"
+              className={cn(
+                'w-5 h-5 rounded-[--radius-sm] border border-white/10 transition-all',
+                'hover:scale-110 hover:border-white/25 active:scale-95'
+              )}
               style={{ backgroundColor: sw }}
               title={sw}
             />

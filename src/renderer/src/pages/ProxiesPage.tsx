@@ -1,21 +1,42 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Trash2, FlaskConical, Pencil, X, Loader2, Upload, Globe, Search } from 'lucide-react'
+import {
+  Plus,
+  Trash2,
+  FlaskConical,
+  Pencil,
+  Loader2,
+  Upload,
+  Globe,
+  MoreHorizontal,
+  Copy,
+  Download,
+  FileUp,
+  CheckSquare
+} from 'lucide-react'
 import { useProxiesStore } from '../stores/proxies'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
 import { api } from '../lib/api'
-import { INPUT_CLASS, SELECT_CLASS, LABEL_CLASS, BTN_PRIMARY, BTN_SECONDARY, BTN_ICON, BTN_DANGER } from '../lib/ui'
+import { cn } from '../lib/utils'
+import { CHECKBOX, TEXTAREA } from '../lib/ui'
+import {
+  Button,
+  Input,
+  Badge,
+  Select,
+  Modal,
+  EmptyState,
+  SearchInput,
+  DropdownMenu
+} from '../components/ui'
 import type { ProxyProtocol, ProxyResponse } from '../lib/types'
 
-const PROTOCOL_COLORS: Record<ProxyProtocol, string> = {
-  http: 'bg-blue-500/12 text-blue-400 ring-1 ring-blue-500/20',
-  https: 'bg-green-500/12 text-green-400 ring-1 ring-green-500/20',
-  socks4: 'bg-purple-500/12 text-purple-400 ring-1 ring-purple-500/20',
-  socks5: 'bg-orange-500/12 text-orange-400 ring-1 ring-orange-500/20'
-}
+// ---------------------------------------------------------------------------
+// Schema & defaults
+// ---------------------------------------------------------------------------
 
 const proxySchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -41,7 +62,43 @@ const DEFAULT_PROXY: ProxyFormData = {
   group_tag: ''
 }
 
+const PROTOCOL_OPTIONS = [
+  { value: 'http', label: 'HTTP' },
+  { value: 'https', label: 'HTTPS' },
+  { value: 'socks4', label: 'SOCKS4' },
+  { value: 'socks5', label: 'SOCKS5' }
+]
+
+const PROTOCOL_BADGE: Record<ProxyProtocol, 'default' | 'success' | 'warning' | 'error' | 'accent'> = {
+  http: 'default',
+  https: 'success',
+  socks4: 'accent',
+  socks5: 'warning'
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function statusBadge(proxy: ProxyResponse): { variant: 'success' | 'error' | 'default'; label: string } {
+  if (proxy.last_check === null) return { variant: 'default', label: 'Untested' }
+  return proxy.check_ok
+    ? { variant: 'success', label: 'Working' }
+    : { variant: 'error', label: 'Failed' }
+}
+
+function countryFlag(code: string): string {
+  const upper = code.toUpperCase()
+  if (upper.length !== 2) return ''
+  return String.fromCodePoint(...[...upper].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export function ProxiesPage(): React.JSX.Element {
+  // Store
   const proxies = useProxiesStore((s) => s.proxies)
   const loading = useProxiesStore((s) => s.loading)
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
@@ -50,22 +107,29 @@ export function ProxiesPage(): React.JSX.Element {
   const confirm = useConfirmStore((s) => s.show)
   const addToast = useToastStore((s) => s.addToast)
 
+  // Local state
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [modalError, setModalError] = useState<string | null>(null)
   const [modalSaving, setModalSaving] = useState(false)
-  const [testingId, setTestingId] = useState<string | null>(null)
-  const [testResult, setTestResult] = useState<{ id: string; ok: boolean } | null>(null)
+  const [modalTesting, setModalTesting] = useState(false)
+  const [testingIds, setTestingIds] = useState<Set<string>>(new Set())
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importLoading, setImportLoading] = useState(false)
+  const [importParsed, setImportParsed] = useState<
+    { ok: boolean; data?: { name: string; host: string; port: number; protocol: string } }[] | null
+  >(null)
   const [bulkTesting, setBulkTesting] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
 
+  // Form
   const {
     register,
     handleSubmit,
     reset,
+    getValues,
     formState: { errors }
   } = useForm<ProxyFormData>({
     resolver: zodResolver(proxySchema),
@@ -76,21 +140,50 @@ export function ProxiesPage(): React.JSX.Element {
     fetchProxies()
   }, [fetchProxies])
 
+  // Filtered list
+  const filteredProxies = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return proxies
+    return proxies.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.host.toLowerCase().includes(q) ||
+        p.protocol.includes(q)
+    )
+  }, [proxies, searchQuery])
+
+  // Selection helpers
+  const allSelected = filteredProxies.length > 0 && filteredProxies.every((p) => selected.has(p.id))
+  const someSelected = selected.size > 0
+
+  const toggleAll = (): void => {
+    if (allSelected) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(filteredProxies.map((p) => p.id)))
+    }
+  }
+
+  const toggleOne = (id: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Modal open/close
+  // ---------------------------------------------------------------------------
+
   const closeModal = useCallback(() => {
     setModalOpen(false)
     setEditingId(null)
     setModalError(null)
+    setModalTesting(false)
     reset(DEFAULT_PROXY)
   }, [reset])
-
-  useEffect(() => {
-    if (!modalOpen) return
-    const handleEscape = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeModal()
-    }
-    document.addEventListener('keydown', handleEscape)
-    return () => document.removeEventListener('keydown', handleEscape)
-  }, [modalOpen, closeModal])
 
   const openAdd = (): void => {
     reset(DEFAULT_PROXY)
@@ -114,6 +207,10 @@ export function ProxiesPage(): React.JSX.Element {
     setModalError(null)
     setModalOpen(true)
   }
+
+  // ---------------------------------------------------------------------------
+  // CRUD / test handlers
+  // ---------------------------------------------------------------------------
 
   const onSubmitProxy = async (data: ProxyFormData): Promise<void> => {
     try {
@@ -152,6 +249,11 @@ export function ProxiesPage(): React.JSX.Element {
     if (ok) {
       try {
         await deleteProxy(id)
+        setSelected((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
         addToast('Proxy deleted', 'success')
       } catch (err) {
         addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
@@ -160,30 +262,185 @@ export function ProxiesPage(): React.JSX.Element {
   }
 
   const handleTest = async (id: string): Promise<void> => {
-    setTestingId(id)
-    setTestResult(null)
+    setTestingIds((prev) => new Set(prev).add(id))
     try {
       await testProxy(id)
       await fetchProxies()
-      const updated = useProxiesStore.getState().proxies.find(p => p.id === id)
-      setTestResult({ id, ok: !!updated?.check_ok })
-      addToast(updated?.check_ok ? `Proxy test passed` : `Proxy test failed`, updated?.check_ok ? 'success' : 'error')
-      setTimeout(() => setTestResult(null), 3000)
+      const updated = useProxiesStore.getState().proxies.find((p) => p.id === id)
+      addToast(
+        updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
+        updated?.check_ok ? 'success' : 'error'
+      )
     } catch {
-      setTestResult({ id, ok: false })
       addToast('Proxy test failed', 'error')
-      setTimeout(() => setTestResult(null), 3000)
     }
-    setTestingId(null)
+    setTestingIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
   }
 
-  const filteredProxies = searchQuery.trim()
-    ? proxies.filter(p =>
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.host.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.protocol.includes(searchQuery.toLowerCase())
-      )
-    : proxies
+  const handleTestInModal = async (): Promise<void> => {
+    const data = getValues()
+    if (!data.host || !data.port) return
+    setModalTesting(true)
+    try {
+      if (editingId) {
+        await testProxy(editingId)
+        const updated = useProxiesStore.getState().proxies.find((p) => p.id === editingId)
+        addToast(
+          updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
+          updated?.check_ok ? 'success' : 'error'
+        )
+      } else {
+        const input = {
+          name: data.name || 'Test',
+          protocol: data.protocol,
+          host: data.host,
+          port: data.port,
+          username: data.username || undefined,
+          password: data.password || undefined
+        }
+        const proxy = await api.createProxy(input)
+        try {
+          await testProxy(proxy.id)
+          const updated = useProxiesStore.getState().proxies.find((p) => p.id === proxy.id)
+          addToast(
+            updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
+            updated?.check_ok ? 'success' : 'error'
+          )
+          await fetchProxies()
+          closeModal()
+        } catch {
+          await deleteProxy(proxy.id)
+          addToast('Proxy test failed', 'error')
+        }
+      }
+    } catch (err) {
+      addToast(`Test failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    } finally {
+      setModalTesting(false)
+    }
+  }
+
+  const handleCopy = (proxy: ProxyResponse): void => {
+    const auth = proxy.username ? `${proxy.username}@` : ''
+    const str = `${proxy.protocol}://${auth}${proxy.host}:${proxy.port}`
+    navigator.clipboard.writeText(str)
+    addToast('Copied to clipboard', 'success')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bulk actions
+  // ---------------------------------------------------------------------------
+
+  const bulkTestSelected = async (): Promise<void> => {
+    const ids = [...selected]
+    setBulkTesting(true)
+    try {
+      await api.bulkTestProxies(ids)
+      await fetchProxies()
+      addToast(`Tested ${ids.length} proxies`, 'success')
+    } catch {
+      addToast('Bulk test failed', 'error')
+    }
+    setBulkTesting(false)
+  }
+
+  const bulkDeleteSelected = async (): Promise<void> => {
+    const ids = [...selected]
+    const ok = await confirm({
+      title: 'Delete Proxies',
+      message: `Delete ${ids.length} selected proxies?`,
+      confirmLabel: 'Delete All',
+      danger: true
+    })
+    if (!ok) return
+    let deleted = 0
+    for (const id of ids) {
+      try {
+        await deleteProxy(id)
+        deleted++
+      } catch {
+        /* continue */
+      }
+    }
+    setSelected(new Set())
+    addToast(`Deleted ${deleted} proxies`, 'success')
+  }
+
+  const bulkExportSelected = (): void => {
+    const ids = new Set(selected)
+    const lines = proxies
+      .filter((p) => ids.has(p.id))
+      .map((p) => {
+        const auth = p.username ? `${p.username}@` : ''
+        return `${p.protocol}://${auth}${p.host}:${p.port}`
+      })
+    navigator.clipboard.writeText(lines.join('\n'))
+    addToast(`Exported ${lines.length} proxies to clipboard`, 'success')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Import
+  // ---------------------------------------------------------------------------
+
+  const closeImport = (): void => {
+    setImportOpen(false)
+    setImportText('')
+    setImportParsed(null)
+  }
+
+  const parseImport = async (): Promise<void> => {
+    if (!importText.trim()) return
+    setImportLoading(true)
+    try {
+      const parsed = await api.parseProxyString(importText)
+      setImportParsed(parsed)
+    } catch {
+      addToast('Failed to parse proxies', 'error')
+    }
+    setImportLoading(false)
+  }
+
+  const executeImport = async (): Promise<void> => {
+    if (!importParsed) return
+    setImportLoading(true)
+    let created = 0
+    for (const r of importParsed) {
+      if (r.ok && r.data) {
+        try {
+          await api.createProxy(r.data as Parameters<typeof api.createProxy>[0])
+          created++
+        } catch {
+          /* skip */
+        }
+      }
+    }
+    await fetchProxies()
+    addToast(`Imported ${created} proxy/proxies`, 'success')
+    closeImport()
+    setImportLoading(false)
+  }
+
+  const handleFileUpload = (): void => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.txt,.csv'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      const text = await file.text()
+      setImportText(text)
+      setImportParsed(null)
+    }
+    input.click()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Loading state
+  // ---------------------------------------------------------------------------
 
   if (loading) {
     return (
@@ -193,324 +450,541 @@ export function ProxiesPage(): React.JSX.Element {
     )
   }
 
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
   return (
     <div className="p-5 flex flex-col h-full">
-      <div className="flex items-center justify-between mb-4 shrink-0">
-        <div className="flex items-center gap-2.5">
-          <h1 className="text-lg font-bold text-content">Proxies</h1>
-          <span className="text-[11px] text-muted bg-elevated px-2 py-0.5 rounded-md font-medium tabular-nums">
-            {proxies.length}
-          </span>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5 shrink-0">
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-content">Proxies</h1>
+          <Badge variant="default">{proxies.length}</Badge>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={openAdd} className={BTN_PRIMARY}>
-            <Plus className="h-4 w-4" />
+          <SearchInput
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search proxies…"
+            className="w-56"
+          />
+          <Button variant="primary" size="md" icon={<Plus className="h-4 w-4" />} onClick={openAdd}>
             Add Proxy
-          </button>
-          <button onClick={() => setImportOpen(true)} className={BTN_SECONDARY}>
-            <Upload className="h-4 w-4" />
-            Import
-          </button>
-          <button
-            onClick={async () => {
-              setBulkTesting(true)
-              try {
-                await api.bulkTestProxies(proxies.map(p => p.id))
-                await fetchProxies()
-              } catch { /* best effort */ }
-              setBulkTesting(false)
-            }}
-            disabled={bulkTesting || proxies.length === 0}
-            className={BTN_SECONDARY}
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<Upload className="h-4 w-4" />}
+            onClick={() => setImportOpen(true)}
           >
-            {bulkTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
-            Test All
-          </button>
+            Import
+          </Button>
         </div>
       </div>
 
-      {/* Search */}
-      {proxies.length > 0 && (
-        <div className="mb-3 shrink-0">
-          <div className="relative max-w-[280px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search proxies..."
-              className={`${INPUT_CLASS} pl-8 !py-1.5 text-xs`}
-            />
-          </div>
+      {/* Bulk Actions Bar */}
+      {someSelected && (
+        <div className="mb-3 shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-[--radius-lg] bg-accent/8 border border-accent/20 animate-fadeIn">
+          <span className="text-xs font-medium text-accent">{selected.size} selected</span>
+          <div className="h-4 w-px bg-accent/20" />
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<FlaskConical className="h-3.5 w-3.5" />}
+            onClick={bulkTestSelected}
+            loading={bulkTesting}
+            disabled={bulkTesting}
+          >
+            Test
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Download className="h-3.5 w-3.5" />}
+            onClick={bulkExportSelected}
+          >
+            Export
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+            onClick={bulkDeleteSelected}
+          >
+            Delete
+          </Button>
+          <div className="flex-1" />
+          <button
+            className="text-xs text-muted hover:text-content transition-colors cursor-pointer"
+            onClick={() => setSelected(new Set())}
+          >
+            Clear
+          </button>
         </div>
       )}
 
+      {/* Content */}
       {proxies.length === 0 ? (
-        <div className="flex flex-col items-center justify-center flex-1 text-center">
-          <div className="bg-card rounded-2xl p-10 border border-edge max-w-sm">
-            <div className="h-12 w-12 rounded-xl bg-elevated flex items-center justify-center mx-auto mb-4">
-              <Globe className="h-6 w-6 text-muted/40" />
-            </div>
-            <p className="text-muted text-sm font-medium mb-1">No proxies configured</p>
-            <p className="text-muted/60 text-xs mb-5">Add proxies to use with your browser profiles</p>
-            <button onClick={openAdd} className={BTN_PRIMARY}>
-              <Plus className="h-4 w-4" />
-              Add Proxy
-            </button>
-          </div>
+        <div className="flex-1 flex items-center justify-center">
+          <EmptyState
+            icon={<Globe className="h-10 w-10" />}
+            title="No proxies yet"
+            description="Add proxies to use with your browser profiles"
+            action={
+              <Button
+                variant="primary"
+                size="md"
+                icon={<Plus className="h-4 w-4" />}
+                onClick={openAdd}
+              >
+                Add Proxy
+              </Button>
+            }
+          />
         </div>
       ) : (
-        <div className="flex-1 overflow-auto rounded-xl border border-edge min-h-0 bg-card/40">
-          <table className="w-full text-sm table-fixed">
-            <colgroup>
-              <col className="w-[18%]" />
-              <col className="w-[10%]" />
-              <col className="w-[20%]" />
-              <col className="w-[10%]" />
-              <col className="w-[8%]" />
-              <col className="w-[10%]" />
-              <col className="w-[8%]" />
-              <col className="w-[16%]" />
-            </colgroup>
-            <thead className="sticky top-0 z-10">
-              <tr className="border-b border-edge bg-card">
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Name</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Proto</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Host:Port</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">User</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Geo</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Group</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Status</th>
-                <th className="text-right px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredProxies.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-xs text-muted/60">No matching proxies</td>
+        <div className="flex-1 min-h-0 bg-card rounded-[--radius-lg] border border-edge overflow-hidden flex flex-col">
+          <div className="flex-1 overflow-auto">
+            <table className="w-full text-sm">
+              <colgroup>
+                <col className="w-10" />
+                <col className="w-[22%]" />
+                <col className="w-[10%]" />
+                <col className="w-[8%]" />
+                <col className="w-[10%]" />
+                <col className="w-[12%]" />
+                <col className="w-[10%]" />
+                <col className="w-12" />
+              </colgroup>
+              <thead className="sticky top-0 z-10 bg-surface-alt/50">
+                <tr className="border-b border-edge">
+                  <th className="px-3 py-2.5 text-left">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      className={CHECKBOX}
+                      aria-label="Select all"
+                    />
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                    Name / Host
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                    Type
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                    Port
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                    Country
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                    Speed
+                  </th>
+                  <th className="px-3 py-2.5" />
                 </tr>
-              ) : filteredProxies.map((proxy) => (
-                <tr
-                  key={proxy.id}
-                  className="border-b border-edge/40 last:border-b-0 hover:bg-elevated/40 transition-colors"
-                >
-                  <td className="px-3 py-2.5 text-content font-medium truncate" title={proxy.name}>{proxy.name}</td>
-                  <td className="px-3 py-2.5">
-                    <span className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-medium uppercase ${PROTOCOL_COLORS[proxy.protocol]}`}>
-                      {proxy.protocol}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5 text-muted font-mono text-xs truncate" title={`${proxy.host}:${proxy.port}`}>
-                    {proxy.host}:{proxy.port}
-                  </td>
-                  <td className="px-3 py-2.5 text-muted text-xs truncate">{proxy.username ?? <span className="text-muted/40">—</span>}</td>
-                  <td className="px-3 py-2.5 text-xs">
-                    {proxy.country ? (
-                      <span className="bg-accent/10 text-accent px-1.5 py-0.5 rounded font-mono text-[10px] font-medium">{proxy.country}</span>
-                    ) : (
-                      <span className="text-muted/40">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 text-xs text-muted truncate">{proxy.group_tag ?? <span className="text-muted/40">—</span>}</td>
-                  <td className="px-3 py-2.5">
-                    <span className="inline-flex items-center gap-1.5 text-xs">
-                      {testResult?.id === proxy.id ? (
-                        <>
-                          <span className={`h-2 w-2 rounded-full shrink-0 ${testResult.ok ? 'bg-ok shadow-sm shadow-ok/40' : 'bg-err shadow-sm shadow-err/40'}`} />
-                          <span className={`font-medium ${testResult.ok ? 'text-ok' : 'text-err'}`}>
-                            {testResult.ok ? 'OK' : 'Fail'}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span className={`h-2 w-2 rounded-full shrink-0 ${proxy.check_ok ? 'bg-ok shadow-sm shadow-ok/30' : 'bg-err shadow-sm shadow-err/30'}`} />
-                          <span className="text-muted">{proxy.check_ok ? 'OK' : 'Fail'}</span>
-                          {proxy.check_ok && proxy.check_latency_ms != null && (
-                            <span className="text-muted/60 font-mono tabular-nums">{proxy.check_latency_ms}ms</span>
-                          )}
-                        </>
-                      )}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <div className="flex items-center justify-end gap-0.5 shrink-0">
-                      <button
-                        onClick={() => handleTest(proxy.id)}
-                        disabled={testingId === proxy.id}
-                        className={`${BTN_ICON} hover:text-accent disabled:opacity-40`}
-                        title="Test"
+              </thead>
+              <tbody>
+                {filteredProxies.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted">
+                      No matching proxies
+                    </td>
+                  </tr>
+                ) : (
+                  filteredProxies.map((proxy) => {
+                    const isTesting = testingIds.has(proxy.id)
+                    const status = statusBadge(proxy)
+                    return (
+                      <tr
+                        key={proxy.id}
+                        className={cn(
+                          'border-b border-edge/50 transition-colors',
+                          selected.has(proxy.id) ? 'bg-accent/5' : 'hover:bg-elevated/50'
+                        )}
                       >
-                        {testingId === proxy.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
-                      </button>
-                      <button onClick={() => openEdit(proxy)} className={BTN_ICON} title="Edit">
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => handleDelete(proxy.id, proxy.name)} className={BTN_DANGER} title="Delete">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+                        {/* Checkbox */}
+                        <td className="px-3 py-2.5">
+                          <input
+                            type="checkbox"
+                            checked={selected.has(proxy.id)}
+                            onChange={() => toggleOne(proxy.id)}
+                            className={CHECKBOX}
+                            aria-label={`Select ${proxy.name}`}
+                          />
+                        </td>
 
-      {/* Add/Edit Modal */}
-      {modalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fadeIn"
-          onClick={closeModal}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={editingId ? 'Edit proxy' : 'Add proxy'}
-            className="bg-card rounded-2xl p-6 w-[90%] max-w-[440px] border border-edge shadow-2xl animate-scaleIn"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold text-content">
-                {editingId ? 'Edit Proxy' : 'Add Proxy'}
-              </h2>
-              <button onClick={closeModal} className={BTN_ICON} aria-label="Close dialog">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+                        {/* Name / Host */}
+                        <td className="px-3 py-2.5">
+                          <div className="min-w-0">
+                            <p className="text-content font-medium truncate">{proxy.name}</p>
+                            <p className="text-xs text-muted font-mono truncate">{proxy.host}</p>
+                          </div>
+                        </td>
 
-            {modalError && (
-              <div className="rounded-xl bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err mb-4 font-medium">
-                {modalError}
-              </div>
-            )}
+                        {/* Type */}
+                        <td className="px-3 py-2.5">
+                          <Badge variant={PROTOCOL_BADGE[proxy.protocol]}>
+                            {proxy.protocol.toUpperCase()}
+                          </Badge>
+                        </td>
 
-            <form onSubmit={handleSubmit(onSubmitProxy)} className="space-y-3">
-              <div>
-                <label htmlFor="proxy-name" className={LABEL_CLASS}>Name</label>
-                <input id="proxy-name" type="text" placeholder="My Proxy" className={INPUT_CLASS} {...register('name')} />
-                {errors.name && <p className="mt-1 text-xs text-err">{errors.name.message}</p>}
-              </div>
+                        {/* Port */}
+                        <td className="px-3 py-2.5 font-mono text-xs text-muted tabular-nums">
+                          {proxy.port}
+                        </td>
 
-              <div>
-                <label htmlFor="proxy-protocol" className={LABEL_CLASS}>Protocol</label>
-                <select id="proxy-protocol" className={SELECT_CLASS} {...register('protocol')}>
-                  <option value="http">HTTP</option>
-                  <option value="https">HTTPS</option>
-                  <option value="socks4">SOCKS4</option>
-                  <option value="socks5">SOCKS5</option>
-                </select>
-              </div>
+                        {/* Country */}
+                        <td className="px-3 py-2.5 text-xs">
+                          {proxy.country ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span>{countryFlag(proxy.country)}</span>
+                              <span className="text-muted font-medium uppercase">
+                                {proxy.country}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="text-muted/40">—</span>
+                          )}
+                        </td>
 
-              <div className="grid grid-cols-3 gap-2">
-                <div className="col-span-2">
-                  <label htmlFor="proxy-host" className={LABEL_CLASS}>Host</label>
-                  <input id="proxy-host" type="text" placeholder="192.168.1.1" className={INPUT_CLASS} {...register('host')} />
-                  {errors.host && <p className="mt-1 text-xs text-err">{errors.host.message}</p>}
-                </div>
-                <div>
-                  <label htmlFor="proxy-port" className={LABEL_CLASS}>Port</label>
-                  <input id="proxy-port" type="number" placeholder="8080" className={INPUT_CLASS} {...register('port', { valueAsNumber: true })} />
-                  {errors.port && <p className="mt-1 text-xs text-err">{errors.port.message}</p>}
-                </div>
-              </div>
+                        {/* Status */}
+                        <td className="px-3 py-2.5">
+                          {isTesting ? (
+                            <Badge variant="default" dot>
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Testing
+                            </Badge>
+                          ) : (
+                            <Badge variant={status.variant} dot>
+                              {status.label}
+                            </Badge>
+                          )}
+                        </td>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label htmlFor="proxy-username" className={LABEL_CLASS}>Username</label>
-                  <input id="proxy-username" type="text" placeholder="optional" className={INPUT_CLASS} {...register('username')} />
-                </div>
-                <div>
-                  <label htmlFor="proxy-password" className={LABEL_CLASS}>Password</label>
-                  <input id="proxy-password" type="password" placeholder="optional" className={INPUT_CLASS} {...register('password')} />
-                </div>
-              </div>
+                        {/* Speed */}
+                        <td className="px-3 py-2.5 text-xs font-mono tabular-nums">
+                          {proxy.check_ok && proxy.check_latency_ms != null ? (
+                            <span className="text-ok">{proxy.check_latency_ms}ms</span>
+                          ) : (
+                            <span className="text-muted/40">—</span>
+                          )}
+                        </td>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label htmlFor="proxy-country" className={LABEL_CLASS}>Country</label>
-                  <input id="proxy-country" type="text" placeholder="US, DE, etc." className={INPUT_CLASS} {...register('country')} maxLength={2} />
-                </div>
-                <div>
-                  <label htmlFor="proxy-group" className={LABEL_CLASS}>Group tag</label>
-                  <input id="proxy-group" type="text" placeholder="rotation-group" className={INPUT_CLASS} {...register('group_tag')} />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 pt-2">
-                <button type="submit" disabled={modalSaving} className={BTN_PRIMARY}>
-                  {modalSaving ? 'Saving...' : editingId ? 'Save Changes' : 'Add Proxy'}
-                </button>
-                <button type="button" onClick={closeModal} className={BTN_SECONDARY}>
-                  Cancel
-                </button>
-              </div>
-            </form>
+                        {/* Actions */}
+                        <td className="px-3 py-2.5">
+                          <DropdownMenu
+                            align="right"
+                            trigger={
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                icon={<MoreHorizontal className="h-4 w-4" />}
+                                aria-label="Actions"
+                              />
+                            }
+                            items={[
+                              {
+                                label: 'Test',
+                                icon: <FlaskConical className="h-4 w-4" />,
+                                onClick: () => handleTest(proxy.id),
+                                disabled: isTesting
+                              },
+                              {
+                                label: 'Edit',
+                                icon: <Pencil className="h-4 w-4" />,
+                                onClick: () => openEdit(proxy)
+                              },
+                              {
+                                label: 'Copy',
+                                icon: <Copy className="h-4 w-4" />,
+                                onClick: () => handleCopy(proxy)
+                              },
+                              {
+                                label: 'Delete',
+                                icon: <Trash2 className="h-4 w-4" />,
+                                onClick: () => handleDelete(proxy.id, proxy.name),
+                                variant: 'danger'
+                              }
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
 
-      {/* Import Modal */}
-      {importOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fadeIn"
-          onClick={() => setImportOpen(false)}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Import proxies"
-            className="bg-card rounded-2xl p-6 w-[90%] max-w-[500px] border border-edge shadow-2xl animate-scaleIn"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-base font-semibold text-content">Import Proxies</h2>
-              <button onClick={() => setImportOpen(false)} className={BTN_ICON} aria-label="Close">
-                <X className="h-4 w-4" />
-              </button>
+      {/* Add / Edit Modal */}
+      <Modal
+        open={modalOpen}
+        onClose={closeModal}
+        title={editingId ? 'Edit Proxy' : 'Add Proxy'}
+        description={editingId ? 'Update proxy configuration' : 'Configure a new proxy server'}
+        size="md"
+        actions={
+          <>
+            <Button
+              variant="ghost"
+              size="md"
+              icon={<FlaskConical className="h-4 w-4" />}
+              onClick={handleTestInModal}
+              loading={modalTesting}
+              disabled={modalTesting || modalSaving}
+            >
+              Test
+            </Button>
+            <Button variant="secondary" size="md" onClick={closeModal}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="md"
+              onClick={handleSubmit(onSubmitProxy)}
+              loading={modalSaving}
+              disabled={modalSaving}
+            >
+              {editingId ? 'Save Changes' : 'Add Proxy'}
+            </Button>
+          </>
+        }
+      >
+        {modalError && (
+          <div className="rounded-[--radius-md] bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err mb-4 font-medium">
+            {modalError}
+          </div>
+        )}
+
+        <form id="proxy-form" onSubmit={handleSubmit(onSubmitProxy)} className="space-y-3">
+          <div>
+            <label htmlFor="proxy-name" className="block text-xs font-medium text-content mb-1.5">
+              Name
+            </label>
+            <Input
+              id="proxy-name"
+              placeholder="My Proxy"
+              error={errors.name?.message}
+              {...register('name')}
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="proxy-protocol"
+              className="block text-xs font-medium text-content mb-1.5"
+            >
+              Protocol
+            </label>
+            <Select
+              id="proxy-protocol"
+              options={PROTOCOL_OPTIONS}
+              error={errors.protocol?.message}
+              {...register('protocol')}
+            />
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <div className="col-span-2">
+              <label
+                htmlFor="proxy-host"
+                className="block text-xs font-medium text-content mb-1.5"
+              >
+                Host
+              </label>
+              <Input
+                id="proxy-host"
+                placeholder="192.168.1.1"
+                error={errors.host?.message}
+                {...register('host')}
+              />
             </div>
+            <div>
+              <label
+                htmlFor="proxy-port"
+                className="block text-xs font-medium text-content mb-1.5"
+              >
+                Port
+              </label>
+              <Input
+                id="proxy-port"
+                type="number"
+                placeholder="8080"
+                error={errors.port?.message}
+                {...register('port', { valueAsNumber: true })}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label
+                htmlFor="proxy-username"
+                className="block text-xs font-medium text-content mb-1.5"
+              >
+                Username
+              </label>
+              <Input id="proxy-username" placeholder="optional" {...register('username')} />
+            </div>
+            <div>
+              <label
+                htmlFor="proxy-password"
+                className="block text-xs font-medium text-content mb-1.5"
+              >
+                Password
+              </label>
+              <Input
+                id="proxy-password"
+                type="password"
+                placeholder="optional"
+                {...register('password')}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label
+                htmlFor="proxy-country"
+                className="block text-xs font-medium text-content mb-1.5"
+              >
+                Country
+              </label>
+              <Input
+                id="proxy-country"
+                placeholder="US, DE, etc."
+                maxLength={2}
+                {...register('country')}
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="proxy-group"
+                className="block text-xs font-medium text-content mb-1.5"
+              >
+                Group tag
+              </label>
+              <Input id="proxy-group" placeholder="rotation-group" {...register('group_tag')} />
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Import Modal */}
+      <Modal
+        open={importOpen}
+        onClose={closeImport}
+        title="Import Proxies"
+        description="Paste proxies below or upload a file. One proxy per line."
+        size="lg"
+        actions={
+          importParsed ? (
+            <>
+              <Button variant="secondary" size="md" onClick={() => setImportParsed(null)}>
+                Back
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                icon={<CheckSquare className="h-4 w-4" />}
+                onClick={executeImport}
+                loading={importLoading}
+                disabled={importLoading || importParsed.filter((r) => r.ok).length === 0}
+              >
+                Import {importParsed.filter((r) => r.ok).length} Proxies
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="secondary" size="md" onClick={closeImport}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                onClick={parseImport}
+                loading={importLoading}
+                disabled={importLoading || !importText.trim()}
+              >
+                Preview
+              </Button>
+            </>
+          )
+        }
+      >
+        {!importParsed ? (
+          <>
             <p className="text-xs text-muted mb-3 leading-relaxed">
-              One proxy per line. Formats: <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">host:port</code>, <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">host:port:user:pass</code>, <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">socks5://host:port</code>, <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">user:pass@host:port</code>
+              Formats:{' '}
+              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
+                host:port
+              </code>
+              ,{' '}
+              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
+                host:port:user:pass
+              </code>
+              ,{' '}
+              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
+                socks5://host:port
+              </code>
+              ,{' '}
+              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
+                user:pass@host:port
+              </code>
             </p>
             <textarea
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              placeholder="192.168.1.1:8080&#10;socks5://proxy.example.com:1080:user:pass"
-              rows={6}
-              className="w-full rounded-xl border border-edge bg-surface px-3.5 py-2.5 text-sm text-content font-mono placeholder:text-muted/50 focus:outline-none focus:ring-2 focus:ring-accent/40 resize-none mb-3"
+              placeholder={'192.168.1.1:8080\nsocks5://proxy.example.com:1080:user:pass'}
+              rows={8}
+              className={cn(TEXTAREA, 'font-mono mb-3')}
             />
-            <div className="flex items-center gap-2">
-              <button
-                onClick={async () => {
-                  if (!importText.trim()) return
-                  setImportLoading(true)
-                  try {
-                    const parsed = await api.parseProxyString(importText)
-                    let created = 0
-                    for (const r of parsed) {
-                      if (r.ok && r.data) {
-                        try { await api.createProxy(r.data); created++ } catch { /* skip */ }
-                      }
-                    }
-                    await fetchProxies()
-                    addToast(`Imported ${created} proxy/proxies`, 'success')
-                    setImportOpen(false)
-                    setImportText('')
-                  } catch { /* best effort */ }
-                  setImportLoading(false)
-                }}
-                disabled={importLoading || !importText.trim()}
-                className={BTN_PRIMARY}
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<FileUp className="h-4 w-4" />}
+              onClick={handleFileUpload}
+            >
+              Upload File
+            </Button>
+          </>
+        ) : (
+          <div className="space-y-2 max-h-72 overflow-auto">
+            {importParsed.map((r, i) => (
+              <div
+                key={i}
+                className={cn(
+                  'flex items-center gap-3 px-3 py-2 rounded-[--radius-md] text-xs font-mono',
+                  r.ok
+                    ? 'bg-ok/5 border border-ok/15 text-content'
+                    : 'bg-err/5 border border-err/15 text-muted line-through'
+                )}
               >
-                {importLoading ? 'Importing...' : 'Import'}
-              </button>
-              <button onClick={() => setImportOpen(false)} className={BTN_SECONDARY}>
-                Cancel
-              </button>
-            </div>
+                <Badge variant={r.ok ? 'success' : 'error'} dot>
+                  {r.ok ? 'OK' : 'Invalid'}
+                </Badge>
+                <span className="truncate">
+                  {r.data
+                    ? `${r.data.protocol}://${r.data.host}:${r.data.port}`
+                    : `Line ${i + 1}`}
+                </span>
+              </div>
+            ))}
+            <p className="text-xs text-muted pt-1">
+              {importParsed.filter((r) => r.ok).length} of {importParsed.length} proxies will be
+              imported
+            </p>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </div>
   )
 }

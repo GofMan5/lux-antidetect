@@ -201,6 +201,18 @@ export function updateFingerprint(
     fields.push('webrtc_policy = ?')
     values.push(input.webrtc_policy)
   }
+  if (input.color_depth !== undefined) {
+    fields.push('color_depth = ?')
+    values.push(input.color_depth)
+  }
+  if (input.pixel_ratio !== undefined) {
+    fields.push('pixel_ratio = ?')
+    values.push(input.pixel_ratio)
+  }
+  if (input.device_type !== undefined) {
+    fields.push('device_type = ?')
+    values.push(input.device_type)
+  }
 
   if (fields.length === 0) return
 

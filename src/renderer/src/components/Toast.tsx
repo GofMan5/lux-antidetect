@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { CheckCircle2, XCircle, Info, AlertTriangle, X } from 'lucide-react'
+import { cn } from '@renderer/lib/utils'
 import { useNotificationStore } from '../stores/notifications'
 
 /* ------------------------------------------------------------------ */
@@ -22,6 +23,8 @@ interface ToastStore {
 }
 
 let nextId = 0
+const MAX_VISIBLE = 3
+const TOAST_DURATION = 3500
 
 export const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
@@ -29,7 +32,7 @@ export const useToastStore = create<ToastStore>((set) => ({
   addToast: (message, type = 'info') => {
     const id = ++nextId
     set((s) => ({
-      toasts: [...s.toasts.slice(-4), { id, message, type }]
+      toasts: [...s.toasts.slice(-(MAX_VISIBLE - 1)), { id, message, type }]
     }))
     // Also save to persistent notification history
     useNotificationStore.getState().addNotification(message, type)
@@ -41,36 +44,51 @@ export const useToastStore = create<ToastStore>((set) => ({
 }))
 
 /* ------------------------------------------------------------------ */
-/*  Single toast item                                                  */
+/*  Style maps                                                         */
 /* ------------------------------------------------------------------ */
 
-const typeStyles: Record<ToastType, string> = {
-  success: 'border-ok/30 bg-ok/8',
-  error: 'border-err/30 bg-err/8',
-  info: 'border-accent/30 bg-accent/8',
-  warning: 'border-warn/30 bg-warn/8'
+const accentBorder: Record<ToastType, string> = {
+  info: 'border-l-accent',
+  success: 'border-l-ok',
+  warning: 'border-l-warn',
+  error: 'border-l-err'
 }
 
-const typeIcons: Record<ToastType, typeof CheckCircle2> = {
-  success: CheckCircle2,
-  error: XCircle,
+const typeIcons: Record<ToastType, typeof Info> = {
   info: Info,
-  warning: AlertTriangle
+  success: CheckCircle2,
+  warning: AlertTriangle,
+  error: XCircle
 }
 
 const iconColors: Record<ToastType, string> = {
-  success: 'text-ok',
-  error: 'text-err',
   info: 'text-accent',
-  warning: 'text-warn'
+  success: 'text-ok',
+  warning: 'text-warn',
+  error: 'text-err'
 }
+
+const progressColors: Record<ToastType, string> = {
+  info: 'bg-accent',
+  success: 'bg-ok',
+  warning: 'bg-warn',
+  error: 'bg-err'
+}
+
+/* ------------------------------------------------------------------ */
+/*  Single toast item                                                  */
+/* ------------------------------------------------------------------ */
 
 function ToastItem({ toast }: { toast: Toast }) {
   const remove = useToastStore((s) => s.removeToast)
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const [exiting, setExiting] = useState(false)
 
   useEffect(() => {
-    timerRef.current = setTimeout(() => remove(toast.id), 3500)
+    timerRef.current = setTimeout(() => {
+      setExiting(true)
+      setTimeout(() => remove(toast.id), 200)
+    }, TOAST_DURATION)
     return () => clearTimeout(timerRef.current)
   }, [toast.id, remove])
 
@@ -78,21 +96,35 @@ function ToastItem({ toast }: { toast: Toast }) {
 
   return (
     <div
-      className={
-        'flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-xs font-medium shadow-xl backdrop-blur-md ' +
-        'animate-slideIn ' +
-        typeStyles[toast.type]
-      }
+      className={cn(
+        'relative flex items-start gap-3 rounded-[--radius-lg] border border-edge border-l-4 px-4 py-3',
+        'bg-card/90 backdrop-blur-xl shadow-2xl shadow-black/40',
+        'transition-all duration-200',
+        accentBorder[toast.type],
+        exiting ? 'opacity-0 translate-x-4' : 'animate-slideInRight'
+      )}
     >
-      <Icon className={`h-4 w-4 shrink-0 ${iconColors[toast.type]}`} />
-      <span className="min-w-0 flex-1 text-content leading-relaxed">{toast.message}</span>
+      <Icon className={cn('h-[18px] w-[18px] shrink-0 mt-0.5', iconColors[toast.type])} />
+      <span className="min-w-0 flex-1 text-[13px] text-content leading-relaxed">{toast.message}</span>
       <button
-        onClick={() => remove(toast.id)}
-        className="ml-1 shrink-0 rounded-md p-0.5 text-muted hover:text-content transition-colors"
+        onClick={() => {
+          clearTimeout(timerRef.current)
+          setExiting(true)
+          setTimeout(() => remove(toast.id), 200)
+        }}
+        className="shrink-0 rounded-[--radius-sm] p-1 text-muted hover:text-content hover:bg-elevated/50 transition-colors"
         aria-label="Close"
       >
         <X className="h-3.5 w-3.5" />
       </button>
+
+      {/* Progress bar */}
+      <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden rounded-b-[--radius-lg]">
+        <div
+          className={cn('h-full opacity-60', progressColors[toast.type])}
+          style={{ animation: `toastProgress ${TOAST_DURATION}ms linear forwards` }}
+        />
+      </div>
     </div>
   )
 }
@@ -107,7 +139,7 @@ export function ToastContainer() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2 w-80">
+    <div className="fixed bottom-4 right-4 z-[400] flex flex-col-reverse gap-2.5 w-[360px]">
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} />
       ))}

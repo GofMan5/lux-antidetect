@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Bell, CheckCircle2, XCircle, Info, AlertTriangle, Check, Trash2 } from 'lucide-react'
+import { cn } from '@renderer/lib/utils'
 import { useNotificationStore } from '../stores/notifications'
 import type { Notification, NotificationType } from '../stores/notifications'
 
@@ -19,10 +20,10 @@ const typeColors: Record<NotificationType, string> = {
 }
 
 const typeBg: Record<NotificationType, string> = {
-  success: 'bg-ok/8',
-  error: 'bg-err/8',
-  info: 'bg-accent/8',
-  warning: 'bg-warn/8'
+  success: 'bg-ok/10',
+  error: 'bg-err/10',
+  info: 'bg-accent/10',
+  warning: 'bg-warn/10'
 }
 
 function timeAgo(ts: number): string {
@@ -39,20 +40,22 @@ function NotificationItem({ n, onRead }: { n: Notification; onRead: () => void }
   return (
     <button
       onClick={onRead}
-      className={`w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-all hover:bg-elevated/50 ${
-        !n.read ? 'bg-elevated/20' : ''
-      }`}
+      className={cn(
+        'w-full flex items-start gap-3 px-4 py-3 text-left transition-all duration-200',
+        'hover:bg-elevated/40',
+        !n.read && 'bg-elevated/15'
+      )}
     >
-      <div className={`mt-0.5 shrink-0 rounded-lg p-1 ${typeBg[n.type]}`}>
-        <Icon className={`h-3 w-3 ${typeColors[n.type]}`} />
+      <div className={cn('mt-0.5 shrink-0 rounded-[--radius-sm] p-1.5', typeBg[n.type])}>
+        <Icon className={cn('h-3.5 w-3.5', typeColors[n.type])} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className={`text-[11px] leading-relaxed ${n.read ? 'text-muted' : 'text-content'}`}>
+        <p className={cn('text-[12px] leading-relaxed', n.read ? 'text-muted' : 'text-content')}>
           {n.message}
         </p>
-        <p className="text-[9px] text-muted/60 mt-0.5">{timeAgo(n.timestamp)}</p>
+        <p className="text-[10px] text-muted/50 mt-1">{timeAgo(n.timestamp)}</p>
       </div>
-      {!n.read && <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent shrink-0" />}
+      {!n.read && <div className="mt-2 w-2 h-2 rounded-full bg-accent shrink-0 shadow-[0_0_6px_var(--color-accent-glow)]" />}
     </button>
   )
 }
@@ -73,8 +76,8 @@ export function NotificationCenter(): React.JSX.Element {
     if (!bellRef.current) return
     const rect = bellRef.current.getBoundingClientRect()
     setPos({
-      left: rect.left,
-      bottom: window.innerHeight - rect.top + 8
+      left: Math.min(rect.left, window.innerWidth - 376),
+      bottom: Math.min(window.innerHeight - rect.top + 8, window.innerHeight - 16)
     })
   }, [])
 
@@ -104,14 +107,17 @@ export function NotificationCenter(): React.JSX.Element {
       <button
         ref={bellRef}
         onClick={() => setOpen(!open)}
-        className={`relative rounded-lg p-2 transition-all duration-150 ${
-          open ? 'bg-accent/15 text-accent' : 'text-muted hover:text-content hover:bg-elevated'
-        }`}
+        className={cn(
+          'relative rounded-[--radius-md] p-2.5 transition-all duration-200',
+          open
+            ? 'bg-accent/12 text-accent'
+            : 'text-muted hover:text-content hover:bg-elevated/50'
+        )}
         title="Notifications"
       >
         <Bell className="h-[18px] w-[18px]" />
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 rounded-full bg-accent text-white text-[9px] font-bold flex items-center justify-center px-1 shadow-md shadow-accent/30 animate-scaleIn">
+          <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-accent text-white text-[9px] font-bold flex items-center justify-center px-1 shadow-[0_0_8px_var(--color-accent-glow)] animate-scaleIn">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
@@ -121,20 +127,20 @@ export function NotificationCenter(): React.JSX.Element {
       {open && pos && createPortal(
         <div
           ref={panelRef}
-          className="w-[320px] rounded-xl border border-edge bg-card shadow-2xl shadow-black/50 overflow-hidden animate-scaleIn"
+          className="w-[360px] rounded-[--radius-xl] border border-edge/60 bg-card/95 backdrop-blur-2xl shadow-2xl shadow-black/60 overflow-hidden animate-scaleIn"
           style={{
             position: 'fixed',
             left: pos.left,
             bottom: pos.bottom,
-            zIndex: 9999
+            zIndex: 300
           }}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-3 py-2.5 border-b border-edge bg-elevated/20">
-            <div className="flex items-center gap-2">
-              <h3 className="text-xs font-semibold text-content">Notifications</h3>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-edge/40">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-sm font-semibold text-content">Notifications</h3>
               {unreadCount > 0 && (
-                <span className="text-[9px] font-bold text-accent bg-accent/15 px-1.5 py-0.5 rounded-full">
+                <span className="text-[10px] font-bold text-accent bg-accent/12 px-2 py-0.5 rounded-full">
                   {unreadCount} new
                 </span>
               )}
@@ -143,30 +149,32 @@ export function NotificationCenter(): React.JSX.Element {
               {unreadCount > 0 && (
                 <button
                   onClick={markAllRead}
-                  className="p-1 rounded-md text-muted hover:text-content hover:bg-elevated transition-all"
+                  className="rounded-[--radius-sm] p-1.5 text-muted hover:text-content hover:bg-elevated/50 transition-all duration-200"
                   title="Mark all as read"
                 >
-                  <Check className="h-3 w-3" />
+                  <Check className="h-3.5 w-3.5" />
                 </button>
               )}
               {notifications.length > 0 && (
                 <button
                   onClick={clearAll}
-                  className="p-1 rounded-md text-muted hover:text-err hover:bg-err/10 transition-all"
+                  className="rounded-[--radius-sm] p-1.5 text-muted hover:text-err hover:bg-err/10 transition-all duration-200"
                   title="Clear all"
                 >
-                  <Trash2 className="h-3 w-3" />
+                  <Trash2 className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
           </div>
 
           {/* List */}
-          <div className="max-h-[360px] overflow-y-auto divide-y divide-edge/40">
+          <div className="max-h-[400px] overflow-y-auto divide-y divide-edge/30">
             {notifications.length === 0 ? (
-              <div className="px-4 py-8 text-center">
-                <Bell className="h-6 w-6 text-muted/30 mx-auto mb-2" />
-                <p className="text-xs text-muted/60">No notifications yet</p>
+              <div className="px-4 py-10 text-center">
+                <div className="h-10 w-10 rounded-full bg-elevated/50 flex items-center justify-center mx-auto mb-3">
+                  <Bell className="h-5 w-5 text-muted/30" />
+                </div>
+                <p className="text-xs text-muted/50">No notifications</p>
               </div>
             ) : (
               notifications.map((n) => (

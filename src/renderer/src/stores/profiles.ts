@@ -8,6 +8,9 @@ interface ProfilesStore {
   loading: boolean
   /** Per-profile error messages (cleared on next action) */
   profileErrors: Record<string, string>
+  /** Editor panel state — persisted across navigations */
+  editorMode: 'edit' | 'create' | null
+  editorProfileId: string | null
   fetchProfiles: () => Promise<void>
   fetchSessions: () => Promise<void>
   deleteProfile: (id: string) => Promise<void>
@@ -15,6 +18,8 @@ interface ProfilesStore {
   stopBrowser: (id: string) => Promise<void>
   duplicateProfile: (id: string) => Promise<void>
   clearProfileError: (id: string) => void
+  openEditor: (mode: 'edit' | 'create', profileId?: string | null) => void
+  closeEditor: () => void
 }
 
 function setProfileStatus(
@@ -33,6 +38,8 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   sessions: [],
   loading: false,
   profileErrors: {},
+  editorMode: null,
+  editorProfileId: null,
 
   fetchProfiles: async () => {
     if (!isApiAvailable()) return
@@ -146,7 +153,10 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
         profiles: setProfileStatus(state.profiles, id, 'ready')
       }
     })
-  }
+  },
+
+  openEditor: (mode, profileId = null) => set({ editorMode: mode, editorProfileId: profileId }),
+  closeEditor: () => set({ editorMode: null, editorProfileId: null })
 }))
 
 // Reactive session event subscriptions — instant UI updates when browsers start/stop.
