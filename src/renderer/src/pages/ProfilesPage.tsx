@@ -3,7 +3,7 @@ import {
   Plus, Play, Square, Copy, Trash2, Loader2, X, AlertCircle,
   ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2,
   Flame, ClipboardCopy, Pencil, Terminal, Camera, MoreHorizontal,
-  LayoutGrid, ChevronDown, Check, XCircle
+  LayoutGrid, ChevronDown, Check, XCircle, ExternalLink
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useProfilesStore } from '../stores/profiles'
@@ -17,7 +17,16 @@ import type { DropdownMenuItem } from '../components/ui'
 import { cn } from '../lib/utils'
 import { CHECKBOX } from '../lib/ui'
 import { api } from '../lib/api'
-import { validateProfileFingerprint, type ValidationWarning } from '../lib/fingerprint-validator'
+import {
+  validateProfileFingerprint,
+  computeProfileHealth,
+  type ValidationWarning,
+  type HealthStatus
+} from '../lib/fingerprint-validator'
+import {
+  PRESET_BROWSER_MAP,
+  buildPresetMenuItems
+} from '../lib/preset-menu'
 import type { BrowserType, ProfileStatus } from '../lib/types'
 import type { PresetDescriptor } from '../../../preload/api-contract'
 
@@ -44,6 +53,11 @@ const BROWSER_LABEL: Record<BrowserType, string> = {
   edge: 'Edge'
 }
 
+// Test sites surfaced as row-menu quick actions. Keep in sync with the
+// verification chips in ProfileEditorPage when adding new entries.
+const TEST_SITE_CREEPJS = 'https://abrahamjuliot.github.io/creepjs/'
+const TEST_SITE_PIXELSCAN = 'https://pixelscan.net'
+
 const STATUS_DOT: Record<ProfileStatus, string> = {
   ready: 'bg-muted/50',
   starting: 'bg-warn animate-pulse',
@@ -60,20 +74,6 @@ const STATUS_LABEL: Record<ProfileStatus, string> = {
   error: 'Error'
 }
 
-// Grouped order for preset dropdown OS families
-const PRESET_GROUP_ORDER: ReadonlyArray<{
-  family: PresetDescriptor['os_family']
-  label: string
-}> = [
-  { family: 'windows', label: 'Windows' },
-  { family: 'macos', label: 'macOS' },
-  { family: 'linux', label: 'Linux' },
-  { family: 'android', label: 'Android' },
-  { family: 'ios-emu', label: 'iOS-Emu' }
-]
-
-type HealthStatus = 'good' | 'warn' | 'bad' | 'unknown'
-
 const HEALTH_DOT: Record<HealthStatus, string> = {
   good: 'bg-ok shadow-sm shadow-ok/40',
   warn: 'bg-warn shadow-sm shadow-warn/40',
@@ -81,16 +81,20 @@ const HEALTH_DOT: Record<HealthStatus, string> = {
   unknown: 'bg-muted/70 ring-1 ring-muted/60'
 }
 
+const HEALTH_STATUS_TEXT: Record<HealthStatus, string> = {
+  good: 'Healthy',
+  warn: 'Minor issues',
+  bad: 'Issues detected',
+  unknown: 'Unknown'
+}
+
+// Tooltip fallback copy when there are no discrete reasons to list.
+const HEALTH_TOOLTIP_GOOD = 'Looks consistent'
+const HEALTH_TOOLTIP_UNKNOWN = 'Proxy not yet tested'
+
 // Virtual scroll constants (hoisted to avoid per-render allocation).
 const ROW_HEIGHT = 48
 const OVERSCAN = 5
-
-// Browser mapping for PresetDescriptor['browser'] -> BrowserType used by
-// the profile form. Edge presets don't exist today (presets are chrome|firefox).
-const PRESET_BROWSER_MAP: Record<'chrome' | 'firefox', BrowserType> = {
-  chrome: 'chromium',
-  firefox: 'firefox'
-}
 
 // Bounded concurrency runner for IPC fan-out on health cache warm-up.
 async function mapWithConcurrency<T, R>(
@@ -195,6 +199,7 @@ export function ProfilesPage() {
   const editorProfileId = useProfilesStore((s) => s.editorProfileId)
   const openEditor = useProfilesStore((s) => s.openEditor)
   const closeEditor = useProfilesStore((s) => s.closeEditor)
+  const setPendingHealthBannerExpand = useProfilesStore((s) => s.setPendingHealthBannerExpand)
   const actions = useProfilesStore(
     useShallow((s) => ({
       launch: s.launchBrowser,
@@ -610,33 +615,12 @@ export function ProfilesPage() {
     }
   }, [openEditor, addToast, presets])
 
-  // Build grouped DropdownMenu items. Disabled label-only rows act as section
-  // headers; this keeps the existing DropdownMenu primitive without forking.
-  const presetMenuItems = useMemo<DropdownMenuItem[]>(() => {
-    if (!presets) {
-      return [{ label: 'Loading presets…', disabled: true, onClick: () => {} }]
-    }
-    if (presets.length === 0) {
-      return [{ label: 'No presets available', disabled: true, onClick: () => {} }]
-    }
-    const items: DropdownMenuItem[] = []
-    for (const group of PRESET_GROUP_ORDER) {
-      const inGroup = presets.filter((p) => p.os_family === group.family)
-      if (inGroup.length === 0) continue
-      items.push({
-        label: group.label,
-        kind: 'heading',
-        onClick: () => {}
-      })
-      for (const p of inGroup) {
-        items.push({
-          label: p.label,
-          onClick: () => void handleNewFromPreset(p.id)
-        })
-      }
-    }
-    return items
-  }, [presets, handleNewFromPreset])
+  // Build grouped DropdownMenu items via the shared helper so list + editor
+  // pages stay in lockstep (see src/renderer/src/lib/preset-menu.tsx).
+  const presetMenuItems = useMemo<DropdownMenuItem[]>(
+    () => buildPresetMenuItems(presets, (p) => void handleNewFromPreset(p.id)),
+    [presets, handleNewFromPreset]
+  )
 
   const handlePanelSave = (): void => {
     setPendingFingerprint(null)
@@ -757,6 +741,31 @@ export function ProfilesPage() {
         { label: 'Screenshot', icon: <Camera className="h-4 w-4" />, onClick: () => handleScreenshot(profileId) }
       )
     }
+
+    const openTestSite = async (label: string, url: string): Promise<void> => {
+      try {
+        await api.openUrlInProfile(profileId, url)
+        addToast(`Opened ${label}`, 'success')
+      } catch (err) {
+        addToast(
+          err instanceof Error ? err.message : `Failed to open ${label}`,
+          'error'
+        )
+      }
+    }
+
+    items.push(
+      {
+        label: 'Open in CreepJS',
+        icon: <ExternalLink className="h-4 w-4" />,
+        onClick: () => { void openTestSite('CreepJS', TEST_SITE_CREEPJS) }
+      },
+      {
+        label: 'Open in PixelScan',
+        icon: <ExternalLink className="h-4 w-4" />,
+        onClick: () => { void openTestSite('PixelScan', TEST_SITE_PIXELSCAN) }
+      }
+    )
 
     items.push(
       { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, variant: 'danger', onClick: () => handleDelete(profileId, profileName) }
@@ -1055,49 +1064,91 @@ export function ProfilesPage() {
                               {(() => {
                                 const cacheKey = `${profile.id}:${profile.updated_at}`
                                 const entry = healthCache[cacheKey]
-                                const proxyBad =
-                                  profile.proxy_id != null &&
-                                  proxyMap.get(profile.proxy_id)?.check_ok === false
-                                let status: HealthStatus
-                                let reasons: string[]
-                                if (!entry) {
-                                  status = proxyBad ? 'bad' : 'unknown'
-                                  reasons = proxyBad ? ['Proxy check failed'] : ['Checking…']
-                                } else {
-                                  const warns = entry.warnings
-                                  const hasWarn = warns.some((w) => w.severity === 'warn')
-                                  const hasInfo = warns.some((w) => w.severity === 'info')
-                                  status = proxyBad || hasWarn ? 'bad' : hasInfo ? 'warn' : 'good'
-                                  reasons = []
-                                  if (proxyBad) reasons.push('Proxy check failed')
-                                  for (const w of warns) reasons.push(w.message)
-                                }
-                                const statusText =
-                                  status === 'good' ? 'Healthy'
-                                  : status === 'warn' ? 'Minor issues'
-                                  : status === 'bad' ? 'Issues detected'
-                                  : 'Unknown'
-                                const tipLabel = reasons.length
-                                  ? reasons.slice(0, 2).join(' · ')
-                                  : statusText
-                                const ariaLabel = `Profile health: ${statusText}.${reasons.length ? ' ' + reasons.join('. ') : ''}`
+                                const proxy = profile.proxy_id != null
+                                  ? proxyMap.get(profile.proxy_id)
+                                  : undefined
+                                // "No proxy attached" is an intentional direct-connection
+                                // choice, not a health concern. Map it to 'ok' so a
+                                // clean no-proxy profile still shows green instead of
+                                // the gray "unknown" dot (regression fix).
+                                const proxyCheckStatus: 'ok' | 'failed' | 'untested' =
+                                  profile.proxy_id == null ? 'ok'
+                                  : proxy?.check_ok === true ? 'ok'
+                                  : proxy?.check_ok === false ? 'failed'
+                                  : 'untested'
+                                // While the per-profile warnings warm-up is in-flight we
+                                // treat the row as `unknown` (no reasons yet) rather than
+                                // guessing; this avoids flicker when the cache hydrates.
+                                // Exception: a no-proxy profile stays 'ok' even during
+                                // warm-up — its status doesn't depend on a proxy check,
+                                // so gray-flashing it would itself be a regression.
+                                const fallbackProxyStatus: 'ok' | 'failed' | 'untested' =
+                                  profile.proxy_id == null
+                                    ? 'ok'
+                                    : proxyCheckStatus === 'ok' ? 'untested' : proxyCheckStatus
+                                const { status, reasons } = entry
+                                  ? computeProfileHealth({
+                                      warnings: entry.warnings,
+                                      proxyCheckStatus
+                                    })
+                                  : computeProfileHealth({
+                                      warnings: [],
+                                      proxyCheckStatus: fallbackProxyStatus
+                                    })
+                                const statusText = HEALTH_STATUS_TEXT[status]
+                                const tooltipFallback =
+                                  status === 'good'
+                                    ? HEALTH_TOOLTIP_GOOD
+                                    : status === 'unknown'
+                                      ? HEALTH_TOOLTIP_UNKNOWN
+                                      : statusText
+                                const tooltipContent = reasons.length === 0
+                                  ? tooltipFallback
+                                  : (
+                                      <div className="text-left">
+                                        <div className="text-xs font-medium mb-1">{statusText}</div>
+                                        <ul className="list-disc list-inside text-xs space-y-1">
+                                          {reasons.map((r, i) => (
+                                            <li key={`${i}:${r}`}>{r}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )
+                                const ariaLabel = reasons.length === 0
+                                  ? `Health: ${statusText}`
+                                  : `Health: ${statusText}, ${reasons.length} issue${reasons.length === 1 ? '' : 's'}`
                                 const Glyph =
                                   status === 'good' ? Check
                                   : status === 'warn' ? AlertCircle
                                   : status === 'bad' ? XCircle
                                   : null
                                 return (
-                                  <Tooltip content={tipLabel}>
+                                  <Tooltip content={tooltipContent}>
                                     <button
                                       type="button"
                                       aria-label={ariaLabel}
+                                      onClick={() => {
+                                        setPendingHealthBannerExpand(profile.id)
+                                        openEditor('edit', profile.id)
+                                      }}
                                       className={cn(
-                                        'inline-flex items-center justify-center h-4 w-4 rounded-full text-white/90',
-                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                                        HEALTH_DOT[status]
+                                        // 24×24px hit area wraps a 16×16px visual dot —
+                                        // keeps column density while meeting minimum
+                                        // click-target guidance.
+                                        'inline-flex items-center justify-center h-6 w-6 rounded-full',
+                                        'cursor-pointer hover:opacity-80 transition-opacity',
+                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
                                       )}
                                     >
-                                      {Glyph && <Glyph className="h-2.5 w-2.5" aria-hidden="true" />}
+                                      <span
+                                        aria-hidden="true"
+                                        className={cn(
+                                          'inline-flex items-center justify-center h-4 w-4 rounded-full text-white/90',
+                                          HEALTH_DOT[status]
+                                        )}
+                                      >
+                                        {Glyph && <Glyph className="h-2.5 w-2.5" aria-hidden="true" />}
+                                      </span>
                                     </button>
                                   </Tooltip>
                                 )

@@ -7,6 +7,69 @@ export type ValidationWarning = {
   message: string
 }
 
+// Shared profile-health vocabulary. Promoted out of ProfilesPage so the
+// editor, the list row, and any future surfaces agree on the same enum.
+export type HealthStatus = 'good' | 'warn' | 'bad' | 'unknown'
+
+export interface HealthComputation {
+  status: HealthStatus
+  /**
+   * Human-readable reasons behind the status, ordered warn-before-info
+   * (warnings are expected to already be sorted by severity). When a proxy
+   * check has failed, `PROXY_UNREACHABLE_REASON` is the first entry.
+   * Deduped by message — identical reasons are not repeated.
+   */
+  reasons: string[]
+}
+
+/** Label surfaced to users when `proxyCheckStatus === 'failed'`. */
+export const PROXY_UNREACHABLE_REASON = 'Proxy unreachable'
+
+export interface ProfileHealthInput {
+  warnings: ValidationWarning[]
+  proxyCheckStatus: 'ok' | 'failed' | 'untested' | null | undefined
+}
+
+/**
+ * Derive a single profile-health verdict from validator warnings and the
+ * latest proxy-check status. Pure and synchronous: same inputs → same output.
+ *
+ * Mapping (preserves the historical ProfilesPage behavior):
+ *   - `proxyCheckStatus === 'untested'` AND no warnings → `'unknown'`.
+ *   - `proxyCheckStatus === 'failed'` OR any `warn`-severity warning → `'bad'`.
+ *   - Any `info`-severity warning (and neither of the above) → `'warn'`.
+ *   - Otherwise → `'good'`.
+ */
+export function computeProfileHealth(input: ProfileHealthInput): HealthComputation {
+  const { warnings, proxyCheckStatus } = input
+  const proxyFailed = proxyCheckStatus === 'failed'
+
+  if (proxyCheckStatus === 'untested' && warnings.length === 0) {
+    return { status: 'unknown', reasons: [] }
+  }
+
+  let status: HealthStatus
+  if (proxyFailed || warnings.some((w) => w.severity === 'warn')) {
+    status = 'bad'
+  } else if (warnings.some((w) => w.severity === 'info')) {
+    status = 'warn'
+  } else {
+    status = 'good'
+  }
+
+  const reasons: string[] = []
+  const seen = new Set<string>()
+  const pushReason = (message: string): void => {
+    if (seen.has(message)) return
+    seen.add(message)
+    reasons.push(message)
+  }
+  if (proxyFailed) pushReason(PROXY_UNREACHABLE_REASON)
+  for (const w of warnings) pushReason(w.message)
+
+  return { status, reasons }
+}
+
 export interface ProfileValidatorInput {
   user_agent: string
   platform: string

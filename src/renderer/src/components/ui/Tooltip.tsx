@@ -3,8 +3,11 @@ import { createPortal } from 'react-dom'
 import { cn } from '@renderer/lib/utils'
 import { TOOLTIP } from '@renderer/lib/ui'
 
+// `content` accepts any ReactNode so callers can render rich tooltip bodies
+// (lists, links, JSX). Existing string callers keep their previous behavior —
+// plain strings still render directly as text.
 export interface TooltipProps {
-  content: string
+  content: React.ReactNode
   children: React.ReactNode
   side?: 'top' | 'bottom' | 'left' | 'right'
   className?: string
@@ -54,6 +57,14 @@ export function Tooltip({ content, children, side = 'top', className }: TooltipP
     right: 'translate(0, -50%)'
   }
 
+  // String callers (the vast majority) expect single-line `whitespace-nowrap`
+  // for backward compatibility. ReactNode bodies (e.g. bulleted reason lists)
+  // would overflow on one line, so we widen and wrap them instead.
+  const isStringContent = typeof content === 'string'
+  const wrapClass = isStringContent
+    ? 'whitespace-nowrap'
+    : 'max-w-xs whitespace-normal break-words'
+
   return (
     <div
       ref={triggerRef}
@@ -69,7 +80,8 @@ export function Tooltip({ content, children, side = 'top', className }: TooltipP
           role="tooltip"
           className={cn(
             TOOLTIP,
-            'fixed whitespace-nowrap pointer-events-none',
+            'fixed pointer-events-none',
+            wrapClass,
             'animate-fadeIn',
             className
           )}

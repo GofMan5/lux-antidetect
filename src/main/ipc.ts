@@ -15,7 +15,7 @@ import {
 } from './profile'
 import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, parseProxyLine } from './proxy'
 import { lookupProxyGeo } from './geoip'
-import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot } from './browser'
+import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot, openUrlInProfile } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
 import { generateDefaultFingerprint } from './fingerprint'
 import { listFingerprintPresets, generateFingerprintFromPreset } from './fingerprint-presets'
@@ -33,6 +33,29 @@ import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, Pr
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function assertUuid(id: string): void {
   if (!UUID_RE.test(id)) throw new Error('Invalid ID format')
+}
+
+// Only http(s) URLs may cross the IPC boundary as a navigation target.
+// Rejects javascript:, file:, data:, chrome://, about:, etc. A compromised
+// renderer must not be able to coerce the main process into loading a
+// privileged or local scheme inside a profile.
+const ALLOWED_URL_PROTOCOLS = new Set(['http:', 'https:'])
+
+function validateHttpUrl(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw !== 'string') throw new Error('targetUrl must be a string')
+  const trimmed = raw.trim()
+  if (trimmed.length === 0) return undefined
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error('targetUrl must be a valid URL')
+  }
+  if (!ALLOWED_URL_PROTOCOLS.has(parsed.protocol)) {
+    throw new Error('targetUrl protocol must be http: or https:')
+  }
+  return trimmed
 }
 
 function assertLocalExtDir(p: unknown, profilesDir: string, profileId: string): string {
@@ -133,12 +156,25 @@ export function registerIpcHandlers(
   )
 
   // Browser (async — no longer blocks main thread)
-  ipcMain.handle('launch-browser', async (_, profileId: string) =>
-    launchBrowser(db, profileId, profilesDir, getMainWindow())
-  )
+  ipcMain.handle('launch-browser', async (_, profileId: string, opts?: { targetUrl?: string }) => {
+    assertUuid(profileId)
+    // Validate the renderer-supplied URL at the IPC boundary. The downstream
+    // launchBrowser only guards against argv-injection (leading "-"); it does
+    // not enforce a scheme allow-list, so we must reject non-http(s) here.
+    const targetUrl = validateHttpUrl(opts?.targetUrl)
+    return launchBrowser(db, profileId, profilesDir, getMainWindow(), { targetUrl })
+  })
   ipcMain.handle('stop-browser', async (_, profileId: string) =>
     stopBrowser(db, profileId, getMainWindow())
   )
+  // Open an arbitrary URL inside a profile's browser context. Uses CDP when
+  // the profile is already running (Chromium/Edge) and cold-launches otherwise.
+  ipcMain.handle('open-url-in-profile', async (_, profileId: string, targetUrl: string) => {
+    assertUuid(profileId)
+    const validated = validateHttpUrl(targetUrl)
+    if (validated === undefined) throw new Error('targetUrl is required')
+    return openUrlInProfile(db, profileId, validated, profilesDir, getMainWindow())
+  })
   ipcMain.handle('get-running-sessions', () => getAllSessions())
   ipcMain.handle('detect-browsers', () => detectBrowsers())
 

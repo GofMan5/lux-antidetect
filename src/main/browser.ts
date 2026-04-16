@@ -972,6 +972,118 @@ export async function getCdpConnectionInfo(profileId: string): Promise<CdpConnec
   }
 }
 
+// ─── Open URL in Profile ─────────────────────────────────────────────────
+// Chromium/Edge: if the profile is already running and CDP is reachable,
+// open a new tab via the /json/new HTTP endpoint (no WS handshake needed).
+// Otherwise (profile stopped, Firefox, or CDP unreachable): cold-launch the
+// browser with targetUrl, which works for all three browser types and also
+// attaches to an existing Firefox instance because Firefox dedupes on
+// profile path.
+
+const CDP_PING_TIMEOUT_MS = 1500
+
+/** Open `url` on `http://127.0.0.1:<port>` with a bounded timeout. Returns the status code or rejects on timeout/error. */
+function httpOpenUrl(
+  port: number,
+  path: string,
+  method: 'GET' | 'PUT',
+  timeoutMs: number
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      { hostname: '127.0.0.1', port, path, method },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode ?? 0)
+      }
+    )
+    req.on('error', reject)
+    req.setTimeout(timeoutMs, () => {
+      req.destroy()
+      reject(new Error('timeout'))
+    })
+    req.end()
+  })
+}
+
+/** Ping /json/version. Returns true iff the endpoint responds with 2xx within the timeout. */
+async function isCdpReachable(port: number): Promise<boolean> {
+  try {
+    const status = await httpOpenUrl(port, '/json/version', 'GET', CDP_PING_TIMEOUT_MS)
+    return status >= 200 && status < 300
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Open a URL inside the running browser for a profile (via CDP) when possible,
+ * otherwise cold-launch the browser with the URL as the landing page.
+ *
+ * CDP path is used only for Chromium/Edge profiles that are currently running
+ * AND whose CDP endpoint is reachable. Firefox always goes through launchBrowser.
+ */
+export async function openUrlInProfile(
+  db: Database.Database,
+  profileId: string,
+  targetUrl: string,
+  profilesDir: string,
+  mainWindow: Electron.BrowserWindow | null
+): Promise<{ opened: 'cdp' | 'launched'; pid?: number }> {
+  const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as
+    | Profile
+    | undefined
+  if (!profile) throw new Error(`Profile not found: ${profileId}`)
+
+  const isChromiumFamily =
+    profile.browser_type === 'chromium' || profile.browser_type === 'edge'
+
+  if (isChromiumFamily) {
+    const active = activeBrowsers.get(profileId)
+    const cdpPort = active?.cdpPort
+    if (cdpPort) {
+      // Chromium's legacy /json/new endpoint accepts PUT and creates a new
+      // page target pointing at the given URL. It is simpler than opening a
+      // WebSocket to send Target.createTarget and is stable across Chrome
+      // versions currently supported by this app.
+      if (await isCdpReachable(cdpPort)) {
+        const newTabPath = `/json/new?${encodeURIComponent(targetUrl)}`
+        try {
+          const status = await httpOpenUrl(cdpPort, newTabPath, 'PUT', CDP_PING_TIMEOUT_MS)
+          if (status >= 200 && status < 300) {
+            return { opened: 'cdp' }
+          }
+        } catch {
+          // fall through to stale teardown + cold-launch
+        }
+      }
+
+      // Profile is registered as active but CDP is dead (browser crashed,
+      // hung, or the /json/new PUT failed). The launchBrowser active-guard
+      // will throw "Profile is already running" unless we clear the stale
+      // state here. Helpers below are tolerant of missing entries.
+      teardownStaleBrowserState(profileId)
+    }
+  }
+
+  const { pid } = await launchBrowser(db, profileId, profilesDir, mainWindow, {
+    targetUrl
+  })
+  return { opened: 'launched', pid }
+}
+
+/**
+ * Clear all in-process state that marks `profileId` as active, used when the
+ * browser is registered active but CDP is unreachable (stale). Tolerant of
+ * double-removal: every underlying helper is a no-op when the entry is gone.
+ */
+function teardownStaleBrowserState(profileId: string): void {
+  stopBrowserPolling(profileId)
+  removeSession(profileId, null)
+  const injector = cdpInjectors.get(profileId)
+  if (injector) { injector.stop(); cdpInjectors.delete(profileId) }
+}
+
 /** Capture a screenshot of the active tab via CDP. Returns base64-encoded PNG. */
 export async function captureScreenshot(profileId: string): Promise<string> {
   const ab = activeBrowsers.get(profileId)
@@ -995,7 +1107,8 @@ export async function launchBrowser(
   db: Database.Database,
   profileId: string,
   profilesDir: string,
-  mainWindow: Electron.BrowserWindow | null
+  mainWindow: Electron.BrowserWindow | null,
+  opts?: { targetUrl?: string }
 ): Promise<{ pid: number }> {
   if (isRunning(profileId) || isProfileBrowserActive(profileId)) {
     throw new Error('Profile is already running')
@@ -1128,11 +1241,14 @@ export async function launchBrowser(
       injectionScript = buildInjectionScript(activeFp)
     }
 
-    if (profile.start_url?.trim()) {
-      // Prevent start_url from being interpreted as a browser flag (e.g. "--remote-debugging-port=...")
-      const url = profile.start_url.trim()
-      if (!url.startsWith('-')) {
-        args.push(url)
+    // Caller-provided targetUrl (e.g. "open test site in this profile") wins
+    // over the profile's default start_url. Works for both Chromium (trailing
+    // positional arg) and Firefox (`-profile <dir> <url>` positional form).
+    const effectiveUrl = (opts?.targetUrl ?? profile.start_url ?? '').trim()
+    if (effectiveUrl) {
+      // Prevent the URL from being interpreted as a browser flag (e.g. "--remote-debugging-port=...")
+      if (!effectiveUrl.startsWith('-')) {
+        args.push(effectiveUrl)
       }
     }
 

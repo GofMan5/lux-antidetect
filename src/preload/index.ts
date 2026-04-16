@@ -20,8 +20,11 @@ const api: LuxAPI = {
   deleteProfile: (id: string) => ipcRenderer.invoke('delete-profile', id),
   duplicateProfile: (id: string) => ipcRenderer.invoke('duplicate-profile', id),
 
-  launchBrowser: (profileId: string) => ipcRenderer.invoke('launch-browser', profileId),
+  launchBrowser: (profileId: string, opts?: { targetUrl?: string }) =>
+    ipcRenderer.invoke('launch-browser', profileId, opts),
   stopBrowser: (profileId: string) => ipcRenderer.invoke('stop-browser', profileId),
+  openUrlInProfile: (profileId: string, targetUrl: string) =>
+    ipcRenderer.invoke('open-url-in-profile', profileId, targetUrl),
   getRunningSessions: () => ipcRenderer.invoke('get-running-sessions'),
   detectBrowsers: () => ipcRenderer.invoke('detect-browsers'),
 

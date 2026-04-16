@@ -189,7 +189,56 @@ export function initDatabase(userDataPath: string): Database.Database {
   // Migration: add device_type column to fingerprints
   addColumnIfMissing(db, 'fingerprints', 'device_type', "device_type TEXT DEFAULT 'desktop'")
 
+  // Migration: profile_groups table (seed from distinct profiles.group_name values on first init)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS profile_groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT NOT NULL,
+      icon TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_profile_groups_sort ON profile_groups(sort_order, name);
+  `)
+  const groupRow = db.prepare('SELECT COUNT(*) AS c FROM profile_groups').get() as { c: number }
+  if (groupRow.c === 0) {
+    const distinct = db
+      .prepare(
+        `SELECT group_name AS name,
+                (SELECT group_color FROM profiles p2
+                   WHERE p2.group_name = p.group_name AND p2.group_color IS NOT NULL
+                   LIMIT 1) AS color
+         FROM profiles p
+         WHERE group_name IS NOT NULL AND group_name <> ''
+         GROUP BY group_name`
+      )
+      .all() as { name: string; color: string | null }[]
+    const now = new Date().toISOString()
+    const insert = db.prepare(
+      `INSERT OR IGNORE INTO profile_groups (id, name, color, icon, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?)`
+    )
+    const seed = db.transaction((rows: typeof distinct) => {
+      let order = 0
+      for (const r of rows) {
+        const id = cryptoRandomId()
+        insert.run(id, r.name, r.color ?? '#6b7280', order, now, now)
+        order += 1
+      }
+    })
+    seed(distinct)
+  }
+
   return db
+}
+
+function cryptoRandomId(): string {
+  // Lightweight UUIDv4 without pulling uuid into this module.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { randomUUID } = require('crypto') as { randomUUID: () => string }
+  return randomUUID()
 }
 
 function addColumnIfMissing(db: Database.Database, table: string, column: string, ddl: string): void {

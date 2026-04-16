@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -21,19 +21,35 @@ import {
   Plus,
   ExternalLink,
   Cookie,
-  Puzzle
+  Puzzle,
+  Sparkles,
+  ChevronDown
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
+import { useProfilesStore } from '../stores/profiles'
 import { useToastStore } from '../components/Toast'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { cn } from '../lib/utils'
-import { Button, Input, Select, Card, Toggle, Tabs, Badge, Tooltip } from '../components/ui'
+import {
+  Button,
+  Input,
+  Select,
+  Card,
+  Toggle,
+  Tabs,
+  Badge,
+  Tooltip,
+  DropdownMenu
+} from '../components/ui'
+import type { DropdownMenuItem } from '../components/ui'
 import { TEXTAREA, LABEL } from '../lib/ui'
 import { validateProfileFingerprint } from '../lib/fingerprint-validator'
+import { PRESET_BROWSER_MAP, buildPresetMenuItems } from '../lib/preset-menu'
 import { CookiesTab } from '../components/profile/CookiesTab'
 import { ExtensionsTab } from '../components/profile/ExtensionsTab'
 import type { Fingerprint } from '../lib/types'
+import type { PresetDescriptor } from '../../../preload/api-contract'
 
 // Verification test sites for launched profiles
 const TEST_SITES: ReadonlyArray<{ label: string; url: string }> = [
@@ -264,6 +280,23 @@ export function ProfileEditorPanel({
   const [tagInput, setTagInput] = useState('')
   const [applyingGeo, setApplyingGeo] = useState(false)
 
+  // Fingerprint-preset picker state.
+  const [presets, setPresets] = useState<PresetDescriptor[] | null>(null)
+  const [applyingPreset, setApplyingPreset] = useState(false)
+  const presetsLoadingRef = useRef(false)
+
+  // Lifecycle guard for async handlers (preset apply). The IPC layer has no
+  // cancellation primitive, so we latch this ref and also re-check the captured
+  // profileId to avoid side-effects (setValue / toast) landing on a screen the
+  // user already navigated away from.
+  const isMountedRef = useRef(true)
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
   // Fingerprint section toggles (UI-only collapse / expand)
   const [webrtcOpen, setWebrtcOpen] = useState(true)
   const [webglOpen, setWebglOpen] = useState(true)
@@ -393,6 +426,19 @@ export function ProfileEditorPanel({
       ? validationWarnings.slice(0, 3)
       : validationWarnings
 
+  // Auto-expand the consistency banner when the user arrived by clicking a
+  // profile-list health dot. The flag lives on the profiles store so the
+  // click-through survives the store-driven editor remount; we clear it
+  // immediately to avoid stale triggers on a later re-open.
+  const pendingHealthBannerExpand = useProfilesStore((s) => s.pendingHealthBannerExpand)
+  const setPendingHealthBannerExpand = useProfilesStore((s) => s.setPendingHealthBannerExpand)
+  useEffect(() => {
+    if (pendingHealthBannerExpand && pendingHealthBannerExpand === profileId) {
+      setShowAllWarnings(true)
+      setPendingHealthBannerExpand(null)
+    }
+  }, [profileId, pendingHealthBannerExpand, setPendingHealthBannerExpand])
+
   // -- Effects ------------------------------------------------------------
 
   useEffect(() => {
@@ -406,6 +452,21 @@ export function ProfileEditorPanel({
         setTemplates(t as Array<{ id: string; name: string; browser_type: string }>)
       })
       .catch(() => {})
+  }, [])
+
+  // Load fingerprint presets once. On failure we store an empty list so the
+  // dropdown shows "No presets available" rather than staying in the loading
+  // state. The ref guard prevents duplicate IPC calls under strict-mode double-mount.
+  useEffect(() => {
+    if (presetsLoadingRef.current) return
+    presetsLoadingRef.current = true
+    api
+      .listFingerprintPresets()
+      .then((list) => setPresets(list))
+      .catch((err: unknown) => {
+        console.error('Failed to load fingerprint presets', err)
+        setPresets([])
+      })
   }, [])
 
   useEffect(() => {
@@ -519,6 +580,98 @@ export function ProfileEditorPanel({
       setGenerating(false)
     }
   }
+
+  const handleApplyPreset = useCallback(
+    async (preset: PresetDescriptor): Promise<void> => {
+      // Snapshot the profileId so a mid-flight profile switch (or unmount)
+      // skips the setValue-loop and toast instead of writing to the wrong form.
+      const initialProfileId = profileId
+      setApplyingPreset(true)
+      try {
+        const fp = await api.generateFingerprintFromPreset(preset.id)
+        if (!isMountedRef.current || profileId !== initialProfileId) return
+
+        // languages arrives as a JSON-stringified array (matches Fingerprint
+        // storage). Mirror the parse used for initialFingerprint (L411-424).
+        let langs: string
+        try {
+          const parsed = JSON.parse(fp.languages)
+          langs = Array.isArray(parsed) ? parsed.join(', ') : String(fp.languages ?? '')
+        } catch {
+          langs = fp.languages ?? ''
+        }
+
+        // Overwrite only fingerprint-owned fields plus browser_type (a Firefox
+        // preset must flip the form to firefox). Non-fingerprint fields —
+        // profile name, start URL, proxy, tags, notes, group — are left intact
+        // by using setValue per-field rather than reset().
+        const dirtyOpt = { shouldDirty: true } as const
+        setValue('browser_type', PRESET_BROWSER_MAP[preset.browser], dirtyOpt)
+        setValue('user_agent', fp.user_agent ?? '', dirtyOpt)
+        setValue('platform', fp.platform ?? '', dirtyOpt)
+        setValue(
+          'screen',
+          toScreenValue(fp.screen_width ?? 1920, fp.screen_height ?? 1080),
+          dirtyOpt
+        )
+        setValue('timezone', fp.timezone ?? DEFAULT_VALUES.timezone, dirtyOpt)
+        setValue(
+          'hardware_concurrency',
+          fp.hardware_concurrency ?? DEFAULT_VALUES.hardware_concurrency,
+          dirtyOpt
+        )
+        setValue(
+          'device_memory',
+          fp.device_memory ?? DEFAULT_VALUES.device_memory,
+          dirtyOpt
+        )
+        setValue('webgl_vendor', fp.webgl_vendor ?? '', dirtyOpt)
+        setValue('webgl_renderer', fp.webgl_renderer ?? '', dirtyOpt)
+        setValue(
+          'webrtc_policy',
+          fp.webrtc_policy ?? DEFAULT_VALUES.webrtc_policy,
+          dirtyOpt
+        )
+        setValue('languages', langs || DEFAULT_VALUES.languages, dirtyOpt)
+        setValue(
+          'color_depth',
+          fp.color_depth ?? DEFAULT_VALUES.color_depth,
+          dirtyOpt
+        )
+        setValue(
+          'pixel_ratio',
+          fp.pixel_ratio ?? DEFAULT_VALUES.pixel_ratio,
+          dirtyOpt
+        )
+        setValue(
+          'device_type',
+          (fp.device_type as 'desktop' | 'mobile') || DEFAULT_VALUES.device_type,
+          dirtyOpt
+        )
+        addToast(`Preset applied: ${preset.label}`, 'success')
+      } catch (err: unknown) {
+        if (!isMountedRef.current || profileId !== initialProfileId) return
+        addToast(
+          err instanceof Error ? err.message : 'Failed to apply preset',
+          'error'
+        )
+      } finally {
+        // Only touch local UI state if we're still the live editor for this
+        // profile; otherwise the next editor instance owns `applyingPreset`.
+        if (isMountedRef.current && profileId === initialProfileId) {
+          setApplyingPreset(false)
+        }
+      }
+    },
+    [addToast, setValue, profileId]
+  )
+
+  // Build grouped DropdownMenu items via the shared helper. See
+  // src/renderer/src/lib/preset-menu.tsx for grouping / label policy.
+  const presetMenuItems = useMemo<DropdownMenuItem[]>(
+    () => buildPresetMenuItems(presets, (p) => void handleApplyPreset(p)),
+    [presets, handleApplyPreset]
+  )
 
   const handleTestProxy = async (): Promise<void> => {
     if (!watchedProxyId) return
@@ -872,27 +1025,11 @@ export function ProfileEditorPanel({
                 type="button"
                 onClick={async () => {
                   try {
-                    try {
-                      await api.launchBrowser(profileId)
-                    } catch (launchErr) {
-                      // Only swallow "already running / busy" errors. Anything
-                      // else is a real failure we should surface.
-                      const msg =
-                        launchErr instanceof Error ? launchErr.message : String(launchErr)
-                      if (!/already|running|busy/i.test(msg)) {
-                        addToast(msg || 'Failed to launch profile', 'error')
-                        return
-                      }
-                    }
-                    try {
-                      await navigator.clipboard.writeText(site.url)
-                      addToast(`Profile launched — ${site.label} URL copied to clipboard`, 'info')
-                    } catch {
-                      addToast(`Profile launched — navigate to: ${site.url}`, 'info')
-                    }
+                    await api.openUrlInProfile(profileId, site.url)
+                    addToast(`Opened ${site.label}`, 'success')
                   } catch (err) {
                     addToast(
-                      err instanceof Error ? err.message : 'Failed to launch profile',
+                      err instanceof Error ? err.message : `Failed to open ${site.label}`,
                       'error'
                     )
                   }
@@ -1236,8 +1373,10 @@ export function ProfileEditorPanel({
         {/* ═══ Fingerprint ═══ */}
         {activeTab === 'fingerprint' && (
           <div className="space-y-4">
-            {/* Generate & strength bar */}
-            <div className="flex items-center gap-3">
+            {/* Generate & strength bar — wraps on narrow split-panel widths
+                so the strength bar keeps a usable footprint instead of
+                collapsing to a sliver. */}
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="secondary"
                 size="sm"
@@ -1249,8 +1388,29 @@ export function ProfileEditorPanel({
                 Generate All
               </Button>
 
+              <DropdownMenu
+                align="left"
+                items={presetMenuItems}
+                trigger={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<Sparkles className="h-3.5 w-3.5" />}
+                    type="button"
+                    loading={applyingPreset}
+                    disabled={applyingPreset || presets === null}
+                    aria-label="Apply fingerprint preset"
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      Preset
+                      <ChevronDown className="h-3 w-3" aria-hidden="true" />
+                    </span>
+                  </Button>
+                }
+              />
+
               {fpStrength && (
-                <div className="flex items-center gap-2 flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-1 min-w-[140px]">
                   <div className="flex-1 h-1.5 bg-elevated rounded-full overflow-hidden">
                     <div
                       className={cn(

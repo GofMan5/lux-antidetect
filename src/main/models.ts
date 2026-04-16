@@ -195,6 +195,44 @@ export interface TemplateInput {
   config: Record<string, unknown>
 }
 
+export interface ProfileGroup {
+  id: string
+  name: string
+  color: string
+  icon: string | null
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateProfileGroupInput {
+  name: string
+  color: string
+  icon?: string | null
+  sort_order?: number
+}
+
+export interface UpdateProfileGroupInput {
+  name?: string
+  color?: string
+  icon?: string | null
+  sort_order?: number
+}
+
+export type BulkTagMode = 'replace' | 'add' | 'remove'
+
+export interface BulkUpdateInput {
+  group_name?: string | null
+  group_color?: string | null
+  tags?: { mode: BulkTagMode; values: string[] }
+  notes?: string
+  proxy_id?: string | null
+  start_url?: string
+  timezone?: string
+  languages?: string[]
+  webrtc_policy?: string
+}
+
 export interface ManagedBrowserResponse {
   browser: string
   buildId: string

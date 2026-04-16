@@ -65,8 +65,12 @@ export interface LuxAPI {
   deleteProfile(id: string): Promise<void>
   duplicateProfile(id: string): Promise<Profile>
 
-  launchBrowser(profileId: string): Promise<{ pid: number }>
+  launchBrowser(profileId: string, opts?: { targetUrl?: string }): Promise<{ pid: number }>
   stopBrowser(profileId: string): Promise<void>
+  openUrlInProfile(
+    profileId: string,
+    targetUrl: string
+  ): Promise<{ opened: 'cdp' | 'launched'; pid?: number }>
   getRunningSessions(): Promise<SessionInfo[]>
   detectBrowsers(): Promise<Record<string, string>>
 
