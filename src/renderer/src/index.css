@@ -171,3 +171,27 @@ input[type="number"]::-webkit-outer-spin-button {
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
+/* Update progress bar shimmer */
+.shimmer-bar {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-accent) 0%,
+    var(--color-accent-dim) 40%,
+    #9b7eff 50%,
+    var(--color-accent-dim) 60%,
+    var(--color-accent) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+/* Pulsing glow for CTA buttons */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 20px var(--color-accent-glow); }
+  50% { box-shadow: 0 0 30px var(--color-accent-glow), 0 0 60px var(--color-accent-glow); }
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+

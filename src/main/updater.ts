@@ -21,7 +21,12 @@ export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Databas
     }
   })
 
+  let lastProgressSend = 0
+
   autoUpdater.on('download-progress', (progress) => {
+    const now = Date.now()
+    if (now - lastProgressSend < 500 && progress.percent < 100) return
+    lastProgressSend = now
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update:download-progress', {
         percent: Math.round(progress.percent)
@@ -58,15 +63,15 @@ export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Databas
   }
 
   if (autoCheckEnabled) {
-    // Check 3 seconds after launch
+    // Check 10 seconds after launch
     setTimeout(() => {
       autoUpdater.checkForUpdates().catch(() => {})
-    }, 3000)
+    }, 10_000)
 
-    // Re-check every 30 minutes
+    // Re-check every 2 hours
     checkInterval = setInterval(() => {
       autoUpdater.checkForUpdates().catch(() => {})
-    }, 30 * 60 * 1000)
+    }, 2 * 60 * 60 * 1000)
   }
 }
 

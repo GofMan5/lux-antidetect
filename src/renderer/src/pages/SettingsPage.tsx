@@ -849,7 +849,7 @@ function AboutTab({
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-content">Current version</p>
-              <p className="text-xs text-muted font-mono mt-0.5">v1.0.8</p>
+              <p className="text-xs text-muted font-mono mt-0.5">v{__APP_VERSION__}</p>
             </div>
             <Button
               variant="secondary"

@@ -1,66 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
-import { LayoutGrid, Globe, Settings, Shield, Download, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react'
+import { LayoutGrid, Globe, Settings, Shield, ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { Tooltip } from '@renderer/components/ui/Tooltip'
 import { NotificationCenter } from './NotificationCenter'
+import { UpdateNotification } from './UpdateNotification'
 
 const NAV_ITEMS = [
   { to: '/profiles', label: 'Profiles', icon: LayoutGrid },
   { to: '/proxies', label: 'Proxies', icon: Globe },
   { to: '/settings', label: 'Settings', icon: Settings }
 ] as const
-
-function UpdateBanner(): React.JSX.Element | null {
-  const [updateReady, setUpdateReady] = useState<string | null>(null)
-  const [downloading, setDownloading] = useState<number | null>(null)
-
-  useEffect(() => {
-    const unsubs = [
-      window.api.onUpdateAvailable(() => setDownloading(0)),
-      window.api.onUpdateProgress((data) => setDownloading(data.percent)),
-      window.api.onUpdateDownloaded((data) => {
-        setDownloading(null)
-        setUpdateReady(data.version)
-      })
-    ]
-    return () => unsubs.forEach((fn) => fn())
-  }, [])
-
-  if (downloading !== null) {
-    return (
-      <div className="mx-2 mb-1 rounded-[--radius-md] bg-accent/10 border border-accent/20 px-3 py-2">
-        <div className="flex items-center gap-2 text-[11px] text-accent font-medium">
-          <Download className="h-3.5 w-3.5 animate-pulse" />
-          <span>Updating… {Math.round(downloading)}%</span>
-        </div>
-        <div className="mt-1.5 h-1 rounded-full bg-surface overflow-hidden">
-          <div
-            className="h-full bg-accent rounded-full transition-all duration-300"
-            style={{ width: `${Math.round(downloading)}%` }}
-          />
-        </div>
-      </div>
-    )
-  }
-
-  if (!updateReady) return null
-
-  return (
-    <div className="mx-2 mb-1 rounded-[--radius-md] bg-accent/10 border border-accent/20 px-3 py-2">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] text-accent font-medium">v{updateReady} ready</span>
-        <button
-          onClick={() => window.api.installUpdate()}
-          className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:text-white transition-colors"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Restart
-        </button>
-      </div>
-    </div>
-  )
-}
 
 export function Layout(): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
@@ -142,8 +92,6 @@ export function Layout(): React.JSX.Element {
             <NotificationCenter />
           </div>
 
-          <UpdateBanner />
-
           {/* Collapse toggle */}
           <button
             onClick={() => setCollapsed(!collapsed)}
@@ -167,7 +115,7 @@ export function Layout(): React.JSX.Element {
           {/* Version badge */}
           {!collapsed && (
             <div className="px-3 py-2 text-[10px] text-muted/40 border-t border-edge/30 font-mono tracking-wide">
-              v1.0.8
+              v{__APP_VERSION__}
             </div>
           )}
         </div>
@@ -177,6 +125,8 @@ export function Layout(): React.JSX.Element {
       <main className="flex-1 min-w-0 overflow-y-auto bg-surface flex flex-col">
         <Outlet />
       </main>
+
+      <UpdateNotification />
     </div>
   )
 }

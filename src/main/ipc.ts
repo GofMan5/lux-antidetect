@@ -411,7 +411,14 @@ export function registerIpcHandlers(
   })
 
   // Auto-updates
-  ipcMain.handle('check-for-updates', () => checkForUpdates())
+  ipcMain.handle('check-for-updates', async () => {
+    try {
+      await checkForUpdates()
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Update check failed' }
+    }
+  })
   ipcMain.handle('install-update', () => installUpdate())
 
   // Browser management (download / list / remove)
