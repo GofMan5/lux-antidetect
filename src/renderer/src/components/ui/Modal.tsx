@@ -54,7 +54,7 @@ export function Modal({ open, onClose, title, description, children, actions, si
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[500] flex items-center justify-center">
+    <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 sm:p-6">
       <div className={cn(OVERLAY, 'animate-fadeIn')} onClick={onClose} />
       <div
         ref={panelRef}
@@ -63,6 +63,7 @@ export function Modal({ open, onClose, title, description, children, actions, si
         aria-labelledby={title ? titleId : undefined}
         className={cn(
           'relative z-10 w-full rounded-[--radius-xl] bg-card border border-edge p-6 shadow-2xl animate-scaleIn',
+          'max-h-[calc(100dvh-2rem)] overflow-y-auto',
           sizeStyles[size]
         )}
       >

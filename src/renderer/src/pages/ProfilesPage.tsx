@@ -11,6 +11,7 @@ import { useProxiesStore } from '../stores/proxies'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
 import { ProfileEditorPanel, type InitialFingerprint } from './ProfileEditorPage'
+import { AutomationModal } from '../components/profile/AutomationModal'
 import { Button, Badge, SearchInput, DropdownMenu, EmptyState, Tooltip, Select } from '../components/ui'
 import type { DropdownMenuItem } from '../components/ui'
 import { cn } from '../lib/utils'
@@ -233,6 +234,9 @@ export function ProfilesPage() {
   // the editor form opens with the correct browser_type (avoids UA/platform
   // mismatch warnings for Firefox/Edge presets).
   const [pendingBrowser, setPendingBrowser] = useState<BrowserType | null>(null)
+
+  // Automation modal state
+  const [automationFor, setAutomationFor] = useState<{ id: string; name: string } | null>(null)
 
   // Virtual scroll
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -480,16 +484,6 @@ export function ProfilesPage() {
     input.click()
   }
 
-  const handleCopyCdpInfo = async (profileId: string): Promise<void> => {
-    try {
-      const info = await window.api.getCdpInfo(profileId)
-      await navigator.clipboard.writeText(info.wsEndpoint)
-      addToast(`CDP endpoint copied  port ${info.port}`, 'success')
-    } catch (err) {
-      addToast(`CDP info: ${err instanceof Error ? err.message : 'Unavailable'}`, 'error')
-    }
-  }
-
   const handleScreenshot = async (profileId: string): Promise<void> => {
     try {
       const base64 = await window.api.captureScreenshot(profileId)
@@ -729,9 +723,10 @@ export function ProfilesPage() {
 
   // --- Row action dropdown items ---------------------------------------------
 
-  const getRowActions = useCallback((profileId: string, profileName: string, status: ProfileStatus): DropdownMenuItem[] => {
+  const getRowActions = useCallback((profileId: string, profileName: string, status: ProfileStatus, browserType: BrowserType): DropdownMenuItem[] => {
     const isRunning = status === 'running'
     const isTransitioning = status === 'starting' || status === 'stopping'
+    const supportsAutomation = browserType !== 'firefox'
 
     const items: DropdownMenuItem[] = []
 
@@ -751,7 +746,14 @@ export function ProfilesPage() {
       items.push(
         { label: 'Export Cookies', icon: <Download className="h-4 w-4" />, onClick: () => handleExportCookies(profileId, 'json') },
         { label: 'Import Cookies', icon: <Upload className="h-4 w-4" />, onClick: () => handleImportCookies(profileId) },
-        { label: 'Copy CDP Endpoint', icon: <Terminal className="h-4 w-4" />, onClick: () => handleCopyCdpInfo(profileId) },
+        {
+          label: supportsAutomation ? 'Automation…' : 'Automation… (Chromium only)',
+          icon: <Terminal className="h-4 w-4" />,
+          disabled: !supportsAutomation,
+          onClick: () => {
+            setAutomationFor({ id: profileId, name: profileName })
+          }
+        },
         { label: 'Screenshot', icon: <Camera className="h-4 w-4" />, onClick: () => handleScreenshot(profileId) }
       )
     }
@@ -1185,7 +1187,7 @@ export function ProfilesPage() {
                                     <MoreHorizontal className="h-4 w-4" />
                                   </button>
                                 }
-                                items={getRowActions(profile.id, profile.name, profile.status)}
+                                items={getRowActions(profile.id, profile.name, profile.status, profile.browser_type)}
                               />
                             </td>
                           </tr>
@@ -1221,6 +1223,14 @@ export function ProfilesPage() {
             />
           </div>
         </div>
+      )}
+
+      {automationFor && (
+        <AutomationModal
+          open={!!automationFor}
+          onClose={() => setAutomationFor(null)}
+          profileId={automationFor.id}
+        />
       )}
     </div>
   )
