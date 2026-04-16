@@ -105,7 +105,7 @@ interface ProfileEditorPanelProps {
   onCancel: () => void
 }
 
-function getFingerprintStrength(watchedFields: [string, string, string, string, string]): { score: number; issues: string[] } {
+function getFingerprintStrength(watchedFields: [string, string, string | number, string, string]): { score: number; issues: string[] } {
   const [ua, platform, pixelRatio, webglVendor, timezone] = watchedFields
   const issues: string[] = []
 
@@ -475,7 +475,7 @@ export function ProfileEditorPanel({
               {(() => {
                 const [ua] = watchedData
                 if (!ua) return null
-                const { score, issues } = getFingerprintStrength(watchedData as [string, string, string, string, string])
+                const { score, issues } = getFingerprintStrength(watchedData as [string, string, string | number, string, string])
                 const color = score >= 80 ? 'text-ok' : score >= 50 ? 'text-warn' : 'text-err'
                 const bgColor = score >= 80 ? 'bg-ok' : score >= 50 ? 'bg-warn' : 'bg-err'
                 return (

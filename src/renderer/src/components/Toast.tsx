@@ -52,7 +52,7 @@ const icons: Record<ToastType, string> = {
 
 function ToastItem({ toast }: { toast: Toast }) {
   const remove = useToastStore((s) => s.removeToast)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   useEffect(() => {
     timerRef.current = setTimeout(() => remove(toast.id), 3000)

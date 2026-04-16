@@ -12,19 +12,7 @@ import { getManagedBrowserPath } from './browser-manager'
 
 const execFileAsync = promisify(execFile)
 
-// Module-level mainWindow ref — updated via setMainWindow() on macOS activate
-let _mainWindow: Electron.BrowserWindow | null = null
 
-export function setMainWindow(win: Electron.BrowserWindow): void {
-  _mainWindow = win
-}
-
-function getWin(win: Electron.BrowserWindow | null): Electron.BrowserWindow | null {
-  // Prefer the passed-in ref, fall back to module-level
-  const w = win ?? _mainWindow
-  if (w && !w.isDestroyed()) return w
-  return null
-}
 
 const BROWSER_PATHS: Record<BrowserType, string[]> = {
   chromium: [

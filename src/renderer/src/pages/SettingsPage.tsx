@@ -73,7 +73,7 @@ export function SettingsPage(): React.JSX.Element {
 
   const [sessionTimeout, setSessionTimeout] = useState(0)
 
-  const sessionTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const sessionTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   const [showCustomEditor, setShowCustomEditor] = useState(false)
   const [customName, setCustomName] = useState('')

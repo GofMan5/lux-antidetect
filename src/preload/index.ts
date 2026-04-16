@@ -124,8 +124,8 @@ const api: LuxAPI = {
     ipcRenderer.on('browser-download:progress', handler)
     return () => { ipcRenderer.removeListener('browser-download:progress', handler) }
   },
-  onBrowserDownloadComplete: (callback: (data: Record<string, unknown>) => void) => {
-    const handler = (_: unknown, data: Record<string, unknown>): void => callback(data)
+  onBrowserDownloadComplete: (callback: (data: { browser: string; buildId: string; platform: string; executablePath: string; tags: string[] }) => void) => {
+    const handler = (_: unknown, data: { browser: string; buildId: string; platform: string; executablePath: string; tags: string[] }): void => callback(data)
     ipcRenderer.on('browser-download:complete', handler)
     return () => { ipcRenderer.removeListener('browser-download:complete', handler) }
   },

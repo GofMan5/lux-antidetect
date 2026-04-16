@@ -4,7 +4,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { initDatabase } from './db'
 import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
-import { killAllBrowsers, setMainWindow as setBrowserMainWindow } from './browser'
+import { killAllBrowsers } from './browser'
 import { initAutoUpdater } from './updater'
 import { initBrowserManager, setMainWindow as setBrowserManagerMainWindow } from './browser-manager'
 
@@ -90,7 +90,6 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow()
       // Update references instead of re-registering
-      setBrowserMainWindow(mainWindow)
       setBrowserManagerMainWindow(mainWindow)
       initAutoUpdater(mainWindow)
     }

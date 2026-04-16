@@ -12,7 +12,8 @@ import {
   detectBrowserPlatform,
   Browser,
   Cache,
-  type InstalledBrowser
+  type InstalledBrowser,
+  type BrowserPlatform
 } from '@puppeteer/browsers'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
@@ -49,12 +50,6 @@ const BROWSER_TYPE_MAP: Record<BrowserType, Browser> = {
   edge: Browser.CHROME         // Edge not available — fallback to Chrome
 }
 
-// Reverse map for display
-const PUPPET_TO_LUX: Record<string, BrowserType> = {
-  [Browser.CHROME]: 'chromium',
-  [Browser.CHROMIUM]: 'chromium',
-  [Browser.FIREFOX]: 'firefox'
-}
 
 /* -------------------------------------------------------------------------- */
 /*  State                                                                     */
@@ -80,7 +75,7 @@ export function getBrowsersDir(): string {
   return browsersDir
 }
 
-function getPlatform(): string {
+function getPlatform(): BrowserPlatform {
   const p = detectBrowserPlatform()
   if (!p) throw new Error('Unsupported platform for browser downloads')
   return p
@@ -206,7 +201,7 @@ export async function removeManagedBrowser(browser: string, buildId: string): Pr
     cacheDir: browsersDir,
     browser: browser as Browser,
     buildId,
-    platform
+    platform: platform as BrowserPlatform
   })
 }
 
