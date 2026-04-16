@@ -57,6 +57,12 @@ export interface ProxyResponse {
   check_error: string | null
   country: string | null
   group_tag: string | null
+  timezone: string | null
+  city: string | null
+  latitude: number | null
+  longitude: number | null
+  accuracy_radius: number | null
+  locale: string | null
   created_at: string
 }
 

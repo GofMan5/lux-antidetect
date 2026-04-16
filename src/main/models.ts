@@ -57,6 +57,12 @@ export interface Proxy {
   check_error: string | null
   country: string | null
   group_tag: string | null
+  timezone: string | null
+  city: string | null
+  latitude: number | null
+  longitude: number | null
+  accuracy_radius: number | null
+  locale: string | null
   created_at: string
 }
 
@@ -74,6 +80,12 @@ export interface ProxyResponse {
   check_error: string | null
   country: string | null
   group_tag: string | null
+  timezone: string | null
+  city: string | null
+  latitude: number | null
+  longitude: number | null
+  accuracy_radius: number | null
+  locale: string | null
   created_at: string
 }
 
@@ -213,6 +225,12 @@ export function toProxyResponse(row: Proxy): ProxyResponse {
     check_error: row.check_error ?? null,
     country: row.country ?? null,
     group_tag: row.group_tag ?? null,
+    timezone: row.timezone ?? null,
+    city: row.city ?? null,
+    latitude: row.latitude ?? null,
+    longitude: row.longitude ?? null,
+    accuracy_radius: row.accuracy_radius ?? null,
+    locale: row.locale ?? null,
     created_at: row.created_at
   }
 }

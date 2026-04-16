@@ -401,7 +401,7 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 function normalizeCanvasNoiseSeed(value: number | undefined): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
     ? value
-    : Math.floor(Math.random() * 2147483647)
+    : Math.floor(Math.random() * 0x7FFFFFFF)
 }
 
 function normalizeAudioNoise(value: number | undefined): number {
@@ -695,8 +695,72 @@ function generateMobileFingerprint(
   })
 }
 
-export function generateFingerprintForApi(browserType: BrowserType): Omit<Fingerprint, 'id' | 'profile_id'> {
-  return generateDefaultFingerprint(browserType)
+// ─── Platform font allow-lists (used as fallback when profile list is empty) ───
+
+const FONT_LIST_WINDOWS: readonly string[] = [
+  'Arial', 'Arial Black', 'Arial Narrow', 'Arial Unicode MS', 'Bahnschrift',
+  'Calibri', 'Calibri Light', 'Cambria', 'Cambria Math', 'Candara', 'Cascadia Code',
+  'Cascadia Mono', 'Comic Sans MS', 'Consolas', 'Constantia', 'Corbel',
+  'Courier', 'Courier New', 'Ebrima', 'Franklin Gothic Medium', 'Gabriola',
+  'Gadugi', 'Georgia', 'HoloLens MDL2 Assets', 'Impact', 'Ink Free',
+  'Javanese Text', 'Leelawadee UI', 'Lucida Console', 'Lucida Sans Unicode',
+  'Malgun Gothic', 'Marlett', 'Microsoft Himalaya', 'Microsoft JhengHei',
+  'Microsoft JhengHei UI', 'Microsoft New Tai Lue', 'Microsoft PhagsPa',
+  'Microsoft Sans Serif', 'Microsoft Tai Le', 'Microsoft YaHei',
+  'Microsoft YaHei UI', 'Microsoft Yi Baiti', 'MingLiU-ExtB', 'Mongolian Baiti',
+  'MS Gothic', 'MS PGothic', 'MS UI Gothic', 'MV Boli', 'Myanmar Text',
+  'Nirmala UI', 'Palatino Linotype', 'Segoe Fluent Icons', 'Segoe MDL2 Assets',
+  'Segoe Print', 'Segoe Script', 'Segoe UI', 'Segoe UI Black',
+  'Segoe UI Emoji', 'Segoe UI Historic', 'Segoe UI Light', 'Segoe UI Semibold',
+  'Segoe UI Semilight', 'Segoe UI Symbol', 'Segoe UI Variable', 'SimSun',
+  'Sitka', 'Sylfaen', 'Symbol', 'Tahoma', 'Times New Roman', 'Trebuchet MS',
+  'Verdana', 'Webdings', 'Wingdings', 'Yu Gothic', 'Yu Gothic UI'
+]
+
+const FONT_LIST_MACOS: readonly string[] = [
+  'American Typewriter', 'Andale Mono', 'Apple Chancery', 'Apple Color Emoji',
+  'Apple SD Gothic Neo', 'Apple Symbols', 'AppleGothic', 'AppleMyungjo',
+  'Arial', 'Arial Black', 'Arial Narrow', 'Arial Rounded MT Bold',
+  'Arial Unicode MS', 'Avenir', 'Avenir Next', 'Avenir Next Condensed',
+  'Baskerville', 'Big Caslon', 'Bodoni 72', 'Bodoni 72 Oldstyle', 'Bodoni 72 Smallcaps',
+  'Bradley Hand', 'Chalkboard', 'Chalkboard SE', 'Chalkduster', 'Charter',
+  'Cochin', 'Comic Sans MS', 'Copperplate', 'Courier', 'Courier New',
+  'Didot', 'DIN Alternate', 'DIN Condensed', 'Futura', 'Geneva',
+  'Georgia', 'Gill Sans', 'Helvetica', 'Helvetica Neue', 'Herculanum',
+  'Hiragino Maru Gothic ProN', 'Hiragino Mincho ProN', 'Hiragino Sans',
+  'Hoefler Text', 'Impact', 'Kefa', 'Lucida Grande', 'Luminari',
+  'Marker Felt', 'Menlo', 'Monaco', 'Noteworthy', 'Optima',
+  'Palatino', 'Papyrus', 'Phosphate', 'Rockwell', 'Savoye LET',
+  'SF Pro', 'SF Pro Display', 'SF Pro Text', 'SignPainter', 'Skia',
+  'Snell Roundhand', 'Symbol', 'Tahoma', 'Times', 'Times New Roman',
+  'Trattatello', 'Trebuchet MS', 'Verdana', 'Zapf Dingbats', 'Zapfino'
+]
+
+const FONT_LIST_LINUX: readonly string[] = [
+  'Bitstream Charter', 'Bitstream Vera Sans', 'Bitstream Vera Sans Mono',
+  'Bitstream Vera Serif', 'Cantarell', 'Century Schoolbook L', 'Courier 10 Pitch',
+  'DejaVu Math TeX Gyre', 'DejaVu Sans', 'DejaVu Sans Condensed',
+  'DejaVu Sans Light', 'DejaVu Sans Mono', 'DejaVu Serif', 'DejaVu Serif Condensed',
+  'Dingbats', 'Droid Sans', 'Droid Sans Mono', 'Droid Serif', 'FreeMono',
+  'FreeSans', 'FreeSerif', 'Liberation Mono', 'Liberation Sans',
+  'Liberation Sans Narrow', 'Liberation Serif', 'Luxi Mono', 'Luxi Sans',
+  'Luxi Serif', 'NanumGothic', 'NanumMyeongjo', 'Nimbus Mono L',
+  'Nimbus Mono PS', 'Nimbus Roman', 'Nimbus Roman No9 L', 'Nimbus Sans',
+  'Nimbus Sans L', 'Nimbus Sans Narrow', 'Noto Color Emoji', 'Noto Mono',
+  'Noto Sans', 'Noto Sans CJK JP', 'Noto Sans CJK KR', 'Noto Sans CJK SC',
+  'Noto Sans CJK TC', 'Noto Sans Mono', 'Noto Sans Mono CJK JP',
+  'Noto Serif', 'Noto Serif CJK JP', 'P052', 'Padauk', 'Piboto',
+  'Standard Symbols L', 'Standard Symbols PS', 'Symbola', 'Takao Gothic',
+  'Takao Mincho', 'Takao PGothic', 'Takao PMincho', 'Tlwg Mono',
+  'Tlwg Typewriter', 'Tlwg Typist', 'Tlwg Typo', 'Ubuntu',
+  'Ubuntu Condensed', 'Ubuntu Light', 'Ubuntu Mono', 'URW Bookman',
+  'URW Gothic', 'Z003'
+]
+
+function defaultFontListFor(platform: string): readonly string[] {
+  if (platform === 'MacIntel') return FONT_LIST_MACOS
+  if (platform.startsWith('Linux')) return FONT_LIST_LINUX
+  return FONT_LIST_WINDOWS
 }
 
 // ─── Injection script ────────────────────────────────────────────────────
@@ -708,9 +772,12 @@ export function buildInjectionScript(inputFp: Fingerprint): string {
 
   let fontsJson = fp.fonts_list
   try {
-    JSON.parse(fontsJson) // validate
+    const parsed: unknown = JSON.parse(fontsJson)
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      fontsJson = JSON.stringify(defaultFontListFor(fp.platform))
+    }
   } catch {
-    fontsJson = '[]'
+    fontsJson = JSON.stringify(defaultFontListFor(fp.platform))
   }
 
   const isChrome = fp.user_agent.includes('Chrome/')
@@ -911,15 +978,88 @@ var _gl2Exts=[
 if(_isNvidia||_isAmd)_gl2Exts.push('WEBGL_compressed_texture_astc');
 if(_isApple)_gl2Exts=_gl2Exts.filter(function(e){return e!=='EXT_disjoint_timer_query_webgl2'&&e!=='EXT_texture_compression_rgtc';});
 
-function _hookWebGL(proto,exts){
+// Realistic Chromium/ANGLE parameter values (well-known stable caps for modern desktop GPUs).
+// Values chosen to match what Chrome reports on mid-range NVIDIA/AMD/Intel/Apple hardware.
+// Array values are pre-baked as typed arrays (Float32/Int32) matching what Chrome
+// returns so the getParameter hook becomes a single lookup + clone.
+var _wgl1Params={};
+_wgl1Params[0x0D33]=16384;                                                     // MAX_TEXTURE_SIZE
+_wgl1Params[0x0D3A]=new Int32Array([32767,32767]);                             // MAX_VIEWPORT_DIMS
+_wgl1Params[0x84E8]=16384;                                                     // MAX_RENDERBUFFER_SIZE
+_wgl1Params[0x8869]=16;                                                        // MAX_VERTEX_ATTRIBS
+_wgl1Params[0x8DFB]=_isIntel?1024:4096;                                        // MAX_VERTEX_UNIFORM_VECTORS
+_wgl1Params[0x8DFD]=1024;                                                      // MAX_FRAGMENT_UNIFORM_VECTORS
+_wgl1Params[0x8DFC]=30;                                                        // MAX_VARYING_VECTORS
+_wgl1Params[0x8872]=16;                                                        // MAX_TEXTURE_IMAGE_UNITS
+_wgl1Params[0x8B4D]=32;                                                        // MAX_COMBINED_TEXTURE_IMAGE_UNITS
+_wgl1Params[0x8B4C]=16;                                                        // MAX_VERTEX_TEXTURE_IMAGE_UNITS
+_wgl1Params[0x851C]=16384;                                                     // MAX_CUBE_MAP_TEXTURE_SIZE
+_wgl1Params[0x846E]=new Float32Array([1,1]);                                   // ALIASED_LINE_WIDTH_RANGE
+_wgl1Params[0x846D]=new Float32Array([1,1024]);                                // ALIASED_POINT_SIZE_RANGE
+_wgl1Params[0x8B8C]='WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';      // SHADING_LANGUAGE_VERSION
+_wgl1Params[0x1F02]='WebGL 1.0 (OpenGL ES 2.0 Chromium)';                      // VERSION
+// Fold vendor/renderer into the params table so the hook is a single-lookup path.
+_wgl1Params[0x9245]=_wglVendor;                                                // UNMASKED_VENDOR_WEBGL
+_wgl1Params[0x9246]=_wglRenderer;                                              // UNMASKED_RENDERER_WEBGL
+_wgl1Params[0x1F00]=_wglVendor;                                                // VENDOR
+_wgl1Params[0x1F01]=_wglRenderer;                                              // RENDERER
+
+var _wgl2Params={};
+for(var _wgp1 in _wgl1Params)_wgl2Params[_wgp1]=_wgl1Params[_wgp1];
+_wgl2Params[0x8B8C]='WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)';     // SHADING_LANGUAGE_VERSION
+_wgl2Params[0x1F02]='WebGL 2.0 (OpenGL ES 3.0 Chromium)';                      // VERSION
+_wgl2Params[0x8073]=2048;                                                      // MAX_3D_TEXTURE_SIZE
+_wgl2Params[0x8824]=8;                                                         // MAX_DRAW_BUFFERS
+_wgl2Params[0x8CDF]=8;                                                         // MAX_COLOR_ATTACHMENTS
+_wgl2Params[0x8D57]=_isIntel?4:8;                                              // MAX_SAMPLES
+_wgl2Params[0x8D6B]=4294967294;                                                // MAX_ELEMENT_INDEX
+_wgl2Params[0x8A2F]=72;                                                        // MAX_UNIFORM_BUFFER_BINDINGS
+_wgl2Params[0x8B4A]=(_isIntel?1024:4096)*4;                                    // MAX_VERTEX_UNIFORM_COMPONENTS
+_wgl2Params[0x8B49]=4096;                                                      // MAX_FRAGMENT_UNIFORM_COMPONENTS
+_wgl2Params[0x9122]=64;                                                        // MAX_VERTEX_OUTPUT_COMPONENTS
+_wgl2Params[0x9125]=60;                                                        // MAX_FRAGMENT_INPUT_COMPONENTS
+_wgl2Params[0x9111]=1000000000;                                                // MAX_SERVER_WAIT_TIMEOUT (1s in ns)
+_wgl2Params[0x8C8A]=64;                                                        // MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS
+_wgl2Params[0x8C8B]=4;                                                         // MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS
+_wgl2Params[0x8C80]=4;                                                         // MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS
+
+// IEEE-754 single precision is what all modern GPUs report via ANGLE/Chromium.
+// Map keyed by (shaderType<<16)|precisionType → [rangeMin,rangeMax,precision].
+var _wglPrecisions={};
+(function(){
+  var VERT=0x8B31,FRAG=0x8B30;
+  var FLOATS=[0x8DF0,0x8DF1,0x8DF2]; // LOW_FLOAT, MEDIUM_FLOAT, HIGH_FLOAT
+  var INTS=[0x8DF3,0x8DF4,0x8DF5];   // LOW_INT, MEDIUM_INT, HIGH_INT
+  for(var _si=0;_si<2;_si++){
+    var s=_si?FRAG:VERT;
+    for(var _fi=0;_fi<FLOATS.length;_fi++)_wglPrecisions[(s<<16)|FLOATS[_fi]]=[127,127,23];
+    for(var _ii=0;_ii<INTS.length;_ii++)_wglPrecisions[(s<<16)|INTS[_ii]]=[31,30,0];
+  }
+})();
+
+function _hookWebGL(proto,exts,params){
   var origGetParam=proto.getParameter;
   _cloak(proto,'getParameter',function(p){
-    if(p===0x9245)return _wglVendor;
-    if(p===0x9246)return _wglRenderer;
-    if(p===0x1F01)return _wglRenderer;
-    if(p===0x1F00)return _wglVendor;
+    if(Object.prototype.hasOwnProperty.call(params,p)){
+      var v=params[p];
+      // Clone typed arrays so callers can't mutate the shared spoof value.
+      if(ArrayBuffer.isView(v))return v.slice();
+      return v;
+    }
     return origGetParam.call(this,p);
   });
+
+  if(proto.getShaderPrecisionFormat){
+    var origGetPrec=proto.getShaderPrecisionFormat;
+    _cloak(proto,'getShaderPrecisionFormat',function(shaderType,precisionType){
+      var key=(shaderType<<16)|precisionType;
+      var v=_wglPrecisions[key];
+      if(!v)return origGetPrec.call(this,shaderType,precisionType);
+      // Return a fresh plain object so callers can't observe mutation of the
+      // real WebGLShaderPrecisionFormat and detect the spoof via identity.
+      return{rangeMin:v[0],rangeMax:v[1],precision:v[2]};
+    });
+  }
 
   var origGetExt=proto.getExtension;
   _cloak(proto,'getExtension',function(name){
@@ -935,8 +1075,8 @@ function _hookWebGL(proto,exts){
     return exts.slice();
   });
 }
-if(typeof WebGLRenderingContext!=='undefined')_hookWebGL(WebGLRenderingContext.prototype,_baseExts);
-if(typeof WebGL2RenderingContext!=='undefined')_hookWebGL(WebGL2RenderingContext.prototype,_gl2Exts);
+if(typeof WebGLRenderingContext!=='undefined')_hookWebGL(WebGLRenderingContext.prototype,_baseExts,_wgl1Params);
+if(typeof WebGL2RenderingContext!=='undefined')_hookWebGL(WebGL2RenderingContext.prototype,_gl2Exts,_wgl2Params);
 
 // ═══════════════════════════════════════════
 // 4b. WebGPU fingerprint spoofing
@@ -1095,19 +1235,160 @@ if(typeof OffscreenCanvas!=='undefined'){
 // 6. Font enumeration protection
 // ═══════════════════════════════════════════
 var _allowedFonts=new Set(${fontsJson});
+// Case-insensitive allow-list so CSS (which is case-insensitive for family names)
+// like 'font-family: arial' matches as 'Arial'.
+var _allowedFontsLower=new Set();
+_allowedFonts.forEach(function(n){_allowedFontsLower.add(String(n).toLowerCase());});
+// Null-prototype map to avoid any prototype-pollution surprises.
+var _genericFontFamilies=Object.assign(Object.create(null),{'serif':1,'sans-serif':1,'monospace':1,'cursive':1,'fantasy':1,'system-ui':1,'ui-serif':1,'ui-sans-serif':1,'ui-monospace':1,'ui-rounded':1,'math':1,'emoji':1,'fangsong':1,'-apple-system':1,'blinkmacsystemfont':1});
 
-if(typeof FontFaceSet!=='undefined'&&document.fonts){
-  var _origFontCheck=FontFaceSet.prototype.check;
-  _cloak(FontFaceSet.prototype,'check',function(font,text){
-    var m=font.match(/\\d+(?:px|pt|em|rem|%)\\s+['"]*([^'",$]+)/i);
-    if(m){
-      var fName=m[1].trim();
-      if(fName&&!_allowedFonts.has(fName)){
-        var generic=['serif','sans-serif','monospace','cursive','fantasy','system-ui'];
-        if(generic.indexOf(fName)===-1)return false;
+// Snapshot the ORIGINAL FontFaceSet.check so we can ask "did the page actually
+// load this font via @font-face?" without triggering our own hook.
+var _origFontCheck=(typeof FontFaceSet!=='undefined'&&FontFaceSet.prototype&&FontFaceSet.prototype.check)?FontFaceSet.prototype.check:null;
+function _isPageLoadedFont(family){
+  if(!_origFontCheck||!document.fonts)return false;
+  try{return !!_origFontCheck.call(document.fonts,'12px "'+String(family).replace(/"/g,'\\\\"')+'"');}catch(e){return false;}
+}
+function _familyAllowed(family){
+  var lower=String(family).toLowerCase();
+  if(_genericFontFamilies[lower])return true;
+  if(_allowedFontsLower.has(lower))return true;
+  // Respect web fonts the page actually loaded so Inter/Roboto/etc. aren't neutered.
+  if(_isPageLoadedFont(family))return true;
+  return false;
+}
+
+// Parse a CSS font shorthand and return the ordered family list.
+function _parseFontFamilies(fontStr){
+  if(typeof fontStr!=='string')return [];
+  var m=fontStr.match(/\\d+(?:\\.\\d+)?(?:px|pt|em|rem|%|ex|ch|vw|vh|vmin|vmax|cm|mm|in|pc)\\b/i);
+  if(!m||m.index===undefined)return [];
+  // Strip the size token (plus optional /line-height) and anything preceding.
+  var tail=fontStr.slice(m.index+m[0].length).replace(/^\\s*\\/\\s*\\S+/,'').trim();
+  if(!tail)return [];
+  var parts=tail.split(',');
+  var out=[];
+  for(var i=0;i<parts.length;i++){
+    var f=parts[i].trim().replace(/^['"]|['"]$/g,'');
+    if(f)out.push(f);
+  }
+  return out;
+}
+
+// Bounded FIFO cache so repeated measureText/FontFaceSet.check calls don't
+// re-parse+sanitize the same font shorthand.
+var _FONT_CACHE_LIMIT=128;
+function _makeFontCache(){
+  var map=Object.create(null);
+  var order=[];
+  return{
+    get:function(k){return Object.prototype.hasOwnProperty.call(map,k)?map[k]:undefined;},
+    has:function(k){return Object.prototype.hasOwnProperty.call(map,k);},
+    set:function(k,v){
+      if(!Object.prototype.hasOwnProperty.call(map,k)){
+        if(order.length>=_FONT_CACHE_LIMIT){
+          var evict=order.shift();
+          delete map[evict];
+        }
+        order.push(k);
       }
+      map[k]=v;
+    }
+  };
+}
+var _sanitizeCache=_makeFontCache();
+var _fontCheckCache=_makeFontCache();
+
+// Rewrite the family list to drop any family not in the allow-list so detectors
+// that measure a probe font against a generic fallback get identical widths.
+function _sanitizeFontString(fontStr){
+  if(typeof fontStr==='string'&&_sanitizeCache.has(fontStr))return _sanitizeCache.get(fontStr);
+  var result=_computeSanitizedFontString(fontStr);
+  if(typeof fontStr==='string')_sanitizeCache.set(fontStr,result);
+  return result;
+}
+function _computeSanitizedFontString(fontStr){
+  var families=_parseFontFamilies(fontStr);
+  if(!families.length)return null;
+  var filtered=[],hasGeneric=false,changed=false;
+  for(var i=0;i<families.length;i++){
+    var f=families[i];
+    var lower=f.toLowerCase();
+    if(_genericFontFamilies[lower]){filtered.push(f);hasGeneric=true;continue;}
+    if(_familyAllowed(f)){filtered.push(f);continue;}
+    changed=true;
+  }
+  if(!changed)return null;
+  if(!hasGeneric)filtered.push('sans-serif');
+  var quoted=[];
+  for(var j=0;j<filtered.length;j++){
+    var g=filtered[j];
+    quoted.push(_genericFontFamilies[g.toLowerCase()]?g:('"'+g.replace(/"/g,'\\\\"')+'"'));
+  }
+  var idx=fontStr.search(/\\d+(?:\\.\\d+)?(?:px|pt|em|rem|%|ex|ch|vw|vh|vmin|vmax|cm|mm|in|pc)\\b/i);
+  if(idx<0)return null;
+  var sizeMatch=fontStr.slice(idx).match(/^\\S+(?:\\s*\\/\\s*\\S+)?/);
+  if(!sizeMatch)return null;
+  return fontStr.slice(0,idx)+sizeMatch[0]+' '+quoted.join(', ');
+}
+
+if(typeof FontFaceSet!=='undefined'&&document.fonts&&_origFontCheck){
+  _cloak(FontFaceSet.prototype,'check',function(font,text){
+    var key=typeof font==='string'?font:'';
+    if(key&&_fontCheckCache.has(key)){
+      var cached=_fontCheckCache.get(key);
+      if(cached===false)return false;
+      // cached===true → fall through to original.
+    }else{
+      var families=_parseFontFamilies(font);
+      for(var i=0;i<families.length;i++){
+        var f=families[i];
+        if(_genericFontFamilies[f.toLowerCase()])continue;
+        if(!_familyAllowed(f)){
+          if(key)_fontCheckCache.set(key,false);
+          return false;
+        }
+      }
+      if(key)_fontCheckCache.set(key,true);
     }
     return _origFontCheck.call(this,font,text||'');
+  });
+}
+
+// measureText is the classic font-enumeration sidechannel: detectors render a
+// probe font falling back to a generic, then compare widths. Force the probe
+// to resolve to the generic whenever the family is not in the allow-list so
+// widths match the fallback exactly.
+if(typeof CanvasRenderingContext2D!=='undefined'&&CanvasRenderingContext2D.prototype.measureText){
+  var _origMeasureText=CanvasRenderingContext2D.prototype.measureText;
+  _cloak(CanvasRenderingContext2D.prototype,'measureText',function(text){
+    try{
+      var sanitized=_sanitizeFontString(this.font);
+      if(sanitized){
+        var saved=this.font;
+        this.font=sanitized;
+        var m=_origMeasureText.call(this,text);
+        this.font=saved;
+        return m;
+      }
+    }catch(e){}
+    return _origMeasureText.call(this,text);
+  });
+}
+if(typeof OffscreenCanvasRenderingContext2D!=='undefined'&&OffscreenCanvasRenderingContext2D.prototype.measureText){
+  var _origOSCMeasureText=OffscreenCanvasRenderingContext2D.prototype.measureText;
+  _cloak(OffscreenCanvasRenderingContext2D.prototype,'measureText',function(text){
+    try{
+      var sanitized=_sanitizeFontString(this.font);
+      if(sanitized){
+        var saved=this.font;
+        this.font=sanitized;
+        var m=_origOSCMeasureText.call(this,text);
+        this.font=saved;
+        return m;
+      }
+    }catch(e){}
+    return _origOSCMeasureText.call(this,text);
   });
 }
 
@@ -1325,7 +1606,7 @@ if(_rtcPolicy==='disable_non_proxied_udp'){
       if(!sdp)return sdp;
       return sdp.replace(/a=candidate:[^\\r\\n]*typ\\s+(host|srflx|prflx)[^\\r\\n]*(\\r\\n|\\r|\\n)/g,'');
     }
-    function _filterIceCandidate(e){
+    function _shouldDropIceCandidate(e){
       if(e.candidate&&e.candidate.candidate){
         var c=e.candidate.candidate;
         if(c.indexOf('host')!==-1||c.indexOf('srflx')!==-1||c.indexOf('prflx')!==-1)return true;
@@ -1345,7 +1626,7 @@ if(_rtcPolicy==='disable_non_proxied_udp'){
     _cloak(_OrigRTC.prototype,'addEventListener',function(type,fn,opts){
       if(type==='icecandidate'){
         return _origAEL.call(this,type,function(e){
-          if(_filterIceCandidate(e))return;
+          if(_shouldDropIceCandidate(e))return;
           fn(e);
         },opts);
       }
@@ -1359,7 +1640,7 @@ if(_rtcPolicy==='disable_non_proxied_udp'){
       Object.defineProperty(_OrigRTC.prototype,'onicecandidate',{
         set:function(fn){
           _origOicSet.call(this,function(e){
-            if(_filterIceCandidate(e))return;
+            if(_shouldDropIceCandidate(e))return;
             if(fn)fn(e);
           });
         },

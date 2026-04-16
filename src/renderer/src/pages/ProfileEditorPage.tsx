@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -14,14 +14,20 @@ import {
   Zap,
   Check,
   AlertTriangle,
+  ShieldCheck,
+  Info,
+  MapPin,
   X,
   Plus
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
+import { useToastStore } from '../components/Toast'
+import { useConfirmStore } from '../components/ConfirmDialog'
 import { cn } from '../lib/utils'
 import { Button, Input, Select, Card, Toggle, Tabs, Badge, Tooltip } from '../components/ui'
 import { TEXTAREA, LABEL } from '../lib/ui'
+import { validateProfileFingerprint } from '../lib/fingerprint-validator'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -220,6 +226,7 @@ export function ProfileEditorPanel({
   const [testingProxy, setTestingProxy] = useState(false)
   const [proxyTestResult, setProxyTestResult] = useState<boolean | null>(null)
   const [tagInput, setTagInput] = useState('')
+  const [applyingGeo, setApplyingGeo] = useState(false)
 
   // Fingerprint section toggles (UI-only collapse / expand)
   const [webrtcOpen, setWebrtcOpen] = useState(true)
@@ -232,6 +239,8 @@ export function ProfileEditorPanel({
   const proxies = useProxiesStore((s) => s.proxies)
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
   const storeTestProxy = useProxiesStore((s) => s.testProxy)
+  const addToast = useToastStore((s) => s.addToast)
+  const confirm = useConfirmStore((s) => s.show)
 
   // -- Form ---------------------------------------------------------------
   const {
@@ -247,21 +256,26 @@ export function ProfileEditorPanel({
     defaultValues: DEFAULT_VALUES
   })
 
-  const watchedData = watch([
-    'user_agent',
-    'platform',
-    'pixel_ratio',
-    'webgl_vendor',
-    'timezone'
-  ])
+  // Watch individual primitives so memo deps stay stable across renders.
+  const watchedUserAgent = watch('user_agent')
+  const watchedPlatform = watch('platform')
+  const watchedPixelRatio = watch('pixel_ratio')
+  const watchedWebglVendor = watch('webgl_vendor')
+  const watchedTimezone = watch('timezone')
   const watchedProxyId = watch('proxy_id')
   const watchedTags = watch('tags')
-
-  const selectedProxy = proxies.find((p) => p.id === watchedProxyId)
+  const watchedLanguages = watch('languages')
+  const watchedHardware = watch('hardware_concurrency')
+  const watchedMemory = watch('device_memory')
   const screenValue = watch('screen')
+
+  const selectedProxy = useMemo(
+    () => proxies.find((p) => p.id === watchedProxyId),
+    [proxies, watchedProxyId]
+  )
+  const selectedProxyCountry = selectedProxy?.country ?? null
   const isCustomScreen = !SCREEN_PRESETS.some((p) => p.value === screenValue)
-  const timezoneValue = watch('timezone')
-  const isCustomTimezone = !(TIMEZONES as readonly string[]).includes(timezoneValue)
+  const isCustomTimezone = !(TIMEZONES as readonly string[]).includes(watchedTimezone)
 
   // -- Derived ------------------------------------------------------------
   const tagsList = watchedTags
@@ -271,31 +285,77 @@ export function ProfileEditorPanel({
         .filter(Boolean)
     : []
 
-  const proxyOptions = [
-    { value: '', label: 'No proxy' },
-    ...proxies.map((p) => ({
-      value: p.id,
-      label: `${p.name} (${p.protocol}://${p.host}:${p.port})`
-    }))
-  ]
+  const proxyOptions = useMemo(
+    () => [
+      { value: '', label: 'No proxy' },
+      ...proxies.map((p) => ({
+        value: p.id,
+        label: `${p.name} (${p.protocol}://${p.host}:${p.port})`
+      }))
+    ],
+    [proxies]
+  )
 
-  const screenOptions = [
-    ...SCREEN_PRESETS,
-    ...(isCustomScreen ? [{ value: screenValue, label: screenValue }] : [])
-  ]
+  const screenOptions = useMemo(
+    () => [
+      ...SCREEN_PRESETS,
+      ...(isCustomScreen ? [{ value: screenValue, label: screenValue }] : [])
+    ],
+    [isCustomScreen, screenValue]
+  )
 
-  const timezoneOptions = [
-    ...TIMEZONES.map((tz) => ({ value: tz, label: tz })),
-    ...(isCustomTimezone ? [{ value: timezoneValue, label: timezoneValue }] : [])
-  ]
+  const timezoneOptions = useMemo(
+    () => [
+      ...TIMEZONES.map((tz) => ({ value: tz, label: tz })),
+      ...(isCustomTimezone
+        ? [{ value: watchedTimezone, label: watchedTimezone }]
+        : [])
+    ],
+    [isCustomTimezone, watchedTimezone]
+  )
 
-  const fpStrength = (() => {
-    const [ua] = watchedData
-    if (!ua) return null
-    return getFingerprintStrength(
-      watchedData as [string, string, string | number, string, string]
-    )
-  })()
+  const fpStrength = watchedUserAgent
+    ? getFingerprintStrength([
+        watchedUserAgent,
+        watchedPlatform,
+        watchedPixelRatio,
+        watchedWebglVendor,
+        watchedTimezone
+      ])
+    : null
+
+  const validationWarnings = useMemo(
+    () =>
+      validateProfileFingerprint({
+        user_agent: watchedUserAgent ?? '',
+        platform: watchedPlatform ?? '',
+        timezone: watchedTimezone ?? '',
+        languages: watchedLanguages ?? '',
+        screen: screenValue ?? '',
+        hardware_concurrency: Number(watchedHardware ?? 0),
+        device_memory: Number(watchedMemory ?? 0),
+        webgl_vendor: watchedWebglVendor ?? '',
+        proxyCountryCode: selectedProxyCountry
+      }),
+    [
+      watchedUserAgent,
+      watchedPlatform,
+      watchedTimezone,
+      watchedLanguages,
+      screenValue,
+      watchedHardware,
+      watchedMemory,
+      watchedWebglVendor,
+      selectedProxyCountry
+    ]
+  )
+
+  const hasWarnSeverity = validationWarnings.some((w) => w.severity === 'warn')
+  const [showAllWarnings, setShowAllWarnings] = useState(false)
+  const visibleWarnings =
+    validationWarnings.length > 3 && !showAllWarnings
+      ? validationWarnings.slice(0, 3)
+      : validationWarnings
 
   // -- Effects ------------------------------------------------------------
 
@@ -404,6 +464,70 @@ export function ProfileEditorPanel({
       setProxyTestResult(false)
     } finally {
       setTestingProxy(false)
+    }
+  }
+
+  const handleApplyProxyGeo = async (): Promise<void> => {
+    if (!watchedProxyId) return
+    setApplyingGeo(true)
+    try {
+      const geo = await api.lookupProxyGeo(watchedProxyId)
+      if (!geo) {
+        addToast('Could not determine proxy geolocation', 'error')
+        return
+      }
+
+      // Compute the target languages list we would apply.
+      const existing = (getValues('languages') || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      let targetLanguagesStr: string | null = null
+      if (geo.locale) {
+        const next = [geo.locale, 'en-US']
+        for (const l of existing) {
+          if (!next.includes(l)) next.push(l)
+        }
+        targetLanguagesStr = next.slice(0, 4).join(', ')
+      }
+
+      // If operator has curated non-empty languages that would change, confirm.
+      const currentStr = existing.join(', ')
+      const willChangeLanguages =
+        targetLanguagesStr !== null &&
+        existing.length > 0 &&
+        targetLanguagesStr !== currentStr
+
+      if (willChangeLanguages) {
+        const ok = await confirm({
+          title: 'Apply proxy geo?',
+          message: `Will set timezone to "${geo.timezone ?? '(unchanged)'}" and languages to "${targetLanguagesStr}". Current languages: "${currentStr}".`,
+          confirmLabel: 'Apply'
+        })
+        if (!ok) return
+      }
+
+      const applied: string[] = []
+      if (geo.timezone) {
+        setValue('timezone', geo.timezone, { shouldDirty: true })
+        applied.push(geo.timezone)
+      }
+      if (targetLanguagesStr !== null && geo.locale) {
+        setValue('languages', targetLanguagesStr, { shouldDirty: true })
+        applied.push(geo.locale)
+      }
+
+      addToast(
+        applied.length > 0 ? `Applied: ${applied.join(' · ')}` : 'Applied proxy geo',
+        'success'
+      )
+    } catch (err: unknown) {
+      addToast(
+        err instanceof Error ? err.message : 'Failed to look up proxy geolocation',
+        'error'
+      )
+    } finally {
+      setApplyingGeo(false)
     }
   }
 
@@ -595,17 +719,71 @@ export function ProfileEditorPanel({
 
       {/* ── Error Banner ────────────────────────────────────────────────── */}
       {error && (
-        <div className="mx-4 mt-3 rounded-[--radius-md] bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err font-medium flex items-center gap-2">
+        <div
+          role="alert"
+          className="mx-4 mt-3 rounded-[--radius-md] bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err font-medium flex items-center gap-2"
+        >
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           <span className="flex-1">{error}</span>
-          <button
-            type="button"
-            onClick={() => setError(null)}
-            className="text-err/60 hover:text-err transition-colors"
-            aria-label="Dismiss error"
+        </div>
+      )}
+
+      {/* ── Consistency Warnings ────────────────────────────────────────── */}
+      {validationWarnings.length > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            'mx-4 mt-3 rounded-[--radius-md] border px-3.5 py-2.5 text-xs',
+            hasWarnSeverity
+              ? 'bg-warn/8 border-warn/20'
+              : 'bg-elevated border-edge'
+          )}
+        >
+          <div
+            className={cn(
+              'flex items-center gap-1.5 mb-1.5 font-medium',
+              hasWarnSeverity ? 'text-warn' : 'text-muted'
+            )}
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
+            {hasWarnSeverity ? (
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <Info className="h-3.5 w-3.5 shrink-0" />
+            )}
+            <span>Fingerprint consistency</span>
+          </div>
+          <ul
+            className={cn(
+              'space-y-1',
+              validationWarnings.length > 3 && showAllWarnings && 'max-h-48 overflow-y-auto pr-1'
+            )}
+          >
+            {visibleWarnings.map((w, i) => (
+              <li
+                key={`${w.field}:${w.severity}:${i}`}
+                className="flex items-start gap-1.5 text-content/80"
+              >
+                {w.severity === 'warn' ? (
+                  <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0 text-warn" />
+                ) : (
+                  <Info className="h-3 w-3 mt-0.5 shrink-0 text-muted" />
+                )}
+                <span>{w.message}</span>
+              </li>
+            ))}
+          </ul>
+          {validationWarnings.length > 3 && (
+            <button
+              type="button"
+              onClick={() => setShowAllWarnings((v) => !v)}
+              className="mt-1.5 text-[11px] font-medium text-accent hover:text-accent/80 transition-colors"
+            >
+              {showAllWarnings
+                ? 'Show less'
+                : `Show ${validationWarnings.length - 3} more`}
+            </button>
+          )}
         </div>
       )}
 
@@ -1071,12 +1249,47 @@ export function ProfileEditorPanel({
             <Card
               title="Timezone & Locale"
               description="Geographic identity settings"
-              actions={<Toggle checked={timezoneOpen} onChange={setTimezoneOpen} />}
+              actions={
+                <>
+                  <Tooltip
+                    content={
+                      watchedProxyId
+                        ? 'Fill timezone and languages from the attached proxy IP'
+                        : 'Attach a proxy to apply geo'
+                    }
+                  >
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<MapPin className="h-3.5 w-3.5" />}
+                      onClick={handleApplyProxyGeo}
+                      loading={applyingGeo}
+                      disabled={!watchedProxyId || applyingGeo}
+                      type="button"
+                      aria-label={
+                        watchedProxyId
+                          ? 'Apply geo from proxy'
+                          : 'Attach a proxy to apply geo'
+                      }
+                    >
+                      {applyingGeo ? 'Resolving proxy geo…' : 'Apply geo from proxy'}
+                    </Button>
+                  </Tooltip>
+                  <Toggle checked={timezoneOpen} onChange={setTimezoneOpen} />
+                </>
+              }
             >
               {timezoneOpen && (
-                <div className="pt-3">
-                  <label className={LABEL}>Timezone</label>
-                  <Select options={timezoneOptions} {...register('timezone')} />
+                <div className="pt-3 space-y-3">
+                  <div>
+                    <label className={LABEL}>Timezone</label>
+                    <Select options={timezoneOptions} {...register('timezone')} />
+                  </div>
+                  {!watchedProxyId && (
+                    <p className="text-[10px] text-muted">
+                      Attach a proxy to the profile to enable “Apply geo from proxy”.
+                    </p>
+                  )}
                 </div>
               )}
             </Card>

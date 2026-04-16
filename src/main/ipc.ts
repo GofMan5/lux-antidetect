@@ -9,10 +9,11 @@ import {
   deleteProfile,
   duplicateProfile
 } from './profile'
-import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, updateProxyCountry, parseProxyLine } from './proxy'
+import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, parseProxyLine } from './proxy'
+import { lookupProxyGeo } from './geoip'
 import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
-import { generateFingerprintForApi } from './fingerprint'
+import { generateDefaultFingerprint } from './fingerprint'
 import { checkForUpdates, installUpdate } from './updater'
 import {
   downloadBrowser,
@@ -109,7 +110,15 @@ export function registerIpcHandlers(
 
   ipcMain.handle('lookup-proxy-country', async (_, proxyId: string) => {
     assertUuid(proxyId)
-    return updateProxyCountry(db, proxyId)
+    // Only use the proxy-tunneled geo probe — never fall back to an untunneled
+    // fetch that would leak the real IP.
+    const bundle = await lookupProxyGeo(db, proxyId)
+    return bundle?.country_code ?? null
+  })
+
+  ipcMain.handle('lookup-proxy-geo', async (_, proxyId: string) => {
+    assertUuid(proxyId)
+    return lookupProxyGeo(db, proxyId)
   })
 
   // Bulk proxy test — bounded concurrency pool with per-id UUID validation.
@@ -143,7 +152,7 @@ export function registerIpcHandlers(
 
   // Fingerprint
   ipcMain.handle('generate-fingerprint', (_, browserType: BrowserType) =>
-    generateFingerprintForApi(browserType)
+    generateDefaultFingerprint(browserType)
   )
 
   // Settings

@@ -166,44 +166,36 @@ export function initDatabase(userDataPath: string): Database.Database {
   `)
 
   // Migration: add check_latency_ms column to proxies
-  try {
-    db.prepare('SELECT check_latency_ms FROM proxies LIMIT 0').get()
-  } catch {
-    db.exec('ALTER TABLE proxies ADD COLUMN check_latency_ms INTEGER')
-  }
+  addColumnIfMissing(db, 'proxies', 'check_latency_ms', 'check_latency_ms INTEGER')
 
   // Migration: add country and group_tag columns to proxies
-  try {
-    db.prepare('SELECT country FROM proxies LIMIT 0').get()
-  } catch {
-    db.exec('ALTER TABLE proxies ADD COLUMN country TEXT')
-  }
-  try {
-    db.prepare('SELECT group_tag FROM proxies LIMIT 0').get()
-  } catch {
-    db.exec('ALTER TABLE proxies ADD COLUMN group_tag TEXT')
-  }
+  addColumnIfMissing(db, 'proxies', 'country', 'country TEXT')
+  addColumnIfMissing(db, 'proxies', 'group_tag', 'group_tag TEXT')
 
   // Migration: add check_error column to proxies
-  try {
-    db.prepare('SELECT check_error FROM proxies LIMIT 0').get()
-  } catch {
-    db.exec('ALTER TABLE proxies ADD COLUMN check_error TEXT')
-  }
+  addColumnIfMissing(db, 'proxies', 'check_error', 'check_error TEXT')
+
+  // Migration: add geo columns to proxies (apply-geo-from-proxy-ip feature)
+  addColumnIfMissing(db, 'proxies', 'timezone', 'timezone TEXT')
+  addColumnIfMissing(db, 'proxies', 'city', 'city TEXT')
+  addColumnIfMissing(db, 'proxies', 'latitude', 'latitude REAL')
+  addColumnIfMissing(db, 'proxies', 'longitude', 'longitude REAL')
+  addColumnIfMissing(db, 'proxies', 'accuracy_radius', 'accuracy_radius INTEGER')
+  addColumnIfMissing(db, 'proxies', 'locale', 'locale TEXT')
 
   // Migration: add rotation_group column to profiles (for proxy rotation)
-  try {
-    db.prepare('SELECT rotation_group FROM profiles LIMIT 0').get()
-  } catch {
-    db.exec('ALTER TABLE profiles ADD COLUMN rotation_group TEXT')
-  }
+  addColumnIfMissing(db, 'profiles', 'rotation_group', 'rotation_group TEXT')
 
   // Migration: add device_type column to fingerprints
-  try {
-    db.prepare('SELECT device_type FROM fingerprints LIMIT 0').get()
-  } catch {
-    db.exec("ALTER TABLE fingerprints ADD COLUMN device_type TEXT DEFAULT 'desktop'")
-  }
+  addColumnIfMissing(db, 'fingerprints', 'device_type', "device_type TEXT DEFAULT 'desktop'")
 
   return db
+}
+
+function addColumnIfMissing(db: Database.Database, table: string, column: string, ddl: string): void {
+  try {
+    db.prepare(`SELECT ${column} FROM ${table} LIMIT 0`).run()
+  } catch {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`)
+  }
 }

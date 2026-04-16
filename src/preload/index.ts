@@ -32,6 +32,7 @@ const api: LuxAPI = {
   testProxy: (id: string) => ipcRenderer.invoke('test-proxy', id),
   getProxyGroups: () => ipcRenderer.invoke('proxy-groups'),
   lookupProxyCountry: (id: string) => ipcRenderer.invoke('lookup-proxy-country', id),
+  lookupProxyGeo: (id: string) => ipcRenderer.invoke('lookup-proxy-geo', id),
   parseProxyString: (raw: string) => ipcRenderer.invoke('parse-proxy-string', raw),
   bulkTestProxies: (ids: string[]) => ipcRenderer.invoke('bulk-test-proxies', ids),
 

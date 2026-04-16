@@ -453,6 +453,11 @@ class SocketReader {
     return this.request(predicate)
   }
 
+  /** Return any bytes still buffered (not yet consumed by a read). */
+  getBuffered(): Buffer {
+    return this.buffer
+  }
+
   private request(check: (buf: Buffer) => number): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       if (this.closed) {
@@ -531,7 +536,13 @@ async function checkHttpProxy(proxy: Proxy, sock: Socket): Promise<HealthResult>
   }
 }
 
-async function performSocks5Handshake(sock: Socket, reader: SocketReader, proxy: Proxy): Promise<void> {
+async function performSocks5Handshake(
+  sock: Socket,
+  reader: SocketReader,
+  proxy: Proxy,
+  targetHost: string,
+  targetPort: number
+): Promise<void> {
   const hasAuth = !!(proxy.username && proxy.password)
   const methods = hasAuth
     ? Buffer.from([SOCKS5_VERSION, 0x02, SOCKS5_AUTH_NONE, SOCKS5_AUTH_USERPASS])
@@ -564,7 +575,6 @@ async function performSocks5Handshake(sock: Socket, reader: SocketReader, proxy:
   }
 
   // CONNECT request to target.
-  const targetHost = PROXY_TEST_TARGET_HOST
   const ipFamily = isIP(targetHost)
   let addrPart: Buffer
   if (ipFamily === 4) {
@@ -577,7 +587,7 @@ async function performSocks5Handshake(sock: Socket, reader: SocketReader, proxy:
     const nameBuf = Buffer.from(targetHost, 'ascii')
     addrPart = Buffer.concat([Buffer.from([SOCKS5_ATYP_DOMAIN, nameBuf.length]), nameBuf])
   }
-  const portBuf = Buffer.from([(PROXY_TEST_TARGET_PORT >> 8) & 0xff, PROXY_TEST_TARGET_PORT & 0xff])
+  const portBuf = Buffer.from([(targetPort >> 8) & 0xff, targetPort & 0xff])
   const req = Buffer.concat([
     Buffer.from([SOCKS5_VERSION, SOCKS5_CMD_CONNECT, SOCKS5_RSV]),
     addrPart,
@@ -615,10 +625,15 @@ function ipv6ToBytes(addr: string): Buffer {
   return buf
 }
 
-async function performSocks4Handshake(sock: Socket, reader: SocketReader, proxy: Proxy): Promise<void> {
-  const targetHost = PROXY_TEST_TARGET_HOST
-  const portHi = (PROXY_TEST_TARGET_PORT >> 8) & 0xff
-  const portLo = PROXY_TEST_TARGET_PORT & 0xff
+async function performSocks4Handshake(
+  sock: Socket,
+  reader: SocketReader,
+  proxy: Proxy,
+  targetHost: string,
+  targetPort: number
+): Promise<void> {
+  const portHi = (targetPort >> 8) & 0xff
+  const portLo = targetPort & 0xff
   const userid = Buffer.from(proxy.username ?? '', 'ascii')
 
   let msg: Buffer
@@ -650,8 +665,8 @@ async function checkSocksProxy(proxy: Proxy, sock: Socket): Promise<HealthResult
   const started = Date.now()
   try {
     const reader = new SocketReader(sock)
-    if (proxy.protocol === 'socks5') await performSocks5Handshake(sock, reader, proxy)
-    else await performSocks4Handshake(sock, reader, proxy)
+    if (proxy.protocol === 'socks5') await performSocks5Handshake(sock, reader, proxy, PROXY_TEST_TARGET_HOST, PROXY_TEST_TARGET_PORT)
+    else await performSocks4Handshake(sock, reader, proxy, PROXY_TEST_TARGET_HOST, PROXY_TEST_TARGET_PORT)
     sock.write(buildTunnelledHttpRequest())
     const header = await reader.readUntil(findHeaderEndSize)
     const status = parseHttpStatusCode(header)
@@ -749,25 +764,156 @@ export function getProxyGroups(db: Database.Database): string[] {
   return rows.map(r => r.group_tag)
 }
 
-/** Lookup country for a proxy host using ip-api.com (free, no key). */
-export async function lookupProxyCountry(host: string): Promise<string | null> {
+// ---------------------------------------------------------------------------
+// Generic HTTP GET tunneled through the configured proxy
+// ---------------------------------------------------------------------------
+
+const PROXY_HTTP_GET_MAX_BYTES = 256 * 1024
+
+function buildAbsoluteUriGetRequest(
+  proxy: Proxy,
+  targetHost: string,
+  targetPort: number,
+  path: string
+): string {
+  const hostHeader = targetPort === 80 ? targetHost : `${targetHost}:${targetPort}`
+  const lines = [
+    `GET http://${hostHeader}${path} HTTP/1.0`,
+    `Host: ${hostHeader}`,
+    'User-Agent: lux-antidetect-geo/1',
+    'Accept: */*',
+    'Connection: close'
+  ]
+  if (proxy.username && proxy.password) {
+    lines.push(`Proxy-Authorization: ${basicAuthHeader(proxy.username, proxy.password)}`)
+  }
+  return lines.join('\r\n') + '\r\n\r\n'
+}
+
+function buildRelativeGetRequest(targetHost: string, targetPort: number, path: string): string {
+  const hostHeader = targetPort === 80 ? targetHost : `${targetHost}:${targetPort}`
+  return [
+    `GET ${path} HTTP/1.0`,
+    `Host: ${hostHeader}`,
+    'User-Agent: lux-antidetect-geo/1',
+    'Accept: */*',
+    'Connection: close'
+  ].join('\r\n') + '\r\n\r\n'
+}
+
+function readUntilCloseOrLimit(sock: Socket, maxBytes: number, initialBuffer?: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let total = 0
+    let settled = false
+    const finish = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      fn()
+    }
+    if (initialBuffer && initialBuffer.length > 0) {
+      const slice = initialBuffer.length > maxBytes ? initialBuffer.subarray(0, maxBytes) : initialBuffer
+      chunks.push(slice)
+      total += slice.length
+      if (total >= maxBytes) {
+        finish(() => {
+          sock.destroy()
+          resolve(Buffer.concat(chunks).subarray(0, maxBytes))
+        })
+        return
+      }
+    }
+    sock.on('data', (chunk: Buffer) => {
+      if (settled) return
+      chunks.push(chunk)
+      total += chunk.length
+      if (total >= maxBytes) {
+        finish(() => {
+          sock.destroy()
+          resolve(Buffer.concat(chunks).subarray(0, maxBytes))
+        })
+      }
+    })
+    sock.once('end', () => finish(() => resolve(Buffer.concat(chunks))))
+    sock.once('close', () => finish(() => resolve(Buffer.concat(chunks))))
+    sock.once('error', (err) => finish(() => reject(err)))
+  })
+}
+
+function parseHttpResponse(buf: Buffer): { status: number; body: string } | null {
+  const headerEnd = findHeaderEndSize(buf)
+  if (headerEnd <= 0) return null
+  const status = parseHttpStatusCode(buf)
+  if (status === null) return null
+  const body = buf.subarray(headerEnd).toString('utf8')
+  return { status, body }
+}
+
+/**
+ * Perform an HTTP/1.0 GET to (targetHost:targetPort)+path tunneled through the given proxy.
+ * Returns null on any error (network, timeout, protocol). Never throws.
+ *
+ * Note: plain HTTP only (the ip-api geo provider is HTTP-only on the free tier).
+ * The request is still safe because it traverses the user's proxy with no secrets.
+ */
+export async function httpGetThroughProxy(
+  proxy: Proxy,
+  targetHost: string,
+  targetPort: number,
+  path: string,
+  timeoutMs: number
+): Promise<{ status: number; body: string } | null> {
+  let sock: Socket
   try {
-    const resp = await fetch(`http://ip-api.com/json/${encodeURIComponent(host)}?fields=countryCode`)
-    if (!resp.ok) return null
-    const data = await resp.json() as { countryCode?: string }
-    return data.countryCode ?? null
+    sock = await openProxySocket(proxy)
   } catch {
     return null
   }
-}
 
-/** Update proxy country after geo-lookup. */
-export async function updateProxyCountry(db: Database.Database, proxyId: string): Promise<string | null> {
-  const proxy = db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as Proxy | undefined
-  if (!proxy) return null
-  const country = await lookupProxyCountry(proxy.host)
-  if (country) {
-    db.prepare('UPDATE proxies SET country = ? WHERE id = ?').run(country, proxyId)
+  let timer: NodeJS.Timeout | null = null
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      sock.destroy()
+      resolve(null)
+    }, timeoutMs)
+  })
+
+  const work = (async (): Promise<{ status: number; body: string } | null> => {
+    try {
+      let residual: Buffer | undefined
+      if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
+        const reader = new SocketReader(sock)
+        if (proxy.protocol === 'socks5') {
+          await performSocks5Handshake(sock, reader, proxy, targetHost, targetPort)
+        } else {
+          await performSocks4Handshake(sock, reader, proxy, targetHost, targetPort)
+        }
+        // Capture any bytes already buffered by SocketReader (can happen if
+        // the SOCKS handshake reply and the start of the tunneled response
+        // arrive in the same TCP segment). These would otherwise be lost
+        // when we detach the reader's listeners below.
+        residual = reader.getBuffered()
+        // After handshake, SocketReader still has a 'data' listener attached.
+        // Remove all listeners it registered so readUntilCloseOrLimit sees fresh events.
+        sock.removeAllListeners('data')
+        sock.removeAllListeners('end')
+        sock.removeAllListeners('close')
+        sock.removeAllListeners('error')
+        sock.write(buildRelativeGetRequest(targetHost, targetPort, path))
+      } else {
+        sock.write(buildAbsoluteUriGetRequest(proxy, targetHost, targetPort, path))
+      }
+      const raw = await readUntilCloseOrLimit(sock, PROXY_HTTP_GET_MAX_BYTES, residual)
+      return parseHttpResponse(raw)
+    } catch {
+      return null
+    }
+  })()
+
+  try {
+    return await Promise.race([work, timeoutPromise])
+  } finally {
+    if (timer) clearTimeout(timer)
+    sock.destroy()
   }
-  return country
 }

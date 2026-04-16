@@ -16,6 +16,7 @@ import type {
   ManagedBrowserResponse,
   AvailableBrowser
 } from '../main/models'
+import type { ProxyGeoBundle } from '../main/geoip'
 
 // Reuse the canonical session payload to keep preload and main in lockstep.
 export type SessionStartedEvent = SessionInfo
@@ -54,6 +55,7 @@ export interface LuxAPI {
   testProxy(id: string): Promise<boolean>
   getProxyGroups(): Promise<string[]>
   lookupProxyCountry(id: string): Promise<string | null>
+  lookupProxyGeo(id: string): Promise<ProxyGeoBundle | null>
   parseProxyString(raw: string): Promise<{ ok: boolean; data?: ProxyInput; error?: string; line: string }[]>
   bulkTestProxies(ids: string[]): Promise<{ id: string; ok: boolean }[]>
 
