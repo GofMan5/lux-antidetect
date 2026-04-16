@@ -6,7 +6,12 @@ import { request as httpRequest } from 'http'
 import { randomBytes } from 'crypto'
 import type Database from 'better-sqlite3'
 import type { BrowserType, Fingerprint, Profile, Proxy } from './models'
-import { buildInjectionScript, regenerateFingerprint } from './fingerprint'
+import {
+  buildInjectionScript,
+  normalizeFingerprint,
+  parseFingerprintLanguages,
+  regenerateFingerprint
+} from './fingerprint'
 import { addSession, removeSession, getSession, isRunning } from './sessions'
 import { getManagedBrowserPath } from './browser-manager'
 
@@ -262,7 +267,7 @@ async function waitForDebugPort(profileDir: string, timeoutMs = 15000): Promise<
 }
 
 /** Inject fingerprint script into all current and future pages via CDP. */
-async function injectViaCDP(port: number, script: string): Promise<void> {
+async function injectViaCDP(port: number, script: string, fp: Fingerprint): Promise<void> {
   // Get the list of targets
   const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
   const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
@@ -274,6 +279,7 @@ async function injectViaCDP(port: number, script: string): Promise<void> {
     try {
       // Enable Page domain (required for addScriptToEvaluateOnNewDocument)
       await cdpCommand(port, target.id, 'Page.enable', {})
+      await applyCdpFingerprintOverrides(port, target.id, fp)
       // Inject for all future navigations in this target
       await cdpCommand(port, target.id, 'Page.addScriptToEvaluateOnNewDocument', {
         source: script,
@@ -382,8 +388,91 @@ async function cdpCommand(port: number, targetId: string, method: string, params
   })
 }
 
+function getFingerprintLocale(fp: Fingerprint): { languages: string[]; primaryLanguage: string } {
+  const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
+  return {
+    languages,
+    primaryLanguage: languages[0] || 'en-US'
+  }
+}
+
+function getUaPlatformLabel(fp: Fingerprint): string {
+  if (fp.device_type === 'mobile' && fp.user_agent.includes('Android')) return 'Android'
+  if (fp.platform === 'Win32') return 'Windows'
+  if (fp.platform === 'MacIntel') return 'macOS'
+  return 'Linux'
+}
+
+function buildUserAgentMetadata(fp: Fingerprint): Record<string, unknown> {
+  const fullVersion = fp.user_agent.match(/Chrome\/([\d.]+)/)?.[1] ?? '120.0.0.0'
+  const major = Number.parseInt(fullVersion.split('.')[0] ?? '120', 10) || 120
+  const notBrandPool = ['Not_A Brand', 'Not/A)Brand', 'Not)A;Brand', 'Not A;Brand']
+  const notBrand = notBrandPool[major % notBrandPool.length]
+  const platform = getUaPlatformLabel(fp)
+  const isWindows = fp.platform === 'Win32'
+  const isMac = fp.platform === 'MacIntel'
+  const isMobile = fp.device_type === 'mobile'
+
+  return {
+    brands: [
+      { brand: 'Google Chrome', version: String(major) },
+      { brand: 'Chromium', version: String(major) },
+      { brand: notBrand, version: '24' }
+    ],
+    fullVersionList: [
+      { brand: 'Google Chrome', version: fullVersion },
+      { brand: 'Chromium', version: fullVersion },
+      { brand: notBrand, version: '24.0.0.0' }
+    ],
+    fullVersion,
+    platform,
+    platformVersion: isWindows
+      ? fp.canvas_noise_seed % 4 === 0
+        ? '15.0.0'
+        : '10.0.0'
+      : isMac
+        ? '14.5.0'
+        : isMobile
+          ? '14.0.0'
+          : '6.5.0',
+    architecture: isMobile ? 'arm' : 'x86',
+    model: isMobile ? fp.user_agent.match(/Android[^;]*;\s*([^)]+)\)/)?.[1]?.trim() ?? '' : '',
+    mobile: isMobile,
+    bitness: isMobile ? '' : '64',
+    wow64: false
+  }
+}
+
+async function applyCdpFingerprintOverrides(
+  port: number,
+  targetId: string,
+  fp: Fingerprint
+): Promise<void> {
+  const { languages, primaryLanguage } = getFingerprintLocale(fp)
+
+  await Promise.allSettled([
+    cdpCommand(port, targetId, 'Emulation.setUserAgentOverride', {
+      userAgent: fp.user_agent,
+      acceptLanguage: languages.join(','),
+      platform: fp.platform,
+      userAgentMetadata: buildUserAgentMetadata(fp)
+    }),
+    cdpCommand(port, targetId, 'Emulation.setTimezoneOverride', {
+      timezoneId: fp.timezone
+    }),
+    cdpCommand(port, targetId, 'Emulation.setLocaleOverride', {
+      locale: primaryLanguage
+    })
+  ])
+}
+
 /** Background task: continuously ensure CDP injection is active for all pages of this profile. */
-function startCDPInjection(profileId: string, profileDir: string, script: string): { stop: () => void } {
+function startCDPInjection(
+  profileId: string,
+  profileDir: string,
+  script: string,
+  fp: Fingerprint
+): { stop: () => void } {
   let stopped = false
   let port = 0
   const injectedTargets = new Set<string>()
@@ -393,6 +482,7 @@ function startCDPInjection(profileId: string, profileDir: string, script: string
     injectedTargets.add(targetId)
     try {
       await cdpCommand(port, targetId, 'Page.enable', {})
+      await applyCdpFingerprintOverrides(port, targetId, fp)
       await cdpCommand(port, targetId, 'Page.addScriptToEvaluateOnNewDocument', {
         source: script,
         runImmediately: true
@@ -416,7 +506,7 @@ function startCDPInjection(profileId: string, profileDir: string, script: string
 
     // Initial injection for existing tabs
     try {
-      await injectViaCDP(port, script)
+      await injectViaCDP(port, script, fp)
       const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
       const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
       for (const t of targets) {
@@ -584,11 +674,13 @@ function writeFirefoxUserJs(
   proxy?: FirefoxProxyConfig
 ): void {
   const lines: string[] = []
+  const { languages, primaryLanguage } = getFingerprintLocale(fp)
 
   lines.push(`user_pref("general.useragent.override", ${JSON.stringify(fp.user_agent)});`)
-  lines.push(
-    `user_pref("intl.accept_languages", ${JSON.stringify((JSON.parse(fp.languages) as string[]).join(','))});`
-  )
+  lines.push(`user_pref("intl.accept_languages", ${JSON.stringify(languages.join(','))});`)
+  lines.push(`user_pref("intl.locale.requested", ${JSON.stringify(primaryLanguage)});`)
+  lines.push(`user_pref("intl.regional_prefs.use_os_locales", false);`)
+  lines.push(`user_pref("intl.timezone.override", ${JSON.stringify(fp.timezone)});`)
   lines.push(`user_pref("privacy.resistFingerprinting", false);`)
 
   if (proxy) {
@@ -937,7 +1029,7 @@ export async function launchBrowser(
     const shouldRegenerate = autoRegenRow ? JSON.parse(autoRegenRow.value) !== false : true
     const activeFp = shouldRegenerate
       ? regenerateFingerprint(db, profileId, profile.browser_type)
-      : fingerprint
+      : normalizeFingerprint(fingerprint)
 
     let proxy: Proxy | undefined
     if (profile.proxy_id) {
@@ -965,12 +1057,15 @@ export async function launchBrowser(
       args.push('-profile', profileDir, '-no-remote')
       writeFirefoxUserJs(profileDir, activeFp, proxy)
     } else {
+      const { primaryLanguage } = getFingerprintLocale(activeFp)
+
       args.push(`--user-data-dir=${profileDir}`)
       args.push('--no-first-run')
       args.push('--disable-default-apps')
       args.push('--disable-background-networking')
       args.push('--disable-search-engine-choice-screen')
       args.push('--remote-debugging-port=0')
+      args.push(`--user-agent=${activeFp.user_agent}`)
 
       args.push('--dns-over-https-mode=automatic')
 
@@ -986,12 +1081,11 @@ export async function launchBrowser(
       // Permute TLS extension order to randomize JA3/JA4 fingerprints (Chrome 110+)
       args.push('--enable-features=PermuteTLSExtensions')
 
-      args.push(`--lang=${(JSON.parse(activeFp.languages) as string[])[0] || 'en-US'}`)
+      args.push(`--lang=${primaryLanguage}`)
 
       // Mobile emulation via Chrome flags
       if (activeFp.device_type === 'mobile') {
         args.push(`--window-size=${activeFp.screen_width},${activeFp.screen_height}`)
-        args.push(`--user-agent=${activeFp.user_agent}`)
         args.push('--enable-touch-events')
       }
 
@@ -1084,7 +1178,7 @@ export async function launchBrowser(
 
     // Start CDP-based fingerprint injection for Chromium browsers (async, non-blocking)
     if (injectionScript) {
-      const injector = startCDPInjection(profileId, profileDir, injectionScript)
+      const injector = startCDPInjection(profileId, profileDir, injectionScript, activeFp)
       cdpInjectors.set(profileId, injector)
     }
 

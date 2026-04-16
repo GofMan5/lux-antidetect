@@ -21,7 +21,7 @@ export function Layout(): React.JSX.Element {
       <aside
         className={cn(
           'shrink-0 flex flex-col border-r border-edge/60',
-          'bg-surface-alt/80 backdrop-blur-xl',
+          'bg-surface-alt',
           'transition-all duration-300 ease-out relative z-30',
           collapsed ? 'w-[68px]' : 'w-[240px]'
         )}

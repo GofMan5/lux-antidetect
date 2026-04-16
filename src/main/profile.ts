@@ -13,7 +13,7 @@ import type {
   UpdateFingerprintInput
 } from './models'
 import { toProxyResponse } from './models'
-import { generateDefaultFingerprint } from './fingerprint'
+import { generateDefaultFingerprint, normalizeFingerprint } from './fingerprint'
 import { isRunning } from './sessions'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -154,70 +154,72 @@ export function updateFingerprint(
     | undefined
   if (!existing) throw new Error(`Fingerprint not found for profile: ${profileId}`)
 
-  const fields: string[] = []
-  const values: unknown[] = []
+  const hasUpdates = Object.values(input).some((value) => value !== undefined)
+  if (!hasUpdates) return
 
-  if (input.user_agent !== undefined) {
-    fields.push('user_agent = ?')
-    values.push(input.user_agent)
-  }
-  if (input.platform !== undefined) {
-    fields.push('platform = ?')
-    values.push(input.platform)
-  }
-  if (input.hardware_concurrency !== undefined) {
-    fields.push('hardware_concurrency = ?')
-    values.push(input.hardware_concurrency)
-  }
-  if (input.device_memory !== undefined) {
-    fields.push('device_memory = ?')
-    values.push(input.device_memory)
-  }
-  if (input.languages !== undefined) {
-    fields.push('languages = ?')
-    values.push(JSON.stringify(input.languages))
-  }
-  if (input.screen_width !== undefined) {
-    fields.push('screen_width = ?')
-    values.push(input.screen_width)
-  }
-  if (input.screen_height !== undefined) {
-    fields.push('screen_height = ?')
-    values.push(input.screen_height)
-  }
-  if (input.timezone !== undefined) {
-    fields.push('timezone = ?')
-    values.push(input.timezone)
-  }
-  if (input.webgl_vendor !== undefined) {
-    fields.push('webgl_vendor = ?')
-    values.push(input.webgl_vendor)
-  }
-  if (input.webgl_renderer !== undefined) {
-    fields.push('webgl_renderer = ?')
-    values.push(input.webgl_renderer)
-  }
-  if (input.webrtc_policy !== undefined) {
-    fields.push('webrtc_policy = ?')
-    values.push(input.webrtc_policy)
-  }
-  if (input.color_depth !== undefined) {
-    fields.push('color_depth = ?')
-    values.push(input.color_depth)
-  }
-  if (input.pixel_ratio !== undefined) {
-    fields.push('pixel_ratio = ?')
-    values.push(input.pixel_ratio)
-  }
-  if (input.device_type !== undefined) {
-    fields.push('device_type = ?')
-    values.push(input.device_type)
+  const mergedFingerprint: Fingerprint = {
+    ...existing,
+    user_agent: input.user_agent ?? existing.user_agent,
+    platform: input.platform ?? existing.platform,
+    hardware_concurrency: input.hardware_concurrency ?? existing.hardware_concurrency,
+    device_memory: input.device_memory ?? existing.device_memory,
+    languages:
+      input.languages !== undefined ? JSON.stringify(input.languages) : existing.languages,
+    screen_width: input.screen_width ?? existing.screen_width,
+    screen_height: input.screen_height ?? existing.screen_height,
+    color_depth: input.color_depth ?? existing.color_depth,
+    pixel_ratio: input.pixel_ratio ?? existing.pixel_ratio,
+    timezone: input.timezone ?? existing.timezone,
+    canvas_noise_seed: existing.canvas_noise_seed,
+    webgl_vendor: input.webgl_vendor ?? existing.webgl_vendor,
+    webgl_renderer: input.webgl_renderer ?? existing.webgl_renderer,
+    audio_context_noise: existing.audio_context_noise,
+    fonts_list: existing.fonts_list,
+    webrtc_policy: input.webrtc_policy ?? existing.webrtc_policy,
+    video_inputs: existing.video_inputs,
+    audio_inputs: existing.audio_inputs,
+    audio_outputs: existing.audio_outputs,
+    device_type: input.device_type ?? existing.device_type
   }
 
-  if (fields.length === 0) return
+  if (input.timezone !== undefined && input.languages === undefined) {
+    mergedFingerprint.languages = ''
+  }
 
-  values.push(profileId)
-  db.prepare(`UPDATE fingerprints SET ${fields.join(', ')} WHERE profile_id = ?`).run(...values)
+  const normalized = normalizeFingerprint(mergedFingerprint)
+
+  db.prepare(`
+    UPDATE fingerprints SET
+      user_agent = ?, platform = ?, hardware_concurrency = ?, device_memory = ?,
+      languages = ?, screen_width = ?, screen_height = ?, color_depth = ?,
+      pixel_ratio = ?, timezone = ?, canvas_noise_seed = ?, webgl_vendor = ?,
+      webgl_renderer = ?, audio_context_noise = ?, fonts_list = ?,
+      webrtc_policy = ?, video_inputs = ?, audio_inputs = ?, audio_outputs = ?,
+      device_type = ?
+    WHERE profile_id = ?
+  `).run(
+    normalized.user_agent,
+    normalized.platform,
+    normalized.hardware_concurrency,
+    normalized.device_memory,
+    normalized.languages,
+    normalized.screen_width,
+    normalized.screen_height,
+    normalized.color_depth,
+    normalized.pixel_ratio,
+    normalized.timezone,
+    normalized.canvas_noise_seed,
+    normalized.webgl_vendor,
+    normalized.webgl_renderer,
+    normalized.audio_context_noise,
+    normalized.fonts_list,
+    normalized.webrtc_policy,
+    normalized.video_inputs,
+    normalized.audio_inputs,
+    normalized.audio_outputs,
+    normalized.device_type,
+    profileId
+  )
 }
 
 export async function deleteProfile(

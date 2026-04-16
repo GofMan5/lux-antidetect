@@ -324,6 +324,294 @@ const MEDIA_CONFIGS: MediaConfig[] = [
   { video: 2, audioIn: 1, audioOut: 1 }
 ]
 
+type DesktopOsModel = 'windows' | 'mac'
+type FingerprintDraft = Omit<Fingerprint, 'id' | 'profile_id'>
+
+function parseStringList(raw: unknown): string[] {
+  let values = raw
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return []
+
+    try {
+      values = JSON.parse(trimmed)
+    } catch {
+      values = trimmed.split(',')
+    }
+  }
+
+  if (!Array.isArray(values)) return []
+
+  return values
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value): value is string => value.length > 0)
+}
+
+function normalizeTimezone(timezone?: string): string {
+  if (typeof timezone === 'string' && (ALL_TIMEZONES as readonly string[]).includes(timezone)) {
+    return timezone
+  }
+
+  return pick(ALL_TIMEZONES)
+}
+
+export function parseFingerprintLanguages(raw: unknown, fallbackTimezone?: string): string[] {
+  const languages = parseStringList(raw)
+  if (languages.length > 0) return languages
+  return getLanguagesForTimezone(normalizeTimezone(fallbackTimezone))
+}
+
+function getHostDesktopOsModel(): DesktopOsModel {
+  return process.platform === 'darwin' ? 'mac' : 'windows'
+}
+
+function extractChromeVersion(userAgent?: string): string | null {
+  return userAgent?.match(/Chrome\/([\d.]+)/)?.[1] ?? null
+}
+
+function extractMacVersion(userAgent?: string): string | null {
+  return userAgent?.match(/Mac OS X ([\d_]+)/)?.[1] ?? null
+}
+
+function extractAndroidModel(userAgent?: string): string | null {
+  return userAgent?.match(/Android[^;]*;\s*([^)]+)\)/)?.[1]?.trim() ?? null
+}
+
+function buildWindowsUserAgent(chromeVersion: string): string {
+  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
+}
+
+function buildMacUserAgent(chromeVersion: string, macVersion?: string): string {
+  const resolvedMacVersion = macVersion ?? pick(MAC_VERSIONS)
+  return `Mozilla/5.0 (Macintosh; Intel Mac OS X ${resolvedMacVersion}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
+}
+
+function buildMobileUserAgent(chromeVersion: string, model?: string): string {
+  const resolvedModel = model ?? pick(ANDROID_DEVICES).model
+  return `Mozilla/5.0 (Linux; Android 14; ${resolvedModel}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Mobile Safari/537.36`
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : fallback
+}
+
+function normalizeCanvasNoiseSeed(value: number | undefined): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : Math.floor(Math.random() * 2147483647)
+}
+
+function normalizeAudioNoise(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : Math.random() * 0.0001
+}
+
+function normalizeDesktopPixelRatio(osModel: DesktopOsModel, pixelRatio?: number): number {
+  if (osModel === 'mac') return 2.0
+
+  return typeof pixelRatio === 'number' && Number.isFinite(pixelRatio) && pixelRatio >= 1 && pixelRatio <= 3
+    ? pixelRatio
+    : pick([1.0, 1.25, 1.5, 1.75, 2.0])
+}
+
+function normalizeMobilePixelRatio(pixelRatio?: number): number {
+  return typeof pixelRatio === 'number' && Number.isFinite(pixelRatio) && pixelRatio >= 1.5 && pixelRatio <= 4
+    ? pixelRatio
+    : pick([2.0, 2.625, 3.0, 3.5])
+}
+
+function resolveScreen(
+  width: number | undefined,
+  height: number | undefined,
+  screens: readonly [number, number][]
+): [number, number] {
+  if (
+    typeof width === 'number' &&
+    Number.isFinite(width) &&
+    width > 0 &&
+    typeof height === 'number' &&
+    Number.isFinite(height) &&
+    height > 0
+  ) {
+    return [Math.round(width), Math.round(height)]
+  }
+
+  return pick(screens)
+}
+
+function isDesktopGpuCompatible(
+  osModel: DesktopOsModel,
+  vendor?: string,
+  renderer?: string
+): boolean {
+  if (!vendor || !renderer) return false
+
+  if (osModel === 'windows') {
+    return vendor.startsWith('Google Inc. (') && renderer.includes('Direct3D')
+  }
+
+  return vendor === 'Apple' && !renderer.includes('Direct3D')
+}
+
+function resolveDesktopGpu(
+  osModel: DesktopOsModel,
+  vendor?: string,
+  renderer?: string
+): { vendor: string; renderer: string } {
+  const resolvedVendor = vendor
+  const resolvedRenderer = renderer
+
+  if (
+    resolvedVendor &&
+    resolvedRenderer &&
+    isDesktopGpuCompatible(osModel, resolvedVendor, resolvedRenderer)
+  ) {
+    return { vendor: resolvedVendor, renderer: resolvedRenderer }
+  }
+
+  const gpuConfig = pick(osModel === 'windows' ? WINDOWS_GPUS : MAC_GPUS)
+  return {
+    vendor: gpuConfig.vendor,
+    renderer: pick(gpuConfig.renderers)
+  }
+}
+
+function isMobileGpuCompatible(vendor?: string, renderer?: string): boolean {
+  if (!vendor || !renderer) return false
+
+  return MOBILE_GPUS.some(
+    (gpuConfig) => gpuConfig.vendor === vendor && gpuConfig.renderers.includes(renderer)
+  )
+}
+
+function resolveMobileGpu(vendor?: string, renderer?: string): { vendor: string; renderer: string } {
+  const resolvedVendor = vendor
+  const resolvedRenderer = renderer
+
+  if (resolvedVendor && resolvedRenderer && isMobileGpuCompatible(resolvedVendor, resolvedRenderer)) {
+    return { vendor: resolvedVendor, renderer: resolvedRenderer }
+  }
+
+  const gpuConfig = pick(MOBILE_GPUS)
+  return {
+    vendor: gpuConfig.vendor,
+    renderer: pick(gpuConfig.renderers)
+  }
+}
+
+function normalizeFontList(
+  raw: unknown,
+  pool: readonly string[],
+  minCommon = 5,
+  maxExtra = 10
+): string[] {
+  const allowedFonts = new Set(pool)
+  const filtered = Array.from(
+    new Set(parseStringList(raw).filter((font) => allowedFonts.has(font)))
+  )
+
+  return filtered.length >= Math.min(minCommon, pool.length)
+    ? filtered
+    : randomFontSubset(pool, minCommon, maxExtra)
+}
+
+export function normalizeFingerprintDraft(fingerprint: Partial<Fingerprint>): FingerprintDraft {
+  const deviceType = fingerprint.device_type === 'mobile' ? 'mobile' : 'desktop'
+  const timezone = normalizeTimezone(fingerprint.timezone)
+  const languages = parseFingerprintLanguages(fingerprint.languages, timezone)
+  const hardware = pickWeighted(HARDWARE_CONFIGS)
+
+  if (deviceType === 'mobile') {
+    const chromeVersion = extractChromeVersion(fingerprint.user_agent) ?? randomChromeVersion()
+    const [screenWidth, screenHeight] = resolveScreen(
+      fingerprint.screen_width,
+      fingerprint.screen_height,
+      MOBILE_SCREENS
+    )
+    const gpu = resolveMobileGpu(fingerprint.webgl_vendor, fingerprint.webgl_renderer)
+    const model = extractAndroidModel(fingerprint.user_agent) ?? undefined
+
+    return {
+      user_agent: buildMobileUserAgent(chromeVersion, model),
+      platform: 'Linux armv81',
+      hardware_concurrency: Math.min(
+        normalizePositiveInteger(fingerprint.hardware_concurrency, hardware.concurrency),
+        8
+      ),
+      device_memory: Math.min(normalizePositiveInteger(fingerprint.device_memory, hardware.memory), 8),
+      languages: JSON.stringify(languages),
+      screen_width: screenWidth,
+      screen_height: screenHeight,
+      color_depth: normalizePositiveInteger(fingerprint.color_depth, 24),
+      pixel_ratio: normalizeMobilePixelRatio(fingerprint.pixel_ratio),
+      timezone,
+      canvas_noise_seed: normalizeCanvasNoiseSeed(fingerprint.canvas_noise_seed),
+      webgl_vendor: gpu.vendor,
+      webgl_renderer: gpu.renderer,
+      audio_context_noise: normalizeAudioNoise(fingerprint.audio_context_noise),
+      fonts_list: JSON.stringify(normalizeFontList(fingerprint.fonts_list, MOBILE_FONTS_POOL, 5, 8)),
+      webrtc_policy: fingerprint.webrtc_policy ?? 'disable_non_proxied_udp',
+      video_inputs: 1,
+      audio_inputs: 1,
+      audio_outputs: 1,
+      device_type: 'mobile'
+    }
+  }
+
+  const osModel = getHostDesktopOsModel()
+  const chromeVersion = extractChromeVersion(fingerprint.user_agent) ?? randomChromeVersion()
+  const [screenWidth, screenHeight] = resolveScreen(
+    fingerprint.screen_width,
+    fingerprint.screen_height,
+    osModel === 'windows' ? WINDOWS_SCREENS : MAC_SCREENS
+  )
+  const gpu = resolveDesktopGpu(osModel, fingerprint.webgl_vendor, fingerprint.webgl_renderer)
+  const media = pick(MEDIA_CONFIGS)
+
+  return {
+    user_agent:
+      osModel === 'windows'
+        ? buildWindowsUserAgent(chromeVersion)
+        : buildMacUserAgent(chromeVersion, extractMacVersion(fingerprint.user_agent) ?? undefined),
+    platform: osModel === 'windows' ? 'Win32' : 'MacIntel',
+    hardware_concurrency: normalizePositiveInteger(
+      fingerprint.hardware_concurrency,
+      hardware.concurrency
+    ),
+    device_memory: normalizePositiveInteger(fingerprint.device_memory, hardware.memory),
+    languages: JSON.stringify(languages),
+    screen_width: screenWidth,
+    screen_height: screenHeight,
+    color_depth: normalizePositiveInteger(fingerprint.color_depth, 24),
+    pixel_ratio: normalizeDesktopPixelRatio(osModel, fingerprint.pixel_ratio),
+    timezone,
+    canvas_noise_seed: normalizeCanvasNoiseSeed(fingerprint.canvas_noise_seed),
+    webgl_vendor: gpu.vendor,
+    webgl_renderer: gpu.renderer,
+    audio_context_noise: normalizeAudioNoise(fingerprint.audio_context_noise),
+    fonts_list: JSON.stringify(
+      normalizeFontList(
+        fingerprint.fonts_list,
+        osModel === 'windows' ? WIN_FONTS_POOL : MAC_FONTS_POOL
+      )
+    ),
+    webrtc_policy: fingerprint.webrtc_policy ?? 'disable_non_proxied_udp',
+    video_inputs: normalizePositiveInteger(fingerprint.video_inputs, media.video),
+    audio_inputs: normalizePositiveInteger(fingerprint.audio_inputs, media.audioIn),
+    audio_outputs: normalizePositiveInteger(fingerprint.audio_outputs, media.audioOut),
+    device_type: 'desktop'
+  }
+}
+
+export function normalizeFingerprint(fingerprint: Fingerprint): Fingerprint {
+  return {
+    ...fingerprint,
+    ...normalizeFingerprintDraft(fingerprint)
+  }
+}
+
 // ─── Main fingerprint generator ──────────────────────────────────────────
 
 export function generateDefaultFingerprint(
@@ -337,115 +625,74 @@ export function generateDefaultFingerprint(
     return generateMobileFingerprint(overrides)
   }
 
-  const isWindows = Math.random() > 0.35 // ~65% Windows, ~35% Mac (real-world distribution)
-
-  // OS-specific User-Agent
-  const chromeVer = randomChromeVersion()
-  let userAgent: string
-  let platform: string
-  let pixelRatio: number
-
-  if (isWindows) {
-    // Chrome UA reduction: always NT 10.0 regardless of actual Windows version
-    userAgent = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
-    platform = 'Win32'
-    pixelRatio = Math.random() > 0.8 ? 1.25 : Math.random() > 0.5 ? 1.5 : 1.0
-  } else {
-    const macVer = pick(MAC_VERSIONS)
-    userAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X ${macVer}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
-    platform = 'MacIntel'
-    pixelRatio = 2.0
-  }
-
-  // Screen
-  const screens = isWindows ? WINDOWS_SCREENS : MAC_SCREENS
-  const [screenW, screenH] = pick(screens)
-
-  // GPU — consistent with OS
-  const gpus = isWindows ? WINDOWS_GPUS : MAC_GPUS
-  const gpuConfig = pick(gpus)
-  const webglRenderer = pick(gpuConfig.renderers)
-  const webglVendor = gpuConfig.vendor
-
-  // Timezone and languages
-  const timezone = overrides?.timezone ?? pick(ALL_TIMEZONES)
-  const languages = getLanguagesForTimezone(timezone)
-
-  // Hardware
-  const hw = pickWeighted(HARDWARE_CONFIGS)
-
-  // Media devices
+  const osModel = getHostDesktopOsModel()
+  const chromeVersion = extractChromeVersion(overrides?.user_agent) ?? randomChromeVersion()
+  const [screenWidth, screenHeight] = pick(
+    osModel === 'windows' ? WINDOWS_SCREENS : MAC_SCREENS
+  )
+  const gpuConfig = pick(osModel === 'windows' ? WINDOWS_GPUS : MAC_GPUS)
+  const hardware = pickWeighted(HARDWARE_CONFIGS)
   const media = pick(MEDIA_CONFIGS)
 
-  // Fonts
-  const fonts = randomFontSubset(isWindows ? WIN_FONTS_POOL : MAC_FONTS_POOL)
-
-  // Noise values — always unique per generation
-  const canvasNoiseSeed = Math.floor(Math.random() * 2147483647)
-  const audioContextNoise = Math.random() * 0.0001
-
-  return {
-    user_agent: overrides?.user_agent ?? userAgent,
-    platform: overrides?.platform ?? platform,
-    hardware_concurrency: overrides?.hardware_concurrency ?? hw.concurrency,
-    device_memory: overrides?.device_memory ?? hw.memory,
-    languages: overrides?.languages ?? JSON.stringify(languages),
-    screen_width: overrides?.screen_width ?? screenW,
-    screen_height: overrides?.screen_height ?? screenH,
-    color_depth: 24,
-    pixel_ratio: pixelRatio,
-    timezone,
-    canvas_noise_seed: canvasNoiseSeed,
-    webgl_vendor: overrides?.webgl_vendor ?? webglVendor,
-    webgl_renderer: overrides?.webgl_renderer ?? webglRenderer,
-    audio_context_noise: audioContextNoise,
-    fonts_list: JSON.stringify(fonts),
-    webrtc_policy: overrides?.webrtc_policy ?? 'disable_non_proxied_udp',
-    video_inputs: media.video,
-    audio_inputs: media.audioIn,
-    audio_outputs: media.audioOut,
+  return normalizeFingerprintDraft({
+    user_agent:
+      overrides?.user_agent ??
+      (osModel === 'windows'
+        ? buildWindowsUserAgent(chromeVersion)
+        : buildMacUserAgent(chromeVersion)),
+    platform: overrides?.platform ?? (osModel === 'windows' ? 'Win32' : 'MacIntel'),
+    hardware_concurrency: overrides?.hardware_concurrency ?? hardware.concurrency,
+    device_memory: overrides?.device_memory ?? hardware.memory,
+    languages: overrides?.languages,
+    screen_width: overrides?.screen_width ?? screenWidth,
+    screen_height: overrides?.screen_height ?? screenHeight,
+    color_depth: overrides?.color_depth ?? 24,
+    pixel_ratio: overrides?.pixel_ratio,
+    timezone: overrides?.timezone,
+    canvas_noise_seed: overrides?.canvas_noise_seed,
+    webgl_vendor: overrides?.webgl_vendor ?? gpuConfig.vendor,
+    webgl_renderer: overrides?.webgl_renderer ?? pick(gpuConfig.renderers),
+    audio_context_noise: overrides?.audio_context_noise,
+    fonts_list: overrides?.fonts_list,
+    webrtc_policy: overrides?.webrtc_policy,
+    video_inputs: overrides?.video_inputs ?? media.video,
+    audio_inputs: overrides?.audio_inputs ?? media.audioIn,
+    audio_outputs: overrides?.audio_outputs ?? media.audioOut,
     device_type: 'desktop'
-  }
+  })
 }
 
 function generateMobileFingerprint(
   overrides?: Partial<Fingerprint>
 ): Omit<Fingerprint, 'id' | 'profile_id'> {
-  const chromeVer = randomChromeVersion()
+  const chromeVer = extractChromeVersion(overrides?.user_agent) ?? randomChromeVersion()
   const device = pick(ANDROID_DEVICES)
   const [screenW, screenH] = pick(MOBILE_SCREENS)
   const gpuConfig = pick(MOBILE_GPUS)
-
-  const userAgent = `Mozilla/5.0 (Linux; Android 14; ${device.model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Mobile Safari/537.36`
-  const platform = 'Linux armv81'
-
-  const timezone = overrides?.timezone ?? pick(ALL_TIMEZONES)
-  const languages = getLanguagesForTimezone(timezone)
   const hw = pickWeighted(HARDWARE_CONFIGS)
-  const fonts = randomFontSubset(MOBILE_FONTS_POOL, 5, 8)
 
-  return {
-    user_agent: overrides?.user_agent ?? userAgent,
-    platform: overrides?.platform ?? platform,
+  return normalizeFingerprintDraft({
+    user_agent: overrides?.user_agent ?? buildMobileUserAgent(chromeVer, device.model),
+    platform: overrides?.platform ?? 'Linux armv81',
     hardware_concurrency: overrides?.hardware_concurrency ?? Math.min(hw.concurrency, 8),
     device_memory: overrides?.device_memory ?? Math.min(hw.memory, 8),
-    languages: overrides?.languages ?? JSON.stringify(languages),
+    languages: overrides?.languages,
     screen_width: overrides?.screen_width ?? screenW,
     screen_height: overrides?.screen_height ?? screenH,
-    color_depth: 24,
-    pixel_ratio: pick([2.0, 2.625, 3.0, 3.5]),
-    timezone,
-    canvas_noise_seed: Math.floor(Math.random() * 2147483647),
+    color_depth: overrides?.color_depth ?? 24,
+    pixel_ratio: overrides?.pixel_ratio,
+    timezone: overrides?.timezone,
+    canvas_noise_seed: overrides?.canvas_noise_seed,
     webgl_vendor: overrides?.webgl_vendor ?? gpuConfig.vendor,
     webgl_renderer: overrides?.webgl_renderer ?? pick(gpuConfig.renderers),
-    audio_context_noise: Math.random() * 0.0001,
-    fonts_list: JSON.stringify(fonts),
-    webrtc_policy: overrides?.webrtc_policy ?? 'disable_non_proxied_udp',
-    video_inputs: 1,
-    audio_inputs: 1,
-    audio_outputs: 1,
+    audio_context_noise: overrides?.audio_context_noise,
+    fonts_list: overrides?.fonts_list,
+    webrtc_policy: overrides?.webrtc_policy,
+    video_inputs: overrides?.video_inputs ?? 1,
+    audio_inputs: overrides?.audio_inputs ?? 1,
+    audio_outputs: overrides?.audio_outputs ?? 1,
     device_type: 'mobile'
-  }
+  })
 }
 
 export function generateFingerprintForApi(browserType: BrowserType): Omit<Fingerprint, 'id' | 'profile_id'> {
@@ -454,14 +701,9 @@ export function generateFingerprintForApi(browserType: BrowserType): Omit<Finger
 
 // ─── Injection script ────────────────────────────────────────────────────
 
-export function buildInjectionScript(fp: Fingerprint): string {
-  let languages: string[]
-  try {
-    languages = JSON.parse(fp.languages)
-    if (!Array.isArray(languages)) languages = ['en-US', 'en']
-  } catch {
-    languages = ['en-US', 'en']
-  }
+export function buildInjectionScript(inputFp: Fingerprint): string {
+  const fp = normalizeFingerprint(inputFp)
+  const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
   const languagesJson = JSON.stringify(languages)
 
   let fontsJson = fp.fonts_list
@@ -475,13 +717,19 @@ export function buildInjectionScript(fp: Fingerprint): string {
 
   // Pre-build worker spoofing code (injected into Worker/SharedWorker constructors)
   const workerSpoofCode = JSON.stringify(
-    `(function(){try{var n=navigator;var d=Object.defineProperty;` +
+    `(function(){try{var n=navigator;var d=Object.defineProperty;var langs=${languagesJson};var tz=${JSON.stringify(fp.timezone)};` +
     `d(n,"language",{get:function(){return ${JSON.stringify(languages[0] || 'en-US')}},configurable:true});` +
-    `d(n,"languages",{get:function(){return ${languagesJson}},configurable:true});` +
+    `d(n,"languages",{get:function(){return langs.slice()},configurable:true});` +
     `d(n,"userAgent",{get:function(){return ${JSON.stringify(fp.user_agent)}},configurable:true});` +
+    `d(n,"appVersion",{get:function(){return ${JSON.stringify(fp.user_agent.replace('Mozilla/', ''))}},configurable:true});` +
     `d(n,"platform",{get:function(){return ${JSON.stringify(fp.platform)}},configurable:true});` +
+    `d(n,"vendor",{get:function(){return "Google Inc."},configurable:true});` +
+    `d(n,"maxTouchPoints",{get:function(){return ${fp.device_type === 'mobile' ? 5 : 0}},configurable:true});` +
     `d(n,"hardwareConcurrency",{get:function(){return ${fp.hardware_concurrency}},configurable:true});` +
     `d(n,"deviceMemory",{get:function(){return ${fp.device_memory}},configurable:true});` +
+    `var ODTF=Intl.DateTimeFormat;Intl.DateTimeFormat=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();if(options&&typeof options==="object"){if(!options.timeZone)options.timeZone=tz;}else if(!options){options={timeZone:tz};}return new ODTF(locales,options);};` +
+    `Intl.DateTimeFormat.prototype=ODTF.prototype;Intl.DateTimeFormat.supportedLocalesOf=ODTF.supportedLocalesOf.bind(ODTF);` +
+    `["toLocaleString","toLocaleDateString","toLocaleTimeString"].forEach(function(name){var orig=Date.prototype[name];Date.prototype[name]=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();options=options&&typeof options==="object"?options:{};if(!options.timeZone)options.timeZone=tz;return orig.call(this,locales,options);};});` +
     `}catch(e){}})();\n`
   )
 
