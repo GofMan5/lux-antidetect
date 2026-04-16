@@ -1,44 +1,15 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
-import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw } from 'lucide-react'
+import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw, Pencil } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
 import { useProfilesStore } from '../stores/profiles'
 import { THEME_PRESETS } from '../lib/themes'
 import type { Theme, ThemeColors } from '../lib/themes'
-import { BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER, LABEL_CLASS, INPUT_CLASS, CHECKBOX_CLASS } from '../lib/ui'
+import { BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER, CHECKBOX_CLASS } from '../lib/ui'
 import type { ManagedBrowserResponse, AvailableBrowser } from '../lib/types'
 import { useToastStore } from '../components/Toast'
 import { useConfirmStore } from '../components/ConfirmDialog'
-
-const COLOR_LABELS: Record<keyof ThemeColors, string> = {
-  surface: 'Background',
-  surfaceAlt: 'Sidebar',
-  card: 'Card',
-  elevated: 'Hover',
-  edge: 'Border',
-  content: 'Text',
-  muted: 'Muted Text',
-  accent: 'Accent',
-  accentDim: 'Accent Hover',
-  ok: 'Success',
-  warn: 'Warning',
-  err: 'Error'
-}
-
-const DEFAULT_CUSTOM_COLORS: ThemeColors = {
-  surface: '#09090b',
-  surfaceAlt: '#0c0c10',
-  card: '#131318',
-  elevated: '#1a1a22',
-  edge: '#232330',
-  content: '#ececef',
-  muted: '#71717a',
-  accent: '#3b82f6',
-  accentDim: '#2563eb',
-  ok: '#22c55e',
-  warn: '#eab308',
-  err: '#ef4444'
-}
+import { ThemeEditor } from '../components/ThemeEditor'
 
 type SettingsTab = 'appearance' | 'browsers' | 'general'
 
@@ -62,10 +33,17 @@ export function SettingsPage(): React.JSX.Element {
   const activeThemeId = useSettingsStore((s) => s.activeThemeId)
   const customThemes = useSettingsStore((s) => s.customThemes)
   const setActiveTheme = useSettingsStore((s) => s.setActiveTheme)
-  const addCustomTheme = useSettingsStore((s) => s.addCustomTheme)
   const deleteCustomTheme = useSettingsStore((s) => s.deleteCustomTheme)
   const autoRegenFingerprint = useSettingsStore((s) => s.autoRegenFingerprint)
   const setAutoRegenFingerprint = useSettingsStore((s) => s.setAutoRegenFingerprint)
+
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState(true)
+
+  useEffect(() => {
+    api.getSetting('auto_check_updates').then((v: unknown) => {
+      if (v === false) setAutoCheckUpdates(false)
+    }).catch(() => {})
+  }, [])
 
   const [sessionHistory, setSessionHistory] = useState<Array<{
     id: string; profile_id: string; started_at: string; stopped_at: string | null;
@@ -82,9 +60,8 @@ export function SettingsPage(): React.JSX.Element {
   const [sessionTimeout, setSessionTimeout] = useState(0)
   const sessionTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
-  const [showCustomEditor, setShowCustomEditor] = useState(false)
-  const [customName, setCustomName] = useState('')
-  const [customColors, setCustomColors] = useState<ThemeColors>({ ...DEFAULT_CUSTOM_COLORS })
+  const [showThemeEditor, setShowThemeEditor] = useState(false)
+  const [editingTheme, setEditingTheme] = useState<Theme | null>(null)
 
   useEffect(() => {
     api.detectBrowsers().then((result) => { setBrowsers(result); setBrowsersLoading(false) })
@@ -176,19 +153,14 @@ export function SettingsPage(): React.JSX.Element {
     return `${h}h ${m}m`
   }
 
-  const handleCreateCustom = (): void => {
-    if (!customName.trim()) return
-    const theme: Theme = {
-      id: `custom-${Date.now()}`,
-      name: customName.trim(),
-      colors: { ...customColors },
-      isCustom: true
-    }
-    addCustomTheme(theme)
-    setActiveTheme(theme.id)
-    setShowCustomEditor(false)
-    setCustomName('')
-    setCustomColors({ ...DEFAULT_CUSTOM_COLORS })
+  const handleEditTheme = (theme: Theme): void => {
+    setEditingTheme(theme)
+    setShowThemeEditor(true)
+  }
+
+  const handleCloseEditor = (): void => {
+    setShowThemeEditor(false)
+    setEditingTheme(null)
   }
 
   const allThemes = [...THEME_PRESETS, ...customThemes]
@@ -247,68 +219,37 @@ export function SettingsPage(): React.JSX.Element {
                       ))}
                     </div>
                     {theme.isCustom && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteCustomTheme(theme.id) }}
-                        className={`${BTN_DANGER} absolute bottom-2 right-2`}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
+                      <div className="absolute bottom-2 right-2 flex gap-1">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleEditTheme(theme) }}
+                          className="rounded-lg p-1.5 text-muted hover:text-accent hover:bg-accent/10 active:scale-95 transition-all duration-150"
+                          title="Edit theme"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteCustomTheme(theme.id) }}
+                          className={BTN_DANGER}
+                          title="Delete theme"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
                     )}
                   </button>
                 ))}
               </div>
 
-              {!showCustomEditor ? (
+              {!showThemeEditor ? (
                 <button
-                  onClick={() => setShowCustomEditor(true)}
+                  onClick={() => { setEditingTheme(null); setShowThemeEditor(true) }}
                   className="inline-flex items-center gap-1.5 text-xs text-accent hover:text-accent-dim transition-colors font-medium"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   Create Custom Theme
                 </button>
               ) : (
-                <div className="rounded-xl border border-edge bg-card p-4 space-y-3">
-                  <div>
-                    <label className={LABEL_CLASS}>Theme Name</label>
-                    <input
-                      type="text"
-                      value={customName}
-                      onChange={(e) => setCustomName(e.target.value)}
-                      placeholder="My Theme"
-                      className={INPUT_CLASS}
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {(Object.keys(COLOR_LABELS) as (keyof ThemeColors)[]).map((key) => (
-                      <div key={key}>
-                        <label className="block text-[11px] text-muted mb-1">{COLOR_LABELS[key]}</label>
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="color"
-                            value={customColors[key]}
-                            onChange={(e) => setCustomColors((prev) => ({ ...prev, [key]: e.target.value }))}
-                            className="h-8 w-8 rounded-lg border border-edge bg-transparent cursor-pointer p-0 shrink-0"
-                          />
-                          <input
-                            type="text"
-                            value={customColors[key]}
-                            onChange={(e) => setCustomColors((prev) => ({ ...prev, [key]: e.target.value }))}
-                            className="w-full rounded-lg border border-edge bg-surface px-2 py-1 text-xs text-content font-mono focus:outline-none focus:ring-2 focus:ring-accent/40"
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={handleCreateCustom} className={BTN_PRIMARY}>Create</button>
-                    <button
-                      onClick={() => { setShowCustomEditor(false); setCustomName(''); setCustomColors({ ...DEFAULT_CUSTOM_COLORS }) }}
-                      className={BTN_SECONDARY}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
+                <ThemeEditor editingTheme={editingTheme} onClose={handleCloseEditor} />
               )}
             </section>
           </div>
@@ -552,8 +493,8 @@ export function SettingsPage(): React.JSX.Element {
                 <RefreshCw className="h-4 w-4 text-accent" />
                 <h2 className="text-sm font-semibold text-content">Updates</h2>
               </div>
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.3</span></p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.5</span></p>
                 <button
                   onClick={() => api.checkForUpdates()}
                   className={BTN_SECONDARY + ' text-xs'}
@@ -561,6 +502,22 @@ export function SettingsPage(): React.JSX.Element {
                   Check for Updates
                 </button>
               </div>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoCheckUpdates}
+                  onChange={(e) => {
+                    const val = e.target.checked
+                    setAutoCheckUpdates(val)
+                    api.setSetting('auto_check_updates', val)
+                  }}
+                  className={CHECKBOX_CLASS}
+                />
+                <span className="text-sm text-content">Auto-check for updates on startup</span>
+              </label>
+              <p className="text-xs text-muted mt-1.5 ml-[26px]">
+                Checks every 30 minutes in the background. Takes effect on next launch.
+              </p>
             </section>
           </div>
         )}

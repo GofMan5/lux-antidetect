@@ -113,6 +113,28 @@ export const THEME_PRESETS: Theme[] = [
   }
 ]
 
+export const COLOR_LABELS: Record<keyof ThemeColors, string> = {
+  surface: 'Background',
+  surfaceAlt: 'Sidebar',
+  card: 'Card',
+  elevated: 'Hover',
+  edge: 'Border',
+  content: 'Text',
+  muted: 'Muted Text',
+  accent: 'Accent',
+  accentDim: 'Accent Hover',
+  ok: 'Success',
+  warn: 'Warning',
+  err: 'Error'
+}
+
+export const COLOR_GROUPS: { label: string; keys: (keyof ThemeColors)[] }[] = [
+  { label: 'Surfaces', keys: ['surface', 'surfaceAlt', 'card', 'elevated', 'edge'] },
+  { label: 'Typography', keys: ['content', 'muted'] },
+  { label: 'Brand', keys: ['accent', 'accentDim'] },
+  { label: 'Status', keys: ['ok', 'warn', 'err'] }
+]
+
 const COLOR_KEY_TO_CSS: Record<keyof ThemeColors, string> = {
   surface: '--color-surface',
   surfaceAlt: '--color-surface-alt',
@@ -148,4 +170,90 @@ export function getDefaultTheme(): Theme {
 
 export function findTheme(id: string, customThemes: Theme[] = []): Theme | undefined {
   return THEME_PRESETS.find((t) => t.id === id) || customThemes.find((t) => t.id === id)
+}
+
+// ─── Color utilities ───
+
+export interface RGBA {
+  r: number // 0-255
+  g: number // 0-255
+  b: number // 0-255
+  a: number // 0-1
+}
+
+export interface HSVA {
+  h: number // 0-360
+  s: number // 0-100
+  v: number // 0-100
+  a: number // 0-1
+}
+
+export function hexToRgba(hex: string): RGBA {
+  let h = hex.replace('#', '')
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+  if (h.length === 6) h += 'ff'
+  const n = parseInt(h, 16)
+  return {
+    r: (n >> 24) & 0xff,
+    g: (n >> 16) & 0xff,
+    b: (n >> 8) & 0xff,
+    a: Math.round(((n & 0xff) / 255) * 100) / 100
+  }
+}
+
+export function rgbaToHex(c: RGBA): string {
+  const r = Math.round(c.r).toString(16).padStart(2, '0')
+  const g = Math.round(c.g).toString(16).padStart(2, '0')
+  const b = Math.round(c.b).toString(16).padStart(2, '0')
+  if (c.a < 1) {
+    const a = Math.round(c.a * 255).toString(16).padStart(2, '0')
+    return `#${r}${g}${b}${a}`
+  }
+  return `#${r}${g}${b}`
+}
+
+export function rgbaToString(c: RGBA): string {
+  if (c.a < 1) return `rgba(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)}, ${c.a})`
+  return `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`
+}
+
+export function parseColor(str: string): RGBA {
+  // Try rgba/rgb
+  const rgbaMatch = str.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/)
+  if (rgbaMatch) {
+    return { r: +rgbaMatch[1], g: +rgbaMatch[2], b: +rgbaMatch[3], a: rgbaMatch[4] !== undefined ? +rgbaMatch[4] : 1 }
+  }
+  return hexToRgba(str)
+}
+
+export function rgbaToHsva(c: RGBA): HSVA {
+  const r = c.r / 255, g = c.g / 255, b = c.b / 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b)
+  const d = max - min
+  let h = 0
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d + 6) % 6
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h *= 60
+  }
+  const s = max === 0 ? 0 : (d / max) * 100
+  const v = max * 100
+  return { h: Math.round(h), s: Math.round(s), v: Math.round(v), a: c.a }
+}
+
+export function hsvaToRgba(c: HSVA): RGBA {
+  const h = c.h / 60, s = c.s / 100, v = c.v / 100
+  const i = Math.floor(h), f = h - i
+  const p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f))
+  let r = 0, g = 0, b = 0
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break
+    case 1: r = q; g = v; b = p; break
+    case 2: r = p; g = v; b = t; break
+    case 3: r = p; g = q; b = v; break
+    case 4: r = t; g = p; b = v; break
+    case 5: r = v; g = p; b = q; break
+  }
+  return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255), a: c.a }
 }

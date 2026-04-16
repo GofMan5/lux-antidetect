@@ -83,7 +83,7 @@ app.whenReady().then(() => {
 
   // Register IPC handlers only once (never re-register on macOS activate)
   registerIpcHandlers(db, profilesDir, () => mainWindow)
-  initAutoUpdater(mainWindow)
+  initAutoUpdater(mainWindow, db)
   initBrowserManager(userDataPath, mainWindow)
 
   app.on('activate', function () {
@@ -91,7 +91,7 @@ app.whenReady().then(() => {
       mainWindow = createWindow()
       // Update references instead of re-registering
       setBrowserManagerMainWindow(mainWindow)
-      initAutoUpdater(mainWindow)
+      initAutoUpdater(mainWindow, db)
     }
   })
 })

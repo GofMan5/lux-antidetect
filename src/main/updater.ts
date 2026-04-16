@@ -1,7 +1,10 @@
 import { autoUpdater } from 'electron-updater'
 import type { BrowserWindow } from 'electron'
+import type Database from 'better-sqlite3'
 
-export function initAutoUpdater(mainWindow: BrowserWindow): void {
+let checkInterval: ReturnType<typeof setInterval> | undefined
+
+export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Database): void {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
@@ -38,10 +41,36 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
     }
   })
 
-  // Check for updates 3 seconds after launch
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {})
-  }, 3000)
+  // Read auto-check setting (default: enabled)
+  let autoCheckEnabled = true
+  if (db) {
+    try {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('auto_check_updates') as { value: string } | undefined
+      if (row) {
+        const parsed = JSON.parse(row.value)
+        autoCheckEnabled = parsed !== false
+      }
+    } catch { /* default enabled */ }
+  }
+
+  if (autoCheckEnabled) {
+    // Check 3 seconds after launch
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 3000)
+
+    // Re-check every 30 minutes
+    checkInterval = setInterval(() => {
+      autoUpdater.checkForUpdates().catch(() => {})
+    }, 30 * 60 * 1000)
+  }
+}
+
+export function stopAutoUpdateChecks(): void {
+  if (checkInterval) {
+    clearInterval(checkInterval)
+    checkInterval = undefined
+  }
 }
 
 export function checkForUpdates(): Promise<unknown> {
