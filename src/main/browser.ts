@@ -12,6 +12,20 @@ import { getManagedBrowserPath } from './browser-manager'
 
 const execFileAsync = promisify(execFile)
 
+// Module-level mainWindow ref — updated via setMainWindow() on macOS activate
+let _mainWindow: Electron.BrowserWindow | null = null
+
+export function setMainWindow(win: Electron.BrowserWindow): void {
+  _mainWindow = win
+}
+
+function getWin(win: Electron.BrowserWindow | null): Electron.BrowserWindow | null {
+  // Prefer the passed-in ref, fall back to module-level
+  const w = win ?? _mainWindow
+  if (w && !w.isDestroyed()) return w
+  return null
+}
+
 const BROWSER_PATHS: Record<BrowserType, string[]> = {
   chromium: [
     // Windows
@@ -227,6 +241,11 @@ chrome.webRequest.onAuthRequired.addListener(
 function httpGet(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const req = httpRequest(url, (res) => {
+      if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+        res.resume() // drain response
+        reject(new Error(`HTTP ${res.statusCode}`))
+        return
+      }
       let data = ''
       res.on('data', (chunk: Buffer) => { data += chunk.toString() })
       res.on('end', () => resolve(data))

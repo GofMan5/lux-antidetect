@@ -105,18 +105,17 @@ interface ProfileEditorPanelProps {
   onCancel: () => void
 }
 
-function getFingerprintStrength(data: ProfileFormData): { score: number; issues: string[] } {
+function getFingerprintStrength(watchedFields: [string, string, string, string, string]): { score: number; issues: string[] } {
+  const [ua, platform, pixelRatio, webglVendor, timezone] = watchedFields
   const issues: string[] = []
-  const ua = data.user_agent
-  const platform = data.platform
 
   if (ua.includes('Windows') && platform !== 'Win32') issues.push('UA/Platform mismatch')
   if (ua.includes('Macintosh') && platform !== 'MacIntel') issues.push('UA/Platform mismatch')
-  if (ua.includes('Macintosh') && data.pixel_ratio === 1) issues.push('Mac usually has 2x pixel ratio')
+  if (ua.includes('Macintosh') && String(pixelRatio) === '1') issues.push('Mac usually has 2x pixel ratio')
   if (!ua) issues.push('No User-Agent set')
-  if (!data.webgl_vendor) issues.push('No WebGL vendor')
-  if (!data.timezone) issues.push('No timezone set')
-  if (ua.includes('Windows') && data.webgl_vendor === 'Apple') issues.push('Windows + Apple GPU impossible')
+  if (!webglVendor) issues.push('No WebGL vendor')
+  if (!timezone) issues.push('No timezone set')
+  if (ua.includes('Windows') && webglVendor === 'Apple') issues.push('Windows + Apple GPU impossible')
 
   const score = Math.max(0, 100 - issues.length * 15)
   return { score, issues }
@@ -151,7 +150,7 @@ export function ProfileEditorPanel({
     defaultValues: DEFAULT_VALUES
   })
 
-  const watchedData = watch()
+  const watchedData = watch(['user_agent', 'platform', 'pixel_ratio', 'webgl_vendor', 'timezone'])
 
   useEffect(() => {
     fetchProxies()
@@ -474,9 +473,9 @@ export function ProfileEditorPanel({
               </button>
 
               {(() => {
-                const data = watchedData as ProfileFormData
-                if (!data.user_agent) return null
-                const { score, issues } = getFingerprintStrength(data)
+                const [ua] = watchedData
+                if (!ua) return null
+                const { score, issues } = getFingerprintStrength(watchedData as [string, string, string, string, string])
                 const color = score >= 80 ? 'text-ok' : score >= 50 ? 'text-warn' : 'text-err'
                 const bgColor = score >= 80 ? 'bg-ok' : score >= 50 ? 'bg-warn' : 'bg-err'
                 return (

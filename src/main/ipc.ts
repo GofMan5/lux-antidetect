@@ -26,10 +26,15 @@ import { writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, ProxyInput, BrowserType, TemplateInput } from './models'
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+function assertUuid(id: string): void {
+  if (!UUID_RE.test(id)) throw new Error('Invalid ID format')
+}
+
 export function registerIpcHandlers(
   db: Database.Database,
   profilesDir: string,
-  mainWindow: BrowserWindow
+  getMainWindow: () => BrowserWindow
 ): void {
   // Profiles
   ipcMain.handle('list-profiles', () => listProfiles(db))
@@ -52,10 +57,10 @@ export function registerIpcHandlers(
 
   // Browser (async — no longer blocks main thread)
   ipcMain.handle('launch-browser', async (_, profileId: string) =>
-    launchBrowser(db, profileId, profilesDir, mainWindow)
+    launchBrowser(db, profileId, profilesDir, getMainWindow())
   )
   ipcMain.handle('stop-browser', async (_, profileId: string) =>
-    stopBrowser(db, profileId, mainWindow)
+    stopBrowser(db, profileId, getMainWindow())
   )
   ipcMain.handle('get-running-sessions', () => getAllSessions())
   ipcMain.handle('detect-browsers', () => detectBrowsers())
@@ -234,7 +239,7 @@ export function registerIpcHandlers(
         const i = idx++
         const id = profileIds[i]
         try {
-          await launchBrowser(db, id, profilesDir, mainWindow)
+          await launchBrowser(db, id, profilesDir, getMainWindow())
           results.push({ id, ok: true })
         } catch (err) {
           results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
@@ -251,7 +256,7 @@ export function registerIpcHandlers(
     const results: { id: string; ok: boolean; error?: string }[] = []
     for (const id of profileIds) {
       try {
-        await stopBrowser(db, id, mainWindow)
+        await stopBrowser(db, id, getMainWindow())
         results.push({ id, ok: true })
       } catch (err) {
         results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
@@ -275,6 +280,7 @@ export function registerIpcHandlers(
 
   // Cookie import/export
   ipcMain.handle('export-cookies', (_, profileId: string) => {
+    assertUuid(profileId)
     const profileDir = join(profilesDir, profileId)
     // Chromium: try to read Cookies file (it's an SQLite DB, but we'll export a summary)
     const cookiePaths = [
@@ -291,6 +297,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('import-cookies', (_, profileId: string, cookieData: string) => {
+    assertUuid(profileId)
     // Validate size (max 5MB)
     if (cookieData.length > 5 * 1024 * 1024) {
       throw new Error('Cookie data too large (max 5MB)')
@@ -320,6 +327,7 @@ export function registerIpcHandlers(
 
   // Fingerprint validation
   ipcMain.handle('validate-fingerprint', (_, profileId: string) => {
+    assertUuid(profileId)
     const fp = db.prepare('SELECT * FROM fingerprints WHERE profile_id = ?').get(profileId) as Record<string, unknown> | undefined
     if (!fp) throw new Error('Fingerprint not found')
     const issues: string[] = []

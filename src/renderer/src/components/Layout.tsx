@@ -102,7 +102,7 @@ export function Layout(): React.JSX.Element {
         </button>
         {!collapsed && (
           <div className="px-4 py-2.5 text-[11px] text-muted border-t border-edge">
-            Lux v1.0.1
+            Lux v1.0.2
           </div>
         )}
       </aside>

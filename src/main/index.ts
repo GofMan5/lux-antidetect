@@ -4,9 +4,9 @@ import { existsSync, mkdirSync } from 'fs'
 import { initDatabase } from './db'
 import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
-import { killAllBrowsers } from './browser'
+import { killAllBrowsers, setMainWindow as setBrowserMainWindow } from './browser'
 import { initAutoUpdater } from './updater'
-import { initBrowserManager } from './browser-manager'
+import { initBrowserManager, setMainWindow as setBrowserManagerMainWindow } from './browser-manager'
 
 // Portable mode: if a "data" directory exists next to the executable, use it
 function resolveDataPath(): string {
@@ -81,14 +81,17 @@ app.whenReady().then(() => {
 
   let mainWindow = createWindow()
 
-  registerIpcHandlers(db, profilesDir, mainWindow)
+  // Register IPC handlers only once (never re-register on macOS activate)
+  registerIpcHandlers(db, profilesDir, () => mainWindow)
   initAutoUpdater(mainWindow)
   initBrowserManager(userDataPath, mainWindow)
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow()
-      registerIpcHandlers(db, profilesDir, mainWindow)
+      // Update references instead of re-registering
+      setBrowserMainWindow(mainWindow)
+      setBrowserManagerMainWindow(mainWindow)
       initAutoUpdater(mainWindow)
     }
   })

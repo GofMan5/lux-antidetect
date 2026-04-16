@@ -143,8 +143,12 @@ export function ProxiesPage(): React.JSX.Element {
       danger: true
     })
     if (ok) {
-      deleteProxy(id)
-      addToast('Proxy deleted', 'success')
+      try {
+        await deleteProxy(id)
+        addToast('Proxy deleted', 'success')
+      } catch (err) {
+        addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+      }
     }
   }
 

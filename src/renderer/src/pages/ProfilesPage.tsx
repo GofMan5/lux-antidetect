@@ -10,6 +10,16 @@ import { BTN_PRIMARY, BTN_ICON, BTN_DANGER, SELECT_CLASS, CHECKBOX_CLASS, INPUT_
 import { api } from '../lib/api'
 import type { BrowserType, ProfileStatus } from '../lib/types'
 
+type SortKey = 'name' | 'browser_type' | 'status' | 'updated_at'
+type SortDir = 'asc' | 'desc'
+
+function SortIcon({ column, sortKey, sortDir }: { column: SortKey; sortKey: SortKey; sortDir: SortDir }): React.JSX.Element {
+  if (sortKey !== column) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />
+  return sortDir === 'asc'
+    ? <ArrowUp className="h-3 w-3 ml-1 text-accent" />
+    : <ArrowDown className="h-3 w-3 ml-1 text-accent" />
+}
+
 const BROWSER_COLORS: Record<BrowserType, string> = {
   chromium: 'bg-blue-500/20 text-blue-400',
   firefox: 'bg-orange-500/20 text-orange-400',
@@ -108,8 +118,8 @@ export function ProfilesPage(): React.JSX.Element {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [groupFilter, setGroupFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [sortKey, setSortKey] = useState<'name' | 'browser_type' | 'status' | 'updated_at'>('updated_at')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [sortKey, setSortKey] = useState<SortKey>('updated_at')
+  const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; profileId: string } | null>(null)
 
   useEffect(() => {
@@ -158,7 +168,7 @@ export function ProfilesPage(): React.JSX.Element {
     return { running, error }
   }, [profiles])
 
-  const toggleSort = useCallback((key: typeof sortKey) => {
+  const toggleSort = useCallback((key: SortKey) => {
     if (sortKey === key) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     } else {
@@ -166,13 +176,6 @@ export function ProfilesPage(): React.JSX.Element {
       setSortDir('asc')
     }
   }, [sortKey])
-
-  function SortIcon({ column }: { column: typeof sortKey }): React.JSX.Element {
-    if (sortKey !== column) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />
-    return sortDir === 'asc'
-      ? <ArrowUp className="h-3 w-3 ml-1 text-accent" />
-      : <ArrowDown className="h-3 w-3 ml-1 text-accent" />
-  }
 
   const handleExportProfiles = async (): Promise<void> => {
     try {
@@ -210,7 +213,9 @@ export function ProfilesPage(): React.JSX.Element {
       a.click()
       URL.revokeObjectURL(url)
       addToast(`Exported ${ids.length} profile(s)`, 'success')
-    } catch { /* best effort */ }
+    } catch (err) {
+      addToast(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
   }
 
   const handleImportProfiles = (): void => {
@@ -245,7 +250,9 @@ export function ProfilesPage(): React.JSX.Element {
         }
         fetchProfiles()
         addToast(`Imported ${data.length} profile(s)`, 'success')
-      } catch { /* ignore bad files */ }
+      } catch (err) {
+        addToast(`Import failed: ${err instanceof Error ? err.message : 'Invalid file'}`, 'error')
+      }
     }
     input.click()
   }
@@ -258,11 +265,15 @@ export function ProfilesPage(): React.JSX.Element {
       danger: true
     })
     if (!ok) return
-    await actions.delete(id)
-    addToast('Profile deleted', 'success')
-    if (selectedId === id) {
-      setSelectedId(null)
-      setPanelMode(null)
+    try {
+      await actions.delete(id)
+      addToast('Profile deleted', 'success')
+      if (selectedId === id) {
+        setSelectedId(null)
+        setPanelMode(null)
+      }
+    } catch (err) {
+      addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
     }
   }
 
@@ -413,11 +424,15 @@ export function ProfilesPage(): React.JSX.Element {
           <div className="flex flex-col items-center justify-center flex-1 text-center">
             <div className="bg-card rounded-xl p-8 border border-edge">
               <Users className="h-8 w-8 text-muted/30 mx-auto mb-3" />
-              <p className="text-muted mb-4 text-sm">No profiles yet</p>
+              <p className="text-muted mb-4 text-sm">
+                {profiles.length === 0 ? 'No profiles yet' : 'No matching profiles'}
+              </p>
+              {profiles.length === 0 && (
               <button onClick={handleNewProfile} className={BTN_PRIMARY}>
                 <Plus className="h-4 w-4" />
                 Create Profile
               </button>
+              )}
             </div>
           </div>
         ) : (
@@ -451,19 +466,19 @@ export function ProfilesPage(): React.JSX.Element {
                     className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide cursor-pointer select-none hover:text-content transition-colors"
                     onClick={() => toggleSort('name')}
                   >
-                    <span className="inline-flex items-center">Name<SortIcon column="name" /></span>
+                    <span className="inline-flex items-center">Name<SortIcon column="name" sortKey={sortKey} sortDir={sortDir} /></span>
                   </th>
                   <th
                     className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide cursor-pointer select-none hover:text-content transition-colors"
                     onClick={() => toggleSort('browser_type')}
                   >
-                    <span className="inline-flex items-center">Browser<SortIcon column="browser_type" /></span>
+                    <span className="inline-flex items-center">Browser<SortIcon column="browser_type" sortKey={sortKey} sortDir={sortDir} /></span>
                   </th>
                   <th
                     className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide cursor-pointer select-none hover:text-content transition-colors"
                     onClick={() => toggleSort('status')}
                   >
-                    <span className="inline-flex items-center">Status<SortIcon column="status" /></span>
+                    <span className="inline-flex items-center">Status<SortIcon column="status" sortKey={sortKey} sortDir={sortDir} /></span>
                   </th>
                   <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Proxy</th>
                   <th className="text-right px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Actions</th>
@@ -589,7 +604,7 @@ export function ProfilesPage(): React.JSX.Element {
                             <ClipboardCopy className="h-4 w-4" />
                           </button>
                           <button
-                            onClick={() => actions.duplicate(profile.id).then(() => addToast('Profile duplicated', 'success'))}
+                            onClick={() => actions.duplicate(profile.id).then(() => addToast('Profile duplicated', 'success')).catch((e: Error) => addToast(e.message, 'error'))}
                             className={BTN_ICON}
                             aria-label={`Duplicate ${profile.name}`}
                           >
@@ -703,7 +718,7 @@ export function ProfilesPage(): React.JSX.Element {
                 <Pencil className="h-3.5 w-3.5" /> Edit
               </button>
               <button
-                onClick={() => { actions.duplicate(profile.id); setCtxMenu(null) }}
+                onClick={() => { actions.duplicate(profile.id).then(() => addToast('Profile duplicated', 'success')).catch((e: Error) => addToast(e.message, 'error')); setCtxMenu(null) }}
                 className="w-full text-left px-3 py-1.5 hover:bg-elevated text-content transition-colors flex items-center gap-2"
               >
                 <Copy className="h-3.5 w-3.5" /> Duplicate

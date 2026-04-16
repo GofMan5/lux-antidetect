@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, HardDrive, Loader2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
@@ -8,6 +8,7 @@ import type { Theme, ThemeColors } from '../lib/themes'
 import { BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER, LABEL_CLASS, INPUT_CLASS, CHECKBOX_CLASS } from '../lib/ui'
 import type { ManagedBrowserResponse, AvailableBrowser } from '../lib/types'
 import { useToastStore } from '../components/Toast'
+import { useConfirmStore } from '../components/ConfirmDialog'
 
 const COLOR_LABELS: Record<keyof ThemeColors, string> = {
   surface: 'Background',
@@ -48,7 +49,7 @@ export function SettingsPage(): React.JSX.Element {
   const [availableBrowsers, setAvailableBrowsers] = useState<AvailableBrowser[]>([])
   const [downloading, setDownloading] = useState<Record<string, number>>({}) // key → percent
   const addToast = useToastStore((s) => s.addToast)
-  const downloadingRef = useRef(downloading)
+  const confirm = useConfirmStore((s) => s.show)
 
   const activeThemeId = useSettingsStore((s) => s.activeThemeId)
   const customThemes = useSettingsStore((s) => s.customThemes)
@@ -68,9 +69,11 @@ export function SettingsPage(): React.JSX.Element {
   const [historyLoading, setHistoryLoading] = useState(true)
 
   const profiles = useProfilesStore((s) => s.profiles)
-  const profileNameMap = new Map(profiles.map(p => [p.id, p.name]))
+  const profileNameMap = useMemo(() => new Map(profiles.map(p => [p.id, p.name])), [profiles])
 
   const [sessionTimeout, setSessionTimeout] = useState(0)
+
+  const sessionTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
 
   const [showCustomEditor, setShowCustomEditor] = useState(false)
   const [customName, setCustomName] = useState('')
@@ -129,9 +132,6 @@ export function SettingsPage(): React.JSX.Element {
     return () => { offProgress(); offComplete(); offError() }
   }, [refreshManagedBrowsers, addToast])
 
-  // Keep ref in sync
-  downloadingRef.current = downloading
-
   const handleDownloadBrowser = async (browserType: string, channel: string, browser: string, buildId: string): Promise<void> => {
     const key = `${browser}-${buildId}`
     if (downloading[key] !== undefined) return // already downloading
@@ -150,6 +150,13 @@ export function SettingsPage(): React.JSX.Element {
   }
 
   const handleRemoveBrowser = async (browser: string, buildId: string): Promise<void> => {
+    const ok = await confirm({
+      title: 'Remove Browser',
+      message: `Remove ${browser} ${buildId}? You will need to re-download it.`,
+      confirmLabel: 'Remove',
+      danger: true
+    })
+    if (!ok) return
     try {
       await api.removeManagedBrowser(browser, buildId)
       setManagedBrowsers(prev => prev.filter(b => !(b.browser === browser && b.buildId === buildId)))
@@ -393,8 +400,12 @@ export function SettingsPage(): React.JSX.Element {
                 </div>
                 <button
                   onClick={async () => {
-                    await api.deleteTemplate(t.id)
-                    setTemplates(prev => prev.filter(x => x.id !== t.id))
+                    try {
+                      await api.deleteTemplate(t.id)
+                      setTemplates(prev => prev.filter(x => x.id !== t.id))
+                    } catch (err) {
+                      addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+                    }
                   }}
                   className={BTN_DANGER}
                 >
@@ -512,7 +523,7 @@ export function SettingsPage(): React.JSX.Element {
       {/* About */}
       <section className="bg-card rounded-lg border border-edge p-4 mb-3">
         <h2 className="text-xs font-semibold text-muted mb-2 uppercase tracking-wide">About</h2>
-        <p className="text-sm text-muted">Lux Antidetect Browser v1.0.1</p>
+        <p className="text-sm text-muted">Lux Antidetect Browser v1.0.2</p>
       </section>
 
       {/* Data Management */}
@@ -536,7 +547,10 @@ export function SettingsPage(): React.JSX.Element {
                 onChange={(e) => {
                   const val = parseInt(e.target.value) || 0
                   setSessionTimeout(val)
-                  api.setSetting('session_timeout_minutes', val)
+                  clearTimeout(sessionTimeoutRef.current)
+                  sessionTimeoutRef.current = setTimeout(() => {
+                    api.setSetting('session_timeout_minutes', val)
+                  }, 500)
                 }}
                 className="w-20 rounded-md border border-edge bg-surface-alt px-2 py-1.5 text-sm text-content text-center focus:outline-none focus:ring-2 focus:ring-accent/60"
               />
@@ -553,7 +567,7 @@ export function SettingsPage(): React.JSX.Element {
           Updates
         </h2>
         <div className="flex items-center justify-between">
-          <p className="text-sm text-muted">Current: v1.0.1</p>
+          <p className="text-sm text-muted">Current: v1.0.2</p>
           <button
             onClick={() => api.checkForUpdates()}
             className={BTN_SECONDARY + ' text-xs'}

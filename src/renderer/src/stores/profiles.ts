@@ -25,6 +25,9 @@ function setProfileStatus(
   return profiles.map((p) => (p.id === profileId ? { ...p, status } : p))
 }
 
+// Counter to prevent stale data overwrite from concurrent fetchProfiles calls
+let fetchProfilesCounter = 0
+
 export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   profiles: [],
   sessions: [],
@@ -33,12 +36,18 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
 
   fetchProfiles: async () => {
     if (!isApiAvailable()) return
+    const requestId = ++fetchProfilesCounter
     set({ loading: true })
     try {
       const profiles = await api.listProfiles()
-      set({ profiles })
+      // Only apply if this is still the latest request (avoid stale data overwrite)
+      if (requestId === fetchProfilesCounter) {
+        set({ profiles })
+      }
     } finally {
-      set({ loading: false })
+      if (requestId === fetchProfilesCounter) {
+        set({ loading: false })
+      }
     }
   },
 
@@ -132,6 +141,9 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
 // when this module is first evaluated.
 const MAX_INIT_RETRIES = 100 // 5 seconds max (100 * 50ms)
 let initRetries = 0
+let listenersRegistered = false
+// Store cleanup fns for HMR
+let cleanupFns: (() => void)[] = []
 
 function initEventListeners(): void {
   if (typeof window === 'undefined') return
@@ -143,23 +155,31 @@ function initEventListeners(): void {
     return
   }
 
-  window.api.onSessionStarted((data) => {
+  // Guard against duplicate registration (HMR)
+  if (listenersRegistered) return
+  listenersRegistered = true
+
+  // Clean up any stale listeners from previous HMR cycle
+  for (const fn of cleanupFns) fn()
+  cleanupFns = []
+
+  cleanupFns.push(window.api.onSessionStarted((data) => {
     const info = data as SessionInfo
     useProfilesStore.setState((state) => ({
       profiles: setProfileStatus(state.profiles, info.profile_id, 'running'),
       sessions: [...state.sessions.filter((s) => s.profile_id !== info.profile_id), info]
     }))
-  })
+  }))
 
-  window.api.onSessionStopped((data) => {
+  cleanupFns.push(window.api.onSessionStopped((data) => {
     const { profile_id } = data as { profile_id: string; exit_code: number | null }
     useProfilesStore.setState((state) => ({
       profiles: setProfileStatus(state.profiles, profile_id, 'ready'),
       sessions: state.sessions.filter((s) => s.profile_id !== profile_id)
     }))
-  })
+  }))
 
-  window.api.onSessionState((data) => {
+  cleanupFns.push(window.api.onSessionState((data) => {
     const { profile_id, status, error } = data as {
       profile_id: string
       status: ProfileStatus
@@ -171,7 +191,7 @@ function initEventListeners(): void {
         ? { profileErrors: { ...state.profileErrors, [profile_id]: error } }
         : {})
     }))
-  })
+  }))
 }
 
 initEventListeners()

@@ -11,6 +11,7 @@ import {
   canDownload,
   detectBrowserPlatform,
   Browser,
+  Cache,
   type InstalledBrowser
 } from '@puppeteer/browsers'
 import { join } from 'path'
@@ -71,8 +72,18 @@ export function initBrowserManager(dataPath: string, win: BrowserWindow): void {
   mainWin = win
 }
 
+export function setMainWindow(win: BrowserWindow): void {
+  mainWin = win
+}
+
 export function getBrowsersDir(): string {
   return browsersDir
+}
+
+function getPlatform(): string {
+  const p = detectBrowserPlatform()
+  if (!p) throw new Error('Unsupported platform for browser downloads')
+  return p
 }
 
 /* -------------------------------------------------------------------------- */
@@ -83,7 +94,7 @@ export async function resolveLatestVersion(
   browserType: BrowserType,
   channel: string = 'stable'
 ): Promise<{ browser: Browser; buildId: string; platform: string }> {
-  const platform = detectBrowserPlatform()!
+  const platform = getPlatform()
   const browser = BROWSER_TYPE_MAP[browserType]
 
   // For firefox 'stable' tag works; for chrome 'stable' also works
@@ -178,7 +189,7 @@ export async function listManagedBrowsers(): Promise<ManagedBrowser[]> {
   return installed.map((b: InstalledBrowser) => ({
     browser: b.browser as string,
     buildId: b.buildId,
-    platform: b.platform ?? detectBrowserPlatform()!,
+    platform: b.platform ?? getPlatform(),
     executablePath: b.executablePath,
     tags: []
   }))
@@ -190,7 +201,7 @@ export async function listManagedBrowsers(): Promise<ManagedBrowser[]> {
 
 export async function removeManagedBrowser(browser: string, buildId: string): Promise<void> {
   if (!browsersDir) throw new Error('Browser manager not initialized')
-  const platform = detectBrowserPlatform()!
+  const platform = getPlatform()
   await uninstall({
     cacheDir: browsersDir,
     browser: browser as Browser,
@@ -220,8 +231,6 @@ export function getManagedBrowserPath(browserType: BrowserType): string | null {
 function getInstalledBrowsersSync(): InstalledBrowser[] {
   if (!browsersDir || !existsSync(browsersDir)) return []
   try {
-    // Use Cache class directly for sync access
-    const { Cache } = require('@puppeteer/browsers')
     const cache = new Cache(browsersDir)
     return cache.getInstalledBrowsers()
   } catch { return [] }
@@ -249,7 +258,7 @@ export function cancelDownload(browser: string, buildId: string): boolean {
 export async function getAvailableBrowsers(): Promise<
   { browserType: BrowserType; browser: string; channel: string; buildId: string }[]
 > {
-  const platform = detectBrowserPlatform()!
+  const platform = getPlatform()
   const results: { browserType: BrowserType; browser: string; channel: string; buildId: string }[] = []
 
   for (const [luxType, puppetBrowser] of Object.entries(BROWSER_TYPE_MAP) as [BrowserType, Browser][]) {
