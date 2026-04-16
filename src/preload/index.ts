@@ -152,7 +152,16 @@ const api: LuxAPI = {
     const handler = (_: unknown, data: { browser: string; buildId: string; message: string }): void => callback(data)
     ipcRenderer.on('browser-download:error', handler)
     return () => { ipcRenderer.removeListener('browser-download:error', handler) }
-  }
+  },
+
+  // System settings
+  getAutostart: () => ipcRenderer.invoke('get-autostart'),
+  setAutostart: (enabled: boolean) => ipcRenderer.invoke('set-autostart', enabled),
+  setMinimizeToTray: (enabled: boolean) => ipcRenderer.invoke('set-minimize-to-tray', enabled),
+
+  // Database backup/restore
+  exportDatabase: () => ipcRenderer.invoke('export-database'),
+  importDatabase: () => ipcRenderer.invoke('import-database')
 }
 
 if (process.contextIsolated) {

@@ -69,6 +69,19 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
       return
     }
 
+    // Check max concurrent sessions limit
+    const maxConcurrent = await api.getSetting('max_concurrent_sessions') as number | null
+    if (maxConcurrent && maxConcurrent > 0) {
+      const running = get().profiles.filter(p => p.status === 'running' || p.status === 'starting').length
+      if (running >= maxConcurrent) {
+        set((state) => ({
+          profileErrors: { ...state.profileErrors, [id]: `Max concurrent sessions (${maxConcurrent}) reached` },
+          profiles: setProfileStatus(state.profiles, id, 'error')
+        }))
+        return
+      }
+    }
+
     // Clear previous error and set optimistic "starting" state
     set((state) => ({
       profileErrors: { ...state.profileErrors, [id]: '' },

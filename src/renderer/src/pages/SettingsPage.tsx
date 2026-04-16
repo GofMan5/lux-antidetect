@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
-import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw, Pencil, Bug } from 'lucide-react'
+import { CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText, Download, Upload, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw, Pencil, Bug, Monitor, Database, Power } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
 import { useProfilesStore } from '../stores/profiles'
@@ -46,6 +46,19 @@ export function SettingsPage(): React.JSX.Element {
     api.getSetting('auto_check_updates').then((v: unknown) => {
       if (v === false) setAutoCheckUpdates(false)
     }).catch(() => {})
+  }, [])
+
+  const [autostart, setAutostart] = useState(false)
+  const [minimizeToTray, setMinimizeToTray] = useState(false)
+  const [maxConcurrent, setMaxConcurrent] = useState(0)
+  const maxConcurrentRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const [autoStartProfileIds, setAutoStartProfileIds] = useState<string[]>([])
+
+  useEffect(() => {
+    api.getAutostart().then(setAutostart).catch(() => {})
+    api.getSetting('minimize_to_tray').then((v: unknown) => { if (v === true) setMinimizeToTray(true) }).catch(() => {})
+    api.getSetting('max_concurrent_sessions').then((v: unknown) => { if (typeof v === 'number') setMaxConcurrent(v) }).catch(() => {})
+    api.getSetting('auto_start_profiles').then((v: unknown) => { if (Array.isArray(v)) setAutoStartProfileIds(v as string[]) }).catch(() => {})
   }, [])
 
   const [sessionHistory, setSessionHistory] = useState<Array<{
@@ -359,6 +372,138 @@ export function SettingsPage(): React.JSX.Element {
 
         {activeTab === 'general' && (
           <div className="max-w-2xl space-y-5">
+            {/* System */}
+            <section className="rounded-xl border border-edge bg-card p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <Monitor className="h-4 w-4 text-accent" />
+                <h2 className="text-sm font-semibold text-content">System</h2>
+              </div>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autostart}
+                  onChange={(e) => {
+                    api.setAutostart(e.target.checked).then(setAutostart)
+                  }}
+                  className={CHECKBOX_CLASS}
+                />
+                <span className="text-sm text-content">Launch on system startup</span>
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={minimizeToTray}
+                  onChange={(e) => {
+                    const val = e.target.checked
+                    setMinimizeToTray(val)
+                    api.setSetting('minimize_to_tray', val)
+                    api.setMinimizeToTray(val)
+                  }}
+                  className={CHECKBOX_CLASS}
+                />
+                <span className="text-sm text-content">Minimize to system tray on close</span>
+              </label>
+            </section>
+
+            {/* Session limits */}
+            <section className="rounded-xl border border-edge bg-card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Power className="h-4 w-4 text-accent" />
+                <h2 className="text-sm font-semibold text-content">Session Limits</h2>
+              </div>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-sm text-content">Max concurrent sessions</p>
+                  <p className="text-xs text-muted mt-0.5">0 = unlimited</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={maxConcurrent}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 0
+                      setMaxConcurrent(val)
+                      clearTimeout(maxConcurrentRef.current)
+                      maxConcurrentRef.current = setTimeout(() => {
+                        api.setSetting('max_concurrent_sessions', val)
+                      }, 500)
+                    }}
+                    className="w-20 rounded-lg border border-edge bg-surface px-2 py-1.5 text-sm text-content text-center focus:outline-none focus:ring-2 focus:ring-accent/40"
+                  />
+                </div>
+              </div>
+            </section>
+
+            {/* Auto-start profiles */}
+            <section className="rounded-xl border border-edge bg-card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Power className="h-4 w-4 text-accent" />
+                <h2 className="text-sm font-semibold text-content">Auto-Launch Profiles</h2>
+              </div>
+              <p className="text-xs text-muted mb-2">Selected profiles will launch automatically when the app starts.</p>
+              {profiles.length === 0 ? (
+                <p className="text-xs text-muted/50">No profiles yet</p>
+              ) : (
+                <div className="max-h-40 overflow-y-auto space-y-1">
+                  {profiles.map((p) => (
+                    <label key={p.id} className="flex items-center gap-2.5 cursor-pointer rounded-lg px-2 py-1.5 hover:bg-elevated/30 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={autoStartProfileIds.includes(p.id)}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? [...autoStartProfileIds, p.id]
+                            : autoStartProfileIds.filter(x => x !== p.id)
+                          setAutoStartProfileIds(next)
+                          api.setSetting('auto_start_profiles', next)
+                        }}
+                        className={CHECKBOX_CLASS}
+                      />
+                      <span className="text-xs text-content truncate">{p.name}</span>
+                      <span className="text-[10px] text-muted capitalize">{p.browser_type}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Database backup */}
+            <section className="rounded-xl border border-edge bg-card p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Database className="h-4 w-4 text-accent" />
+                <h2 className="text-sm font-semibold text-content">Database Backup</h2>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    const result = await api.exportDatabase()
+                    if (result.ok) addToast(`Backup saved: ${result.path}`, 'success')
+                  }}
+                  className={BTN_SECONDARY + ' text-xs'}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Export Database
+                </button>
+                <button
+                  onClick={async () => {
+                    const result = await api.importDatabase()
+                    if (result.ok && result.requiresRestart) {
+                      addToast('Database imported! Restart to apply.', 'success')
+                    } else if (result.error) {
+                      addToast(result.error, 'error')
+                    }
+                  }}
+                  className={BTN_SECONDARY + ' text-xs'}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Import Database
+                </button>
+              </div>
+              <p className="text-xs text-muted mt-2">Export saves all profiles, proxies, settings. Import requires app restart.</p>
+            </section>
+
             {/* Fingerprint */}
             <section className="rounded-xl border border-edge bg-card p-4">
               <div className="flex items-center gap-2 mb-3">
@@ -497,7 +642,7 @@ export function SettingsPage(): React.JSX.Element {
                 <h2 className="text-sm font-semibold text-content">Updates</h2>
               </div>
               <div className="flex items-center justify-between mb-3">
-                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.6</span></p>
+                <p className="text-sm text-muted">Lux Antidetect Browser <span className="font-mono text-xs">v1.0.7</span></p>
                 <button
                   onClick={() => api.checkForUpdates()}
                   className={BTN_SECONDARY + ' text-xs'}

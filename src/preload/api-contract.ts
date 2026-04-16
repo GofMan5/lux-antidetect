@@ -115,4 +115,13 @@ export interface LuxAPI {
   onBrowserDownloadProgress(callback: (data: { browser: string; buildId: string; downloadedBytes: number; totalBytes: number; percent: number }) => void): () => void
   onBrowserDownloadComplete(callback: (data: ManagedBrowserResponse) => void): () => void
   onBrowserDownloadError(callback: (data: { browser: string; buildId: string; message: string }) => void): () => void
+
+  // System settings
+  getAutostart(): Promise<boolean>
+  setAutostart(enabled: boolean): Promise<boolean>
+  setMinimizeToTray(enabled: boolean): Promise<void>
+
+  // Database backup/restore
+  exportDatabase(): Promise<{ ok: boolean; path?: string }>
+  importDatabase(): Promise<{ ok: boolean; error?: string; requiresRestart?: boolean }>
 }
