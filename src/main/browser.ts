@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync, unlinkSync } from 'fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync, unlinkSync, chmodSync } from 'fs'
 import { join } from 'path'
 import { spawn, execFile } from 'child_process'
 import { promisify } from 'util'
@@ -191,7 +191,8 @@ function writeProxyAuthExtension(extDir: string, proxy: Proxy): string | null {
   if (!proxy.username || !proxy.password) return null
 
   const authExtDir = join(extDir, '_proxy_auth')
-  mkdirSync(authExtDir, { recursive: true })
+  mkdirSync(authExtDir, { recursive: true, mode: 0o700 })
+  try { chmodSync(authExtDir, 0o700) } catch { /* ignore on Windows */ }
 
   const manifest = {
     manifest_version: 3,
@@ -219,8 +220,12 @@ chrome.webRequest.onAuthRequired.addListener(
 );
 `
 
-  writeFileSync(join(authExtDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
-  writeFileSync(join(authExtDir, 'background.js'), background)
+  const manifestPath = join(authExtDir, 'manifest.json')
+  const backgroundPath = join(authExtDir, 'background.js')
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), { mode: 0o600 })
+  writeFileSync(backgroundPath, background, { mode: 0o600 })
+  try { chmodSync(manifestPath, 0o600) } catch { /* ignore on Windows */ }
+  try { chmodSync(backgroundPath, 0o600) } catch { /* ignore on Windows */ }
 
   return authExtDir
 }
@@ -712,7 +717,8 @@ function writeFirefoxUserJs(
     lines.push(`user_pref("media.peerconnection.ice.proxy_only", true);`)
   }
 
-  writeFileSync(join(profileDir, 'user.js'), lines.join('\n'))
+  writeFileSync(join(profileDir, 'user.js'), lines.join('\n'), { mode: 0o600 })
+  try { chmodSync(join(profileDir, 'user.js'), 0o600) } catch { /* ignore on Windows */ }
 }
 
 // ─── Polling-based browser lifecycle tracking ────────────────────────────
@@ -1094,9 +1100,7 @@ export async function launchBrowser(
       }
 
       if (proxy) {
-        const proxyUrl = proxy.protocol.startsWith('socks')
-          ? `${proxy.protocol}://${proxy.host}:${proxy.port}`
-          : `http://${proxy.host}:${proxy.port}`
+        const proxyUrl = `${proxy.protocol}://${proxy.host}:${proxy.port}`
         args.push(`--proxy-server=${proxyUrl}`)
       }
 

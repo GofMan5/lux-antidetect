@@ -54,6 +54,7 @@ export interface Proxy {
   last_check: string | null
   check_ok: number // 0 or 1 for sqlite
   check_latency_ms: number | null
+  check_error: string | null
   country: string | null
   group_tag: string | null
   created_at: string
@@ -70,6 +71,7 @@ export interface ProxyResponse {
   last_check: string | null
   check_ok: boolean
   check_latency_ms: number | null
+  check_error: string | null
   country: string | null
   group_tag: string | null
   created_at: string
@@ -133,8 +135,14 @@ export interface ProxyInput {
   protocol: ProxyProtocol
   host: string
   port: number
-  username?: string
-  password?: string
+  /**
+   * Credential tri-state:
+   *   undefined | '' → keep existing value on update (null on create)
+   *   null           → clear (set to NULL)
+   *   non-empty      → store
+   */
+  username?: string | null
+  password?: string | null
   country?: string
   group_tag?: string
 }
@@ -202,6 +210,7 @@ export function toProxyResponse(row: Proxy): ProxyResponse {
     last_check: row.last_check,
     check_ok: !!row.check_ok,
     check_latency_ms: row.check_latency_ms ?? null,
+    check_error: row.check_error ?? null,
     country: row.country ?? null,
     group_tag: row.group_tag ?? null,
     created_at: row.created_at

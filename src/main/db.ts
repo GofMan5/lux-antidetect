@@ -184,6 +184,13 @@ export function initDatabase(userDataPath: string): Database.Database {
     db.exec('ALTER TABLE proxies ADD COLUMN group_tag TEXT')
   }
 
+  // Migration: add check_error column to proxies
+  try {
+    db.prepare('SELECT check_error FROM proxies LIMIT 0').get()
+  } catch {
+    db.exec('ALTER TABLE proxies ADD COLUMN check_error TEXT')
+  }
+
   // Migration: add rotation_group column to profiles (for proxy rotation)
   try {
     db.prepare('SELECT rotation_group FROM profiles LIMIT 0').get()

@@ -54,6 +54,7 @@ export interface ProxyResponse {
   last_check: string | null
   check_ok: boolean
   check_latency_ms: number | null
+  check_error: string | null
   country: string | null
   group_tag: string | null
   created_at: string
@@ -116,8 +117,11 @@ export interface ProxyInput {
   protocol: ProxyProtocol
   host: string
   port: number
-  username?: string
-  password?: string
+  // Tri-state: undefined | '' → keep (update) / null on create; null → clear; non-empty → set.
+  username?: string | null
+  password?: string | null
+  country?: string
+  group_tag?: string
 }
 
 export interface SessionHistoryEntry {

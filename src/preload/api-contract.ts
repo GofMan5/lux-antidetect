@@ -54,7 +54,7 @@ export interface LuxAPI {
   testProxy(id: string): Promise<boolean>
   getProxyGroups(): Promise<string[]>
   lookupProxyCountry(id: string): Promise<string | null>
-  parseProxyString(raw: string): Promise<{ ok: boolean; data?: ProxyInput; error?: string }[]>
+  parseProxyString(raw: string): Promise<{ ok: boolean; data?: ProxyInput; error?: string; line: string }[]>
   bulkTestProxies(ids: string[]): Promise<{ id: string; ok: boolean }[]>
 
   generateFingerprint(browserType: BrowserType): Promise<Omit<Fingerprint, 'id' | 'profile_id'>>

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -14,7 +14,9 @@ import {
   Copy,
   Download,
   FileUp,
-  CheckSquare
+  CheckSquare,
+  ClipboardPaste,
+  Check
 } from 'lucide-react'
 import { useProxiesStore } from '../stores/proxies'
 import { useConfirmStore } from '../components/ConfirmDialog'
@@ -30,9 +32,10 @@ import {
   Modal,
   EmptyState,
   SearchInput,
-  DropdownMenu
+  DropdownMenu,
+  Tooltip
 } from '../components/ui'
-import type { ProxyProtocol, ProxyResponse } from '../lib/types'
+import type { ProxyProtocol, ProxyResponse, ProxyInput } from '../lib/types'
 
 // ---------------------------------------------------------------------------
 // Schema & defaults
@@ -74,6 +77,38 @@ const PROTOCOL_BADGE: Record<ProxyProtocol, 'default' | 'success' | 'warning' | 
   https: 'success',
   socks4: 'accent',
   socks5: 'warning'
+}
+
+const PROTOCOL_DEFAULT_PORT: Record<ProxyProtocol, number> = {
+  http: 8080,
+  https: 8443,
+  socks4: 1080,
+  socks5: 1080
+}
+
+const KNOWN_DEFAULT_PORTS: ReadonlySet<number> = new Set(Object.values(PROTOCOL_DEFAULT_PORT))
+
+const QUICK_PASTE_DEBOUNCE_MS = 150
+const COUNTRY_CODE_LEN = 2
+const QUICK_PASTE_FILLED_MS = 2000
+
+const QUICK_PASTE_HINT = {
+  parseFail: "Couldn't parse this string",
+  multiline: 'Looks like multiple proxies — use bulk import'
+} as const
+
+const PROXY_CHECK_ERROR_MESSAGES: Record<string, string> = {
+  auth_failed: 'Authentication failed',
+  timeout: 'Connection timed out',
+  connect_refused: 'Connection refused',
+  connection_reset: 'Connection reset by peer',
+  socks_handshake_failed: 'SOCKS handshake failed',
+  socks_auth_unsupported: 'Proxy requires an unsupported SOCKS auth method',
+  unexpected_status: 'Proxy returned an unexpected response',
+  protocol_error: 'Proxy protocol error',
+  cert_invalid: 'Proxy TLS certificate is invalid',
+  dns_error: 'Could not resolve proxy host',
+  unknown_error: 'Unknown proxy error'
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +158,17 @@ export function ProxiesPage(): React.JSX.Element {
   const [bulkTesting, setBulkTesting] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [quickPaste, setQuickPaste] = useState('')
+  const [quickPasteHint, setQuickPasteHint] = useState<string | null>(null)
+  const [quickPasteMultiline, setQuickPasteMultiline] = useState(false)
+  const [quickPasteParsing, setQuickPasteParsing] = useState(false)
+  const [quickPasteFilled, setQuickPasteFilled] = useState(false)
+  const [clearCreds, setClearCreds] = useState<{ username: boolean; password: boolean }>({
+    username: false,
+    password: false
+  })
+  const prevProtocolRef = useRef<ProxyProtocol>('http')
+  const quickPasteInputRef = useRef<HTMLInputElement | null>(null)
 
   // Form
   const {
@@ -130,6 +176,8 @@ export function ProxiesPage(): React.JSX.Element {
     handleSubmit,
     reset,
     getValues,
+    setValue,
+    watch,
     formState: { errors }
   } = useForm<ProxyFormData>({
     resolver: zodResolver(proxySchema),
@@ -151,6 +199,19 @@ export function ProxiesPage(): React.JSX.Element {
         p.protocol.includes(q)
     )
   }, [proxies, searchQuery])
+
+  const editingProxyHasPassword = useMemo(
+    () => (editingId ? proxies.find((p) => p.id === editingId)?.has_password ?? false : false),
+    [proxies, editingId]
+  )
+
+  const editingProxyHasUsername = useMemo(
+    () =>
+      editingId
+        ? Boolean(proxies.find((p) => p.id === editingId)?.username)
+        : false,
+    [proxies, editingId]
+  )
 
   // Selection helpers
   const allSelected = filteredProxies.length > 0 && filteredProxies.every((p) => selected.has(p.id))
@@ -182,6 +243,12 @@ export function ProxiesPage(): React.JSX.Element {
     setEditingId(null)
     setModalError(null)
     setModalTesting(false)
+    setQuickPaste('')
+    setQuickPasteHint(null)
+    setQuickPasteMultiline(false)
+    setQuickPasteParsing(false)
+    setQuickPasteFilled(false)
+    setClearCreds({ username: false, password: false })
     reset(DEFAULT_PROXY)
   }, [reset])
 
@@ -189,6 +256,13 @@ export function ProxiesPage(): React.JSX.Element {
     reset(DEFAULT_PROXY)
     setEditingId(null)
     setModalError(null)
+    setQuickPaste('')
+    setQuickPasteHint(null)
+    setQuickPasteMultiline(false)
+    setQuickPasteParsing(false)
+    setQuickPasteFilled(false)
+    setClearCreds({ username: false, password: false })
+    prevProtocolRef.current = DEFAULT_PROXY.protocol
     setModalOpen(true)
   }
 
@@ -205,25 +279,158 @@ export function ProxiesPage(): React.JSX.Element {
     })
     setEditingId(proxy.id)
     setModalError(null)
+    setQuickPaste('')
+    setQuickPasteHint(null)
+    setQuickPasteMultiline(false)
+    setQuickPasteParsing(false)
+    setQuickPasteFilled(false)
+    setClearCreds({ username: false, password: false })
+    prevProtocolRef.current = proxy.protocol
     setModalOpen(true)
   }
+
+  // ---------------------------------------------------------------------------
+  // Protocol → default port auto-swap (only when current port is a known default)
+  // ---------------------------------------------------------------------------
+
+  const watchedProtocol = watch('protocol')
+  const watchedUsername = watch('username')
+  const watchedPassword = watch('password')
+  useEffect(() => {
+    if (!modalOpen) return
+    const prev = prevProtocolRef.current
+    if (prev === watchedProtocol) return
+    prevProtocolRef.current = watchedProtocol
+    const currentPort = getValues('port')
+    if (KNOWN_DEFAULT_PORTS.has(currentPort)) {
+      setValue('port', PROTOCOL_DEFAULT_PORT[watchedProtocol], { shouldDirty: true })
+    }
+  }, [watchedProtocol, modalOpen, getValues, setValue])
+
+  // ---------------------------------------------------------------------------
+  // Quick-paste: parse a single proxy string and auto-fill the form
+  // ---------------------------------------------------------------------------
+
+  const applyParsedProxy = useCallback(
+    (data: ProxyInput): void => {
+      setValue('protocol', data.protocol, { shouldDirty: true, shouldValidate: true })
+      setValue('host', data.host, { shouldDirty: true, shouldValidate: true })
+      setValue('port', data.port, { shouldDirty: true, shouldValidate: true })
+      setValue('username', data.username ?? '', { shouldDirty: true })
+      setValue('password', data.password ?? '', { shouldDirty: true })
+      if (data.name && !getValues('name')?.trim()) {
+        setValue('name', data.name, { shouldDirty: true, shouldValidate: true })
+      }
+      prevProtocolRef.current = data.protocol
+    },
+    [setValue, getValues]
+  )
+
+  const runQuickPasteParse = useCallback(
+    async (value: string): Promise<void> => {
+      const trimmed = value.trim()
+      if (!trimmed) {
+        setQuickPasteHint(null)
+        setQuickPasteMultiline(false)
+        setQuickPasteParsing(false)
+        setQuickPasteFilled(false)
+        return
+      }
+      const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+      if (lines.length >= 2) {
+        setQuickPasteHint(QUICK_PASTE_HINT.multiline)
+        setQuickPasteMultiline(true)
+        setQuickPasteParsing(false)
+        setQuickPasteFilled(false)
+        return
+      }
+      setQuickPasteMultiline(false)
+      setQuickPasteParsing(true)
+      try {
+        const results = await api.parseProxyString(lines[0])
+        const first = results[0]
+        if (first?.ok && first.data) {
+          applyParsedProxy(first.data)
+          setQuickPasteHint(null)
+          setQuickPasteFilled(true)
+        } else {
+          setQuickPasteHint(QUICK_PASTE_HINT.parseFail)
+          setQuickPasteFilled(false)
+        }
+      } catch {
+        setQuickPasteHint(QUICK_PASTE_HINT.parseFail)
+        setQuickPasteFilled(false)
+      } finally {
+        setQuickPasteParsing(false)
+      }
+    },
+    [applyParsedProxy]
+  )
+
+  useEffect(() => {
+    if (!modalOpen) return
+    const timer = setTimeout(() => {
+      void runQuickPasteParse(quickPaste)
+    }, QUICK_PASTE_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [quickPaste, modalOpen, runQuickPasteParse])
+
+  // Clear the transient "✓ Filled" success hint after a short delay.
+  useEffect(() => {
+    if (!quickPasteFilled) return
+    const t = setTimeout(() => setQuickPasteFilled(false), QUICK_PASTE_FILLED_MS)
+    return () => clearTimeout(t)
+  }, [quickPasteFilled])
+
+  // Autofocus the quick-paste input when the modal opens for faster workflows.
+  // Only in Add mode — in Edit mode a stray paste would overwrite saved fields.
+  useEffect(() => {
+    if (!modalOpen || editingId) return
+    const id = window.setTimeout(() => quickPasteInputRef.current?.focus(), 50)
+    return () => window.clearTimeout(id)
+  }, [modalOpen, editingId])
 
   // ---------------------------------------------------------------------------
   // CRUD / test handlers
   // ---------------------------------------------------------------------------
 
+  const buildProxyInput = (data: ProxyFormData, isUpdate: boolean): ProxyInput => {
+    const country = data.country.trim().toUpperCase()
+    const groupTag = data.group_tag.trim()
+    const username = data.username
+    const password = data.password
+
+    // Tri-state rules (update):
+    //   non-empty input       → send value (set)
+    //   empty + clear flag    → send null  (clear)
+    //   empty + no clear flag → send undefined (keep)
+    // Create: keep legacy behavior (empty → undefined means "no credential").
+    const resolveCred = (
+      value: string,
+      clearFlag: boolean
+    ): string | null | undefined => {
+      if (value) return value
+      if (isUpdate && clearFlag) return null
+      return undefined
+    }
+
+    return {
+      name: data.name,
+      protocol: data.protocol,
+      host: data.host,
+      port: data.port,
+      username: resolveCred(username, clearCreds.username),
+      password: resolveCred(password, clearCreds.password),
+      country: country.length === COUNTRY_CODE_LEN ? country : undefined,
+      group_tag: groupTag || undefined
+    }
+  }
+
   const onSubmitProxy = async (data: ProxyFormData): Promise<void> => {
     try {
       setModalSaving(true)
       setModalError(null)
-      const input = {
-        name: data.name,
-        protocol: data.protocol,
-        host: data.host,
-        port: data.port,
-        username: data.username || undefined,
-        password: data.password || undefined
-      }
+      const input = buildProxyInput(data, Boolean(editingId))
       if (editingId) {
         await api.updateProxy(editingId, input)
       } else {
@@ -282,41 +489,15 @@ export function ProxiesPage(): React.JSX.Element {
   }
 
   const handleTestInModal = async (): Promise<void> => {
-    const data = getValues()
-    if (!data.host || !data.port) return
+    if (!editingId) return
     setModalTesting(true)
     try {
-      if (editingId) {
-        await testProxy(editingId)
-        const updated = useProxiesStore.getState().proxies.find((p) => p.id === editingId)
-        addToast(
-          updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
-          updated?.check_ok ? 'success' : 'error'
-        )
-      } else {
-        const input = {
-          name: data.name || 'Test',
-          protocol: data.protocol,
-          host: data.host,
-          port: data.port,
-          username: data.username || undefined,
-          password: data.password || undefined
-        }
-        const proxy = await api.createProxy(input)
-        try {
-          await testProxy(proxy.id)
-          const updated = useProxiesStore.getState().proxies.find((p) => p.id === proxy.id)
-          addToast(
-            updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
-            updated?.check_ok ? 'success' : 'error'
-          )
-          await fetchProxies()
-          closeModal()
-        } catch {
-          await deleteProxy(proxy.id)
-          addToast('Proxy test failed', 'error')
-        }
-      }
+      await testProxy(editingId)
+      const updated = useProxiesStore.getState().proxies.find((p) => p.id === editingId)
+      addToast(
+        updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
+        updated?.check_ok ? 'success' : 'error'
+      )
     } catch (err) {
       addToast(`Test failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
     } finally {
@@ -391,6 +572,29 @@ export function ProxiesPage(): React.JSX.Element {
     setImportText('')
     setImportParsed(null)
   }
+
+  // Route multi-line paste from the quick-paste input into the bulk import modal.
+  const openBulkImportWithText = useCallback(
+    (text: string): void => {
+      // Close the add/edit modal (form state is discarded — acceptable per spec).
+      setModalOpen(false)
+      setEditingId(null)
+      setModalError(null)
+      setModalTesting(false)
+      setQuickPaste('')
+      setQuickPasteHint(null)
+      setQuickPasteMultiline(false)
+      setQuickPasteParsing(false)
+      setQuickPasteFilled(false)
+      setClearCreds({ username: false, password: false })
+      reset(DEFAULT_PROXY)
+      // Prefill + open the bulk-import modal.
+      setImportParsed(null)
+      setImportText(text)
+      setImportOpen(true)
+    },
+    [reset]
+  )
 
   const parseImport = async (): Promise<void> => {
     if (!importText.trim()) return
@@ -660,6 +864,16 @@ export function ProxiesPage(): React.JSX.Element {
                               <Loader2 className="h-3 w-3 animate-spin" />
                               Testing
                             </Badge>
+                          ) : !proxy.check_ok && proxy.check_error ? (
+                            <Tooltip
+                              content={
+                                PROXY_CHECK_ERROR_MESSAGES[proxy.check_error] ?? proxy.check_error
+                              }
+                            >
+                              <Badge variant={status.variant} dot className="cursor-help">
+                                {status.label}
+                              </Badge>
+                            </Tooltip>
                           ) : (
                             <Badge variant={status.variant} dot>
                               {status.label}
@@ -733,16 +947,22 @@ export function ProxiesPage(): React.JSX.Element {
         size="md"
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="md"
-              icon={<FlaskConical className="h-4 w-4" />}
-              onClick={handleTestInModal}
-              loading={modalTesting}
-              disabled={modalTesting || modalSaving}
-            >
-              Test
-            </Button>
+            {editingId ? (
+              <Button
+                variant="ghost"
+                size="md"
+                icon={<FlaskConical className="h-4 w-4" />}
+                onClick={handleTestInModal}
+                loading={modalTesting}
+                disabled={modalTesting || modalSaving}
+              >
+                Test
+              </Button>
+            ) : (
+              <span className="mr-auto text-xs text-muted">
+                Save the proxy first to test it.
+              </span>
+            )}
             <Button variant="secondary" size="md" onClick={closeModal}>
               Cancel
             </Button>
@@ -765,6 +985,69 @@ export function ProxiesPage(): React.JSX.Element {
         )}
 
         <form id="proxy-form" onSubmit={handleSubmit(onSubmitProxy)} className="space-y-3">
+          <div>
+            <label
+              htmlFor="proxy-quick-paste"
+              className="block text-xs font-medium text-content mb-1.5"
+            >
+              Quick paste
+            </label>
+            <Input
+              ref={quickPasteInputRef}
+              id="proxy-quick-paste"
+              placeholder="socks5://user:pass@host:port"
+              value={quickPaste}
+              onChange={(e) => setQuickPaste(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  // Prevent accidental form submission via the outer <form>.
+                  e.preventDefault()
+                  void runQuickPasteParse(quickPaste)
+                }
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              icon={<ClipboardPaste className="h-4 w-4" />}
+              rightIcon={
+                quickPasteParsing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : quickPasteFilled ? (
+                  <Check className="h-4 w-4 text-ok" />
+                ) : undefined
+              }
+            />
+            {quickPasteMultiline ? (
+              <p className="mt-1 text-xs leading-snug text-err">
+                {QUICK_PASTE_HINT.multiline}
+                {!editingId && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      className="underline underline-offset-2 text-accent hover:text-accent/80 transition-colors"
+                      onClick={() => openBulkImportWithText(quickPaste)}
+                    >
+                      Open bulk import
+                    </button>
+                  </>
+                )}
+              </p>
+            ) : quickPasteParsing ? (
+              <p className="mt-1 text-xs leading-snug text-muted">Parsing…</p>
+            ) : quickPasteFilled ? (
+              <p className="mt-1 text-xs leading-snug text-ok">✓ Filled</p>
+            ) : (
+              <p
+                className={cn(
+                  'mt-1 text-xs leading-snug',
+                  quickPasteHint ? 'text-err' : 'text-muted'
+                )}
+              >
+                {quickPasteHint ?? 'Paste any format — fields auto-fill'}
+              </p>
+            )}
+          </div>
+
           <div>
             <label htmlFor="proxy-name" className="block text-xs font-medium text-content mb-1.5">
               Name
@@ -833,6 +1116,35 @@ export function ProxiesPage(): React.JSX.Element {
                 Username
               </label>
               <Input id="proxy-username" placeholder="optional" {...register('username')} />
+              {editingId && editingProxyHasUsername && (
+                <div className="mt-1">
+                  {clearCreds.username && !watchedUsername ? (
+                    <p className="text-xs text-muted">
+                      Username will be cleared on save.{' '}
+                      <button
+                        type="button"
+                        className="underline underline-offset-2 text-accent hover:text-accent/80 transition-colors"
+                        onClick={() =>
+                          setClearCreds((prev) => ({ ...prev, username: false }))
+                        }
+                      >
+                        Undo
+                      </button>
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="text-xs text-muted hover:text-content underline underline-offset-2 transition-colors"
+                      onClick={() => {
+                        setValue('username', '', { shouldDirty: true })
+                        setClearCreds((prev) => ({ ...prev, username: true }))
+                      }}
+                    >
+                      Clear saved username
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <label
@@ -844,9 +1156,42 @@ export function ProxiesPage(): React.JSX.Element {
               <Input
                 id="proxy-password"
                 type="password"
-                placeholder="optional"
+                placeholder={
+                  editingId && editingProxyHasPassword
+                    ? '•••••• (leave empty to keep)'
+                    : 'optional'
+                }
                 {...register('password')}
               />
+              {editingId && editingProxyHasPassword && (
+                <div className="mt-1">
+                  {clearCreds.password && !watchedPassword ? (
+                    <p className="text-xs text-muted">
+                      Password will be cleared on save.{' '}
+                      <button
+                        type="button"
+                        className="underline underline-offset-2 text-accent hover:text-accent/80 transition-colors"
+                        onClick={() =>
+                          setClearCreds((prev) => ({ ...prev, password: false }))
+                        }
+                      >
+                        Undo
+                      </button>
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="text-xs text-muted hover:text-content underline underline-offset-2 transition-colors"
+                      onClick={() => {
+                        setValue('password', '', { shouldDirty: true })
+                        setClearCreds((prev) => ({ ...prev, password: true }))
+                      }}
+                    >
+                      Clear saved password
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

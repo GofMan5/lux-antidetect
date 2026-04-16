@@ -9,7 +9,7 @@ import {
   deleteProfile,
   duplicateProfile
 } from './profile'
-import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, updateProxyCountry } from './proxy'
+import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, updateProxyCountry, parseProxyLine } from './proxy'
 import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
 import { generateFingerprintForApi } from './fingerprint'
@@ -28,6 +28,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 function assertUuid(id: string): void {
   if (!UUID_RE.test(id)) throw new Error('Invalid ID format')
 }
+
+const BULK_TEST_CONCURRENCY = 25
+const BULK_TEST_MAX_IDS = 500
+const PARSE_PROXY_MAX_BYTES = 1_000_000
+const PARSE_PROXY_MAX_LINES = 10_000
 
 export function registerIpcHandlers(
   db: Database.Database,
@@ -66,63 +71,39 @@ export function registerIpcHandlers(
   // Proxies
   ipcMain.handle('list-proxies', () => listProxies(db))
   ipcMain.handle('create-proxy', (_, input: ProxyInput) => createProxy(db, input))
-  ipcMain.handle('update-proxy', (_, proxyId: string, input: ProxyInput) =>
-    updateProxy(db, proxyId, input)
-  )
-  ipcMain.handle('delete-proxy', (_, proxyId: string) => deleteProxy(db, proxyId))
+  ipcMain.handle('update-proxy', (_, proxyId: string, input: ProxyInput) => {
+    assertUuid(proxyId)
+    return updateProxy(db, proxyId, input)
+  })
+  ipcMain.handle('delete-proxy', (_, proxyId: string) => {
+    assertUuid(proxyId)
+    return deleteProxy(db, proxyId)
+  })
 
-  // Parse proxy strings (host:port:user:pass or protocol://host:port:user:pass)
+  // Parse proxy strings — supports legacy colon forms and protocol://user:pass@host:port.
   ipcMain.handle('parse-proxy-string', (_, raw: string) => {
+    if (typeof raw !== 'string') throw new Error('Input must be a string')
+    if (raw.length > PARSE_PROXY_MAX_BYTES) {
+      throw new Error(`Input too large (max ${PARSE_PROXY_MAX_BYTES} chars)`)
+    }
     const results: { ok: boolean; data?: ProxyInput; error?: string; line: string }[] = []
-    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    const lines = raw
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(0, PARSE_PROXY_MAX_LINES)
     for (const line of lines) {
-      try {
-        let protocol: ProxyInput['protocol'] = 'http'
-        let rest = line
-        // Check for protocol prefix
-        const protoMatch = rest.match(/^(https?|socks[45]):\/\//)
-        if (protoMatch) {
-          protocol = protoMatch[1] as ProxyInput['protocol']
-          rest = rest.replace(protoMatch[0], '')
-        }
-        // Split by : — formats: host:port, host:port:user:pass, user:pass@host:port
-        let host: string, port: number, username: string | undefined, password: string | undefined
-        const atIdx = rest.indexOf('@')
-        if (atIdx !== -1) {
-          // user:pass@host:port
-          const auth = rest.slice(0, atIdx)
-          const hostPort = rest.slice(atIdx + 1)
-          const [u, p] = auth.split(':')
-          username = u; password = p
-          const [h, portStr] = hostPort.split(':')
-          host = h; port = parseInt(portStr, 10)
-        } else {
-          const parts = rest.split(':')
-          if (parts.length === 4) {
-            // host:port:user:pass
-            host = parts[0]; port = parseInt(parts[1], 10)
-            username = parts[2]; password = parts[3]
-          } else if (parts.length === 2) {
-            // host:port
-            host = parts[0]; port = parseInt(parts[1], 10)
-          } else {
-            throw new Error('Invalid format')
-          }
-        }
-        if (!host || !port || isNaN(port) || port < 1 || port > 65535) throw new Error('Invalid host:port')
-        results.push({
-          ok: true,
-          data: { name: `${host}:${port}`, protocol, host, port, username, password },
-          line
-        })
-      } catch (err) {
-        results.push({ ok: false, error: err instanceof Error ? err.message : 'Parse error', line })
-      }
+      const parsed = parseProxyLine(line)
+      if (parsed.ok) results.push({ ok: true, data: parsed.data, line })
+      else results.push({ ok: false, error: parsed.error, line })
     }
     return results
   })
 
-  ipcMain.handle('test-proxy', (_, proxyId: string) => testProxy(db, proxyId))
+  ipcMain.handle('test-proxy', (_, proxyId: string) => {
+    assertUuid(proxyId)
+    return testProxy(db, proxyId)
+  })
 
   ipcMain.handle('proxy-groups', () => getProxyGroups(db))
 
@@ -131,18 +112,32 @@ export function registerIpcHandlers(
     return updateProxyCountry(db, proxyId)
   })
 
-  // Bulk proxy test
+  // Bulk proxy test — bounded concurrency pool with per-id UUID validation.
   ipcMain.handle('bulk-test-proxies', async (_, proxyIds: string[]) => {
-    const results: { id: string; ok: boolean }[] = []
-    for (const id of proxyIds) {
-      try {
-        await testProxy(db, id)
-        const proxy = db.prepare('SELECT check_ok FROM proxies WHERE id = ?').get(id) as { check_ok: number } | undefined
-        results.push({ id, ok: !!proxy?.check_ok })
-      } catch {
-        results.push({ id, ok: false })
+    if (!Array.isArray(proxyIds)) throw new Error('proxyIds must be an array')
+    if (proxyIds.length > BULK_TEST_MAX_IDS) {
+      throw new Error(`Too many proxies (max ${BULK_TEST_MAX_IDS})`)
+    }
+
+    const results: { id: string; ok: boolean }[] = new Array(proxyIds.length)
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const i = next++
+        if (i >= proxyIds.length) return
+        const id = proxyIds[i]
+        try {
+          assertUuid(id)
+          const ok = await testProxy(db, id)
+          results[i] = { id, ok }
+        } catch {
+          results[i] = { id, ok: false }
+        }
       }
     }
+
+    const poolSize = Math.min(BULK_TEST_CONCURRENCY, proxyIds.length)
+    await Promise.all(Array.from({ length: poolSize }, () => worker()))
     return results
   })
 
