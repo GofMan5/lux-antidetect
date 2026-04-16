@@ -14,6 +14,7 @@ import { lookupProxyGeo } from './geoip'
 import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
 import { generateDefaultFingerprint } from './fingerprint'
+import { listFingerprintPresets, generateFingerprintFromPreset } from './fingerprint-presets'
 import { checkForUpdates, installUpdate } from './updater'
 import {
   downloadBrowser,
@@ -23,7 +24,7 @@ import {
   cancelDownload
 } from './browser-manager'
 import { v4 as uuidv4 } from 'uuid'
-import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, ProxyInput, BrowserType, TemplateInput } from './models'
+import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, ProxyInput, BrowserType, TemplateInput, Fingerprint } from './models'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function assertUuid(id: string): void {
@@ -34,6 +35,36 @@ const BULK_TEST_CONCURRENCY = 25
 const BULK_TEST_MAX_IDS = 500
 const PARSE_PROXY_MAX_BYTES = 1_000_000
 const PARSE_PROXY_MAX_LINES = 10_000
+
+// Whitelist of fields the renderer is allowed to pass through as preset
+// overrides. Identity fields (user_agent, platform, screen_*, hardware_*,
+// webgl_*, device_type, etc.) are driven by the preset itself and must
+// not be settable by the caller.
+const ALLOWED_OVERRIDE_KEYS = [
+  'timezone',
+  'languages',
+  'webrtc_policy',
+  'fonts_list',
+  'canvas_noise_seed',
+  'audio_context_noise'
+] as const satisfies readonly (keyof Fingerprint)[]
+
+function sanitizeOverrides(raw: unknown): Partial<Fingerprint> | undefined {
+  if (raw === null || raw === undefined) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined
+
+  const source = raw as Record<string, unknown>
+  const result: Partial<Fingerprint> = Object.create(null)
+  let hasKey = false
+  for (const key of ALLOWED_OVERRIDE_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue
+    const value = source[key]
+    if (value === undefined) continue
+    ;(result as Record<string, unknown>)[key] = value
+    hasKey = true
+  }
+  return hasKey ? result : undefined
+}
 
 export function registerIpcHandlers(
   db: Database.Database,
@@ -153,6 +184,18 @@ export function registerIpcHandlers(
   // Fingerprint
   ipcMain.handle('generate-fingerprint', (_, browserType: BrowserType) =>
     generateDefaultFingerprint(browserType)
+  )
+
+  ipcMain.handle('list-fingerprint-presets', () => listFingerprintPresets())
+
+  ipcMain.handle(
+    'generate-fingerprint-from-preset',
+    (_, presetId: string, overrides?: unknown) => {
+      if (typeof presetId !== 'string' || !presetId.trim()) {
+        throw new Error('presetId is required')
+      }
+      return generateFingerprintFromPreset(presetId, sanitizeOverrides(overrides))
+    }
   )
 
   // Settings

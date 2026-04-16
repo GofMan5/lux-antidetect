@@ -142,10 +142,10 @@ const MOBILE_GPUS: GpuConfig[] = [
   { vendor: 'ARM', renderers: ['Mali-G710 MC10', 'Mali-G78 MC20', 'Mali-G77 MC9'] }
 ]
 
-const MOBILE_FONTS_POOL = [
+export const MOBILE_FONTS_POOL = [
   'Roboto', 'Noto Sans', 'Droid Sans', 'Droid Sans Mono', 'Droid Serif',
   'Cutive Mono', 'Coming Soon', 'Dancing Script', 'Carrois Gothic SC'
-]
+] as const
 
 // ─── Timezones (weighted by real usage) ──────────────────────────────────
 
@@ -249,7 +249,7 @@ function getLanguagesForTimezone(tz: string): string[] {
 
 // ─── Font pools ──────────────────────────────────────────────────────────
 
-const WIN_FONTS_POOL = [
+export const WIN_FONTS_POOL = [
   'Arial', 'Verdana', 'Times New Roman', 'Courier New', 'Georgia',
   'Trebuchet MS', 'Impact', 'Segoe UI', 'Tahoma', 'Calibri',
   'Cambria', 'Consolas', 'Lucida Console', 'Comic Sans MS',
@@ -259,7 +259,7 @@ const WIN_FONTS_POOL = [
   'Microsoft Sans Serif', 'MS Gothic', 'MS PGothic', 'Yu Gothic'
 ] as const
 
-const MAC_FONTS_POOL = [
+export const MAC_FONTS_POOL = [
   'Arial', 'Verdana', 'Times New Roman', 'Courier New', 'Georgia',
   'Trebuchet MS', 'Helvetica', 'Helvetica Neue', 'Futura',
   'Menlo', 'Monaco', 'Optima', 'Gill Sans', 'Baskerville',
@@ -267,6 +267,20 @@ const MAC_FONTS_POOL = [
   'Cochin', 'Copperplate', 'Hoefler Text', 'Lucida Grande',
   'Marker Felt', 'Papyrus', 'Phosphate', 'Rockwell',
   'San Francisco', 'Skia', 'Snell Roundhand', 'Zapfino'
+] as const
+
+// Linux font pool (used only by preset resolver; desktop normalizer
+// on a non-Linux host still filters through WIN/MAC pools).
+export const LINUX_FONTS_POOL = [
+  'DejaVu Sans', 'DejaVu Serif', 'DejaVu Sans Mono',
+  'Liberation Sans', 'Liberation Serif', 'Liberation Mono',
+  'Ubuntu', 'Ubuntu Mono', 'Ubuntu Condensed',
+  'Noto Sans', 'Noto Serif', 'Noto Mono', 'Noto Color Emoji',
+  'FreeSans', 'FreeSerif', 'FreeMono',
+  'Cantarell', 'Droid Sans', 'Droid Serif', 'Droid Sans Mono',
+  'Bitstream Vera Sans', 'Bitstream Vera Serif', 'Bitstream Vera Sans Mono',
+  'Nimbus Sans', 'Nimbus Roman', 'Nimbus Mono PS',
+  'URW Gothic', 'URW Bookman', 'Standard Symbols PS'
 ] as const
 
 function randomFontSubset(pool: readonly string[], minCommon = 5, maxExtra = 10): string[] {

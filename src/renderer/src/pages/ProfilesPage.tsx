@@ -3,20 +3,22 @@ import {
   Plus, Play, Square, Copy, Trash2, Loader2, X, AlertCircle,
   ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2,
   Flame, ClipboardCopy, Pencil, Terminal, Camera, MoreHorizontal,
-  LayoutGrid
+  LayoutGrid, ChevronDown, Check, XCircle
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useProfilesStore } from '../stores/profiles'
 import { useProxiesStore } from '../stores/proxies'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
-import { ProfileEditorPanel } from './ProfileEditorPage'
+import { ProfileEditorPanel, type InitialFingerprint } from './ProfileEditorPage'
 import { Button, Badge, SearchInput, DropdownMenu, EmptyState, Tooltip, Select } from '../components/ui'
 import type { DropdownMenuItem } from '../components/ui'
 import { cn } from '../lib/utils'
 import { CHECKBOX } from '../lib/ui'
 import { api } from '../lib/api'
+import { validateProfileFingerprint, type ValidationWarning } from '../lib/fingerprint-validator'
 import type { BrowserType, ProfileStatus } from '../lib/types'
+import type { PresetDescriptor } from '../../../preload/api-contract'
 
 // --- Constants ---------------------------------------------------------------
 
@@ -35,7 +37,7 @@ const BROWSER_ICONS: Record<BrowserType, typeof Globe> = {
   edge: Globe2
 }
 
-const BROWSER_PLATFORM: Record<BrowserType, string> = {
+const BROWSER_LABEL: Record<BrowserType, string> = {
   chromium: 'Chromium',
   firefox: 'Firefox',
   edge: 'Edge'
@@ -55,6 +57,57 @@ const STATUS_LABEL: Record<ProfileStatus, string> = {
   running: 'Running',
   stopping: 'Stopping',
   error: 'Error'
+}
+
+// Grouped order for preset dropdown OS families
+const PRESET_GROUP_ORDER: ReadonlyArray<{
+  family: PresetDescriptor['os_family']
+  label: string
+}> = [
+  { family: 'windows', label: 'Windows' },
+  { family: 'macos', label: 'macOS' },
+  { family: 'linux', label: 'Linux' },
+  { family: 'android', label: 'Android' },
+  { family: 'ios-emu', label: 'iOS-Emu' }
+]
+
+type HealthStatus = 'good' | 'warn' | 'bad' | 'unknown'
+
+const HEALTH_DOT: Record<HealthStatus, string> = {
+  good: 'bg-ok shadow-sm shadow-ok/40',
+  warn: 'bg-warn shadow-sm shadow-warn/40',
+  bad: 'bg-err shadow-sm shadow-err/40',
+  unknown: 'bg-muted/70 ring-1 ring-muted/60'
+}
+
+// Virtual scroll constants (hoisted to avoid per-render allocation).
+const ROW_HEIGHT = 48
+const OVERSCAN = 5
+
+// Browser mapping for PresetDescriptor['browser'] -> BrowserType used by
+// the profile form. Edge presets don't exist today (presets are chrome|firefox).
+const PRESET_BROWSER_MAP: Record<'chrome' | 'firefox', BrowserType> = {
+  chrome: 'chromium',
+  firefox: 'firefox'
+}
+
+// Bounded concurrency runner for IPC fan-out on health cache warm-up.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (t: T) => Promise<R>
+): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = cursor++
+      if (i >= items.length) return
+      out[i] = await fn(items[i])
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 // --- Sub-components ----------------------------------------------------------
@@ -163,9 +216,25 @@ export function ProfilesPage() {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const lastCheckedIdx = useRef<number | null>(null)
 
+  // Presets cache for "New from preset" dropdown
+  const [presets, setPresets] = useState<PresetDescriptor[] | null>(null)
+  const presetsLoadingRef = useRef(false)
+
+  // When a preset is chosen we hand its generated fingerprint to the editor.
+  const [pendingFingerprint, setPendingFingerprint] = useState<InitialFingerprint | null>(null)
+  const [pendingSeed, setPendingSeed] = useState(0)
+
+  // Per-profile health signals (fingerprint warnings). Cached by id+updated_at.
+  const [healthCache, setHealthCache] = useState<
+    Record<string, { warnings: ValidationWarning[] }>
+  >({})
+
+  // When a profile is created via preset, we forward the preset's browser so
+  // the editor form opens with the correct browser_type (avoids UA/platform
+  // mismatch warnings for Firefox/Edge presets).
+  const [pendingBrowser, setPendingBrowser] = useState<BrowserType | null>(null)
+
   // Virtual scroll
-  const ROW_HEIGHT = 48
-  const OVERSCAN = 5
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(600)
@@ -188,6 +257,80 @@ export function ProfilesPage() {
     document.title = running > 0 ? `Lux (${running} running)` : 'Lux Antidetect'
     return () => { document.title = 'Lux Antidetect' }
   }, [profiles])
+
+  // Fetch fingerprint presets once (cached). Swallow errors silently —
+  // the dropdown simply won't populate and the plain "New Profile" still works.
+  const loadPresets = useCallback(async (): Promise<void> => {
+    if (presets || presetsLoadingRef.current) return
+    presetsLoadingRef.current = true
+    try {
+      const list = await api.listFingerprintPresets()
+      setPresets(list)
+    } catch {
+      setPresets([])
+    } finally {
+      presetsLoadingRef.current = false
+    }
+  }, [presets])
+
+  useEffect(() => {
+    loadPresets()
+  }, [loadPresets])
+
+  // Populate health cache: compute fingerprint validator warnings per profile.
+  // Key by `${id}:${updated_at}` so a profile edit invalidates just that entry.
+  useEffect(() => {
+    let cancelled = false
+    const pending = profiles.filter((p) => {
+      const key = `${p.id}:${p.updated_at}`
+      return !(key in healthCache)
+    })
+    if (pending.length === 0) return
+    ;(async () => {
+      // Cap at 8 concurrent IPC calls to avoid blocking the main process.
+      const results = await mapWithConcurrency(pending, 8, async (p) => {
+          try {
+            const detail = await api.getProfile(p.id)
+            let langs = ''
+            try {
+              const parsed = JSON.parse(detail.fingerprint.languages)
+              langs = Array.isArray(parsed) ? parsed.join(', ') : String(detail.fingerprint.languages ?? '')
+            } catch {
+              langs = detail.fingerprint.languages ?? ''
+            }
+            const warnings = validateProfileFingerprint({
+              user_agent: detail.fingerprint.user_agent,
+              platform: detail.fingerprint.platform,
+              timezone: detail.fingerprint.timezone,
+              languages: langs,
+              screen: `${detail.fingerprint.screen_width}x${detail.fingerprint.screen_height}`,
+              hardware_concurrency: detail.fingerprint.hardware_concurrency,
+              device_memory: detail.fingerprint.device_memory,
+              webgl_vendor: detail.fingerprint.webgl_vendor,
+              proxyCountryCode: detail.proxy?.country ?? null
+            })
+            return { key: `${p.id}:${p.updated_at}`, warnings }
+          } catch {
+            return { key: `${p.id}:${p.updated_at}`, warnings: [] as ValidationWarning[] }
+          }
+        })
+      if (cancelled) return
+      setHealthCache((prev) => {
+        // Prune entries for profiles that no longer exist (or whose
+        // updated_at has rolled forward) to prevent unbounded growth.
+        const valid = new Set(profiles.map((p) => `${p.id}:${p.updated_at}`))
+        const next: Record<string, { warnings: ValidationWarning[] }> = {}
+        for (const k of Object.keys(prev)) {
+          if (valid.has(k)) next[k] = prev[k]
+        }
+        for (const r of results) next[r.key] = { warnings: r.warnings }
+        return next
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [profiles, healthCache])
 
   // --- Derived data ----------------------------------------------------------
 
@@ -449,15 +592,68 @@ export function ProfilesPage() {
   }
 
   const handleNewProfile = useCallback((): void => {
+    setPendingFingerprint(null)
+    setPendingBrowser(null)
+    // Bump the seed so the editor remounts even if we're already in create
+    // mode  this triggers the dirty-guard inside ProfileEditorPanel.
+    setPendingSeed((s) => s + 1)
     openEditor('create')
   }, [openEditor])
 
+  const handleNewFromPreset = useCallback(async (presetId: string): Promise<void> => {
+    try {
+      const preset = presets?.find((p) => p.id === presetId)
+      const fp = await api.generateFingerprintFromPreset(presetId)
+      setPendingFingerprint(fp as InitialFingerprint)
+      setPendingBrowser(preset ? PRESET_BROWSER_MAP[preset.browser] : null)
+      setPendingSeed((s) => s + 1)
+      openEditor('create')
+    } catch (err) {
+      addToast(
+        err instanceof Error ? err.message : 'Failed to generate preset fingerprint',
+        'error'
+      )
+    }
+  }, [openEditor, addToast, presets])
+
+  // Build grouped DropdownMenu items. Disabled label-only rows act as section
+  // headers; this keeps the existing DropdownMenu primitive without forking.
+  const presetMenuItems = useMemo<DropdownMenuItem[]>(() => {
+    if (!presets) {
+      return [{ label: 'Loading presets…', disabled: true, onClick: () => {} }]
+    }
+    if (presets.length === 0) {
+      return [{ label: 'No presets available', disabled: true, onClick: () => {} }]
+    }
+    const items: DropdownMenuItem[] = []
+    for (const group of PRESET_GROUP_ORDER) {
+      const inGroup = presets.filter((p) => p.os_family === group.family)
+      if (inGroup.length === 0) continue
+      items.push({
+        label: group.label,
+        kind: 'heading',
+        onClick: () => {}
+      })
+      for (const p of inGroup) {
+        items.push({
+          label: p.label,
+          onClick: () => void handleNewFromPreset(p.id)
+        })
+      }
+    }
+    return items
+  }, [presets, handleNewFromPreset])
+
   const handlePanelSave = (): void => {
+    setPendingFingerprint(null)
+    setPendingBrowser(null)
     fetchProfiles()
     closeEditor()
   }
 
   const handlePanelCancel = useCallback((): void => {
+    setPendingFingerprint(null)
+    setPendingBrowser(null)
     closeEditor()
   }, [closeEditor])
 
@@ -662,6 +858,20 @@ export function ProfilesPage() {
             <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={handleNewProfile}>
               New Profile
             </Button>
+            <DropdownMenu
+              align="right"
+              items={presetMenuItems}
+              trigger={
+                <button
+                  type="button"
+                  aria-label="New from preset"
+                  title="New from preset"
+                  className="h-9 w-8 rounded-[--radius-md] inline-flex items-center justify-center bg-accent/10 text-accent hover:bg-accent/15 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              }
+            />
           </div>
         </div>
 
@@ -744,6 +954,7 @@ export function ProfilesPage() {
               <colgroup>
                 <col className="w-[40px]" />
                 <col />
+                <col className="w-[60px]" />
                 <col className="w-[110px]" />
                 <col className="w-[110px]" />
                 <col className="w-[130px]" />
@@ -765,6 +976,7 @@ export function ProfilesPage() {
                   <th className={thSortable} onClick={() => toggleSort('name')}>
                     <span className="inline-flex items-center">Name<SortIcon column="name" sortKey={sortKey} sortDir={sortDir} /></span>
                   </th>
+                  <th className={thClass} title="Launch health">Health</th>
                   <th className={thSortable} onClick={() => toggleSort('status')}>
                     <span className="inline-flex items-center">Status<SortIcon column="status" sortKey={sortKey} sortDir={sortDir} /></span>
                   </th>
@@ -789,7 +1001,7 @@ export function ProfilesPage() {
                   const visibleProfiles = filteredProfiles.slice(startIdx, endIdx)
                   return (
                     <>
-                      {topPad > 0 && <tr style={{ height: topPad }}><td colSpan={8} /></tr>}
+                      {topPad > 0 && <tr style={{ height: topPad }}><td colSpan={9} /></tr>}
                       {visibleProfiles.map((profile, localIdx) => {
                         const idx = startIdx + localIdx
                         const proxy = proxyMap.get(profile.proxy_id ?? '')
@@ -828,12 +1040,66 @@ export function ProfilesPage() {
                               <div className="flex items-center gap-2 min-w-0">
                                 {profile.group_color && (
                                   <span
-                                    className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-white/10"
+                                    className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-edge"
                                     style={{ backgroundColor: profile.group_color }}
                                   />
                                 )}
                                 <span className="text-content font-medium truncate">{profile.name}</span>
                               </div>
+                            </td>
+
+                            {/* Health */}
+                            <td className="px-3" onClick={(e) => e.stopPropagation()}>
+                              {(() => {
+                                const cacheKey = `${profile.id}:${profile.updated_at}`
+                                const entry = healthCache[cacheKey]
+                                const proxyBad =
+                                  profile.proxy_id != null &&
+                                  proxyMap.get(profile.proxy_id)?.check_ok === false
+                                let status: HealthStatus
+                                let reasons: string[]
+                                if (!entry) {
+                                  status = proxyBad ? 'bad' : 'unknown'
+                                  reasons = proxyBad ? ['Proxy check failed'] : ['Checking…']
+                                } else {
+                                  const warns = entry.warnings
+                                  const hasWarn = warns.some((w) => w.severity === 'warn')
+                                  const hasInfo = warns.some((w) => w.severity === 'info')
+                                  status = proxyBad || hasWarn ? 'bad' : hasInfo ? 'warn' : 'good'
+                                  reasons = []
+                                  if (proxyBad) reasons.push('Proxy check failed')
+                                  for (const w of warns) reasons.push(w.message)
+                                }
+                                const statusText =
+                                  status === 'good' ? 'Healthy'
+                                  : status === 'warn' ? 'Minor issues'
+                                  : status === 'bad' ? 'Issues detected'
+                                  : 'Unknown'
+                                const tipLabel = reasons.length
+                                  ? reasons.slice(0, 2).join(' · ')
+                                  : statusText
+                                const ariaLabel = `Profile health: ${statusText}.${reasons.length ? ' ' + reasons.join('. ') : ''}`
+                                const Glyph =
+                                  status === 'good' ? Check
+                                  : status === 'warn' ? AlertCircle
+                                  : status === 'bad' ? XCircle
+                                  : null
+                                return (
+                                  <Tooltip content={tipLabel}>
+                                    <button
+                                      type="button"
+                                      aria-label={ariaLabel}
+                                      className={cn(
+                                        'inline-flex items-center justify-center h-4 w-4 rounded-full text-white/90',
+                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                                        HEALTH_DOT[status]
+                                      )}
+                                    >
+                                      {Glyph && <Glyph className="h-2.5 w-2.5" aria-hidden="true" />}
+                                    </button>
+                                  </Tooltip>
+                                )
+                              })()}
                             </td>
 
                             {/* Status */}
@@ -870,7 +1136,7 @@ export function ProfilesPage() {
                                   const Icon = BROWSER_ICONS[profile.browser_type]
                                   return <Icon className="h-3 w-3" />
                                 })()}
-                                {BROWSER_PLATFORM[profile.browser_type]}
+                                {BROWSER_LABEL[profile.browser_type]}
                               </span>
                             </td>
 
@@ -925,7 +1191,7 @@ export function ProfilesPage() {
                           </tr>
                         )
                       })}
-                      {bottomPad > 0 && <tr style={{ height: bottomPad }}><td colSpan={8} /></tr>}
+                      {bottomPad > 0 && <tr style={{ height: bottomPad }}><td colSpan={9} /></tr>}
                     </>
                   )
                 })()}
@@ -946,8 +1212,10 @@ export function ProfilesPage() {
           </div>
           <div className="flex-1 min-h-0 overflow-hidden">
             <ProfileEditorPanel
-              key={editorMode === 'edit' ? editorProfileId : '__new__'}
+              key={editorMode === 'edit' ? editorProfileId : `__new__:${pendingSeed}`}
               profileId={editorMode === 'edit' ? editorProfileId : null}
+              initialFingerprint={editorMode === 'create' ? pendingFingerprint : null}
+              initialBrowser={editorMode === 'create' ? pendingBrowser : null}
               onSave={handlePanelSave}
               onCancel={handlePanelCancel}
             />

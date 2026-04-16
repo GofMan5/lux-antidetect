@@ -17,6 +17,9 @@ import type {
   AvailableBrowser
 } from '../main/models'
 import type { ProxyGeoBundle } from '../main/geoip'
+import type { PresetDescriptor } from '../main/fingerprint-presets'
+
+export type { PresetDescriptor } from '../main/fingerprint-presets'
 
 // Reuse the canonical session payload to keep preload and main in lockstep.
 export type SessionStartedEvent = SessionInfo
@@ -60,6 +63,12 @@ export interface LuxAPI {
   bulkTestProxies(ids: string[]): Promise<{ id: string; ok: boolean }[]>
 
   generateFingerprint(browserType: BrowserType): Promise<Omit<Fingerprint, 'id' | 'profile_id'>>
+
+  listFingerprintPresets(): Promise<PresetDescriptor[]>
+  generateFingerprintFromPreset(
+    presetId: string,
+    overrides?: Partial<Fingerprint>
+  ): Promise<Omit<Fingerprint, 'id' | 'profile_id'>>
 
   onSessionStarted(callback: (data: SessionStartedEvent) => void): () => void
   onSessionStopped(callback: (data: SessionStoppedEvent) => void): () => void

@@ -18,7 +18,8 @@ import {
   Info,
   MapPin,
   X,
-  Plus
+  Plus,
+  ExternalLink
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
@@ -28,6 +29,19 @@ import { cn } from '../lib/utils'
 import { Button, Input, Select, Card, Toggle, Tabs, Badge, Tooltip } from '../components/ui'
 import { TEXTAREA, LABEL } from '../lib/ui'
 import { validateProfileFingerprint } from '../lib/fingerprint-validator'
+import type { Fingerprint } from '../lib/types'
+
+// Verification test sites for launched profiles
+const TEST_SITES: ReadonlyArray<{ label: string; url: string }> = [
+  { label: 'WebGL', url: 'https://browserleaks.com/webgl' },
+  { label: 'Fonts', url: 'https://browserleaks.com/fonts' },
+  { label: 'PixelScan', url: 'https://pixelscan.net' },
+  { label: 'CreepJS', url: 'https://abrahamjuliot.github.io/creepjs/' },
+  { label: 'WhatIsMyBrowser', url: 'https://www.whatismybrowser.com' },
+  { label: 'AmIUnique', url: 'https://amiunique.org' }
+] as const
+
+export type InitialFingerprint = Omit<Fingerprint, 'id' | 'profile_id'>
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -205,12 +219,21 @@ interface ProfileEditorPanelProps {
   profileId?: string | null
   onSave: () => void
   onCancel: () => void
+  /** Pre-filled fingerprint for create mode (e.g. from a preset). */
+  initialFingerprint?: InitialFingerprint | null
+  /**
+   * Pre-selected browser for create mode. Derived from the preset's browser
+   * field so e.g. Firefox presets open the editor with browser_type='firefox'.
+   */
+  initialBrowser?: 'chromium' | 'firefox' | 'edge' | null
 }
 
 export function ProfileEditorPanel({
   profileId,
   onSave,
-  onCancel
+  onCancel,
+  initialFingerprint,
+  initialBrowser
 }: ProfileEditorPanelProps): React.JSX.Element {
   const isEditMode = Boolean(profileId)
 
@@ -374,7 +397,38 @@ export function ProfileEditorPanel({
 
   useEffect(() => {
     if (!profileId) {
-      reset(DEFAULT_VALUES)
+      if (initialFingerprint) {
+        const fp = initialFingerprint
+        let langs = ''
+        try {
+          const parsed = JSON.parse(fp.languages)
+          langs = Array.isArray(parsed) ? parsed.join(', ') : String(fp.languages ?? '')
+        } catch {
+          langs = fp.languages ?? ''
+        }
+        reset({
+          ...DEFAULT_VALUES,
+          browser_type: initialBrowser ?? DEFAULT_VALUES.browser_type,
+          user_agent: fp.user_agent ?? '',
+          platform: fp.platform ?? '',
+          screen: toScreenValue(fp.screen_width ?? 1920, fp.screen_height ?? 1080),
+          timezone: fp.timezone ?? DEFAULT_VALUES.timezone,
+          hardware_concurrency: fp.hardware_concurrency ?? DEFAULT_VALUES.hardware_concurrency,
+          device_memory: fp.device_memory ?? DEFAULT_VALUES.device_memory,
+          webgl_vendor: fp.webgl_vendor ?? '',
+          webgl_renderer: fp.webgl_renderer ?? '',
+          webrtc_policy: fp.webrtc_policy ?? DEFAULT_VALUES.webrtc_policy,
+          languages: langs || DEFAULT_VALUES.languages,
+          color_depth: fp.color_depth ?? DEFAULT_VALUES.color_depth,
+          pixel_ratio: fp.pixel_ratio ?? DEFAULT_VALUES.pixel_ratio,
+          device_type: (fp.device_type as 'desktop' | 'mobile') || DEFAULT_VALUES.device_type
+        })
+      } else {
+        reset({
+          ...DEFAULT_VALUES,
+          browser_type: initialBrowser ?? DEFAULT_VALUES.browser_type
+        })
+      }
       return
     }
     api
@@ -417,7 +471,7 @@ export function ProfileEditorPanel({
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load profile')
       })
-  }, [profileId, reset])
+  }, [profileId, reset, initialFingerprint, initialBrowser])
 
   // -- Handlers -----------------------------------------------------------
 
@@ -784,6 +838,92 @@ export function ProfileEditorPanel({
                 : `Show ${validationWarnings.length - 3} more`}
             </button>
           )}
+        </div>
+      )}
+
+      {/* ── Verification (launched-profile test sites) ──────────────────── */}
+      {isEditMode && profileId && (
+        <div className="mx-4 mt-3 rounded-[--radius-md] bg-elevated/60 border border-edge px-3 py-2.5">
+          <div className="flex items-center gap-1.5 mb-2 text-[11px] font-medium text-muted uppercase tracking-wider">
+            <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <span>Verification</span>
+          </div>
+          <div
+            role="group"
+            aria-label="Verification test sites"
+            className="flex flex-wrap gap-1.5"
+          >
+            {TEST_SITES.map((site) => (
+              <button
+                key={site.url}
+                type="button"
+                onClick={async () => {
+                  try {
+                    try {
+                      await api.launchBrowser(profileId)
+                    } catch (launchErr) {
+                      // Only swallow "already running / busy" errors. Anything
+                      // else is a real failure we should surface.
+                      const msg =
+                        launchErr instanceof Error ? launchErr.message : String(launchErr)
+                      if (!/already|running|busy/i.test(msg)) {
+                        addToast(msg || 'Failed to launch profile', 'error')
+                        return
+                      }
+                    }
+                    try {
+                      await navigator.clipboard.writeText(site.url)
+                      addToast(`Profile launched — ${site.label} URL copied to clipboard`, 'info')
+                    } catch {
+                      addToast(`Profile launched — navigate to: ${site.url}`, 'info')
+                    }
+                  } catch (err) {
+                    addToast(
+                      err instanceof Error ? err.message : 'Failed to launch profile',
+                      'error'
+                    )
+                  }
+                }}
+                className="inline-flex items-center gap-1 rounded-full bg-surface border border-edge px-2.5 py-1 text-[11px] font-medium text-content/80 hover:text-accent hover:border-accent/40 hover:bg-accent/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              >
+                {site.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {!isEditMode && (
+        <div className="mx-4 mt-3 rounded-[--radius-md] bg-elevated/40 border border-edge px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted uppercase tracking-wider">
+              <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+              <span>Verification</span>
+            </div>
+            <span
+              id="verification-hint"
+              className="text-[10px] font-medium text-muted/70"
+            >
+              Available after saving
+            </span>
+          </div>
+          <div
+            role="group"
+            aria-label="Verification test sites"
+            className="flex flex-wrap gap-1.5"
+          >
+            {TEST_SITES.map((site) => (
+              <button
+                key={site.url}
+                type="button"
+                disabled
+                aria-disabled="true"
+                aria-describedby="verification-hint"
+                className="inline-flex items-center gap-1 rounded-full bg-surface border border-edge px-2.5 py-1 text-[11px] font-medium text-muted/70 cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              >
+                {site.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

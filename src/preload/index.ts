@@ -39,6 +39,10 @@ const api: LuxAPI = {
   generateFingerprint: (browserType: GenerateFingerprintBrowserType) =>
     ipcRenderer.invoke('generate-fingerprint', browserType),
 
+  listFingerprintPresets: () => ipcRenderer.invoke('list-fingerprint-presets'),
+  generateFingerprintFromPreset: (presetId, overrides) =>
+    ipcRenderer.invoke('generate-fingerprint-from-preset', presetId, overrides),
+
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
 
