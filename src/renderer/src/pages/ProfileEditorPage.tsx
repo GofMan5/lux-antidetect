@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Wand2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Wand2, ChevronDown, ChevronRight, Save, Bookmark } from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
 import { INPUT_CLASS, SELECT_CLASS, LABEL_CLASS, TEXTAREA_CLASS, BTN_PRIMARY, BTN_SECONDARY } from '../lib/ui'
@@ -235,10 +235,7 @@ export function ProfileEditorPanel({
       setError(null)
       const { width, height } = parseScreen(data.screen)
       const languagesArray = data.languages
-        ? data.languages
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean)
+        ? data.languages.split(',').map((s) => s.trim()).filter(Boolean)
         : ['en-US', 'en']
 
       if (isEditMode && profileId) {
@@ -305,7 +302,7 @@ export function ProfileEditorPanel({
   return (
     <div className="p-4 overflow-y-auto h-full">
       {error && (
-        <div className="rounded-lg bg-err/10 border border-err/30 px-3 py-2 text-xs text-err mb-3">
+        <div className="rounded-xl bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err mb-3 font-medium">
           {error}
         </div>
       )}
@@ -338,28 +335,18 @@ export function ProfileEditorPanel({
         )}
 
         {/* General */}
-        <section className="bg-surface-alt/50 rounded-lg border border-edge p-3 space-y-2.5">
-          <h3 className="text-xs font-semibold text-muted uppercase tracking-wide">General</h3>
+        <section className="rounded-xl border border-edge bg-surface p-3.5 space-y-3">
+          <h3 className="text-[11px] font-semibold text-muted/80 uppercase tracking-wider">General</h3>
 
           <div>
-            <label htmlFor="name" className={LABEL_CLASS}>
-              Name
-            </label>
-            <input
-              id="name"
-              type="text"
-              placeholder="My Profile"
-              className={INPUT_CLASS}
-              {...register('name')}
-            />
+            <label htmlFor="name" className={LABEL_CLASS}>Name</label>
+            <input id="name" type="text" placeholder="My Profile" className={INPUT_CLASS} {...register('name')} />
             {errors.name && <p className="mt-1 text-xs text-err">{errors.name.message}</p>}
           </div>
 
           <div className="grid grid-cols-[1fr_1fr_48px] gap-2">
             <div>
-              <label htmlFor="browser_type" className={LABEL_CLASS}>
-                Browser
-              </label>
+              <label htmlFor="browser_type" className={LABEL_CLASS}>Browser</label>
               <select id="browser_type" className={SELECT_CLASS} {...register('browser_type')}>
                 <option value="chromium">Chromium</option>
                 <option value="firefox">Firefox</option>
@@ -367,34 +354,17 @@ export function ProfileEditorPanel({
               </select>
             </div>
             <div>
-              <label htmlFor="group_name" className={LABEL_CLASS}>
-                Group
-              </label>
-              <input
-                id="group_name"
-                type="text"
-                placeholder="Work, Personal"
-                className={INPUT_CLASS}
-                {...register('group_name')}
-              />
+              <label htmlFor="group_name" className={LABEL_CLASS}>Group</label>
+              <input id="group_name" type="text" placeholder="Work, Personal" className={INPUT_CLASS} {...register('group_name')} />
             </div>
             <div>
-              <label htmlFor="group_color" className={LABEL_CLASS}>
-                Color
-              </label>
-              <input
-                id="group_color"
-                type="color"
-                className="h-[38px] w-full rounded-md border border-edge bg-surface-alt cursor-pointer"
-                {...register('group_color')}
-              />
+              <label htmlFor="group_color" className={LABEL_CLASS}>Color</label>
+              <input id="group_color" type="color" className="h-[38px] w-full rounded-lg border border-edge bg-surface cursor-pointer" {...register('group_color')} />
             </div>
           </div>
 
           <div>
-            <label htmlFor="proxy_id" className={LABEL_CLASS}>
-              Proxy
-            </label>
+            <label htmlFor="proxy_id" className={LABEL_CLASS}>Proxy</label>
             <select id="proxy_id" className={SELECT_CLASS} {...register('proxy_id')}>
               <option value="">None</option>
               {proxies.map((p) => (
@@ -407,70 +377,46 @@ export function ProfileEditorPanel({
 
           <div>
             <label htmlFor="tags" className={LABEL_CLASS}>
-              Tags <span className="text-muted font-normal">(comma separated)</span>
+              Tags <span className="text-muted/60 font-normal">(comma separated)</span>
             </label>
-            <input
-              id="tags"
-              type="text"
-              placeholder="social, work, shopping"
-              className={INPUT_CLASS}
-              {...register('tags')}
-            />
+            <input id="tags" type="text" placeholder="social, work, shopping" className={INPUT_CLASS} {...register('tags')} />
           </div>
 
           <div>
-            <label htmlFor="start_url" className={LABEL_CLASS}>
-              Start URL
-            </label>
-            <input
-              id="start_url"
-              type="text"
-              placeholder="https://example.com"
-              className={INPUT_CLASS}
-              {...register('start_url')}
-            />
+            <label htmlFor="start_url" className={LABEL_CLASS}>Start URL</label>
+            <input id="start_url" type="text" placeholder="https://example.com" className={INPUT_CLASS} {...register('start_url')} />
           </div>
 
           <div>
-            <label htmlFor="notes" className={LABEL_CLASS}>
-              Notes
-            </label>
-            <textarea
-              id="notes"
-              rows={2}
-              placeholder="Additional notes..."
-              className={TEXTAREA_CLASS}
-              {...register('notes')}
-            />
+            <label htmlFor="notes" className={LABEL_CLASS}>Notes</label>
+            <textarea id="notes" rows={2} placeholder="Additional notes..." className={TEXTAREA_CLASS} {...register('notes')} />
           </div>
         </section>
 
         {/* Fingerprint */}
-        <section className="bg-surface-alt/50 rounded-lg border border-edge overflow-hidden">
+        <section className="rounded-xl border border-edge bg-surface overflow-hidden">
           <button
             type="button"
             onClick={() => setFpOpen(!fpOpen)}
-            className="flex items-center justify-between w-full px-3 py-2.5 text-left hover:bg-elevated/30 transition-colors"
+            className="flex items-center justify-between w-full px-3.5 py-3 text-left hover:bg-elevated/30 transition-colors"
           >
-            <h3 className="text-xs font-semibold text-muted uppercase tracking-wide">Fingerprint</h3>
-            {fpOpen ? (
-              <ChevronDown className="h-4 w-4 text-muted" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-muted" />
-            )}
+            <h3 className="text-[11px] font-semibold text-muted/80 uppercase tracking-wider">Fingerprint</h3>
+            {fpOpen ? <ChevronDown className="h-4 w-4 text-muted" /> : <ChevronRight className="h-4 w-4 text-muted" />}
           </button>
 
           {fpOpen && (
-            <div className="px-3 pb-3 space-y-2.5 border-t border-edge pt-2.5">
-              <button
-                type="button"
-                onClick={handleGenerateFingerprint}
-                disabled={generating}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/25 transition-colors disabled:opacity-50"
-              >
-                <Wand2 className="h-3.5 w-3.5" />
-                {generating ? 'Generating...' : 'Generate Fingerprint'}
-              </button>
+            <div className="px-3.5 pb-3.5 space-y-3 border-t border-edge pt-3">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleGenerateFingerprint}
+                  disabled={generating}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent/12 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/20 ring-1 ring-accent/20 transition-all disabled:opacity-40"
+                >
+                  <Wand2 className="h-3.5 w-3.5" />
+                  {generating ? 'Generating...' : 'Generate Fingerprint'}
+                </button>
+              </div>
 
               {(() => {
                 const [ua] = watchedData
@@ -479,13 +425,13 @@ export function ProfileEditorPanel({
                 const color = score >= 80 ? 'text-ok' : score >= 50 ? 'text-warn' : 'text-err'
                 const bgColor = score >= 80 ? 'bg-ok' : score >= 50 ? 'bg-warn' : 'bg-err'
                 return (
-                  <div className="flex items-center gap-2 mt-1">
-                    <div className="flex-1 h-1.5 bg-surface rounded-full overflow-hidden">
-                      <div className={`h-full ${bgColor} rounded-full transition-all`} style={{ width: `${score}%` }} />
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex-1 h-1.5 bg-elevated rounded-full overflow-hidden">
+                      <div className={`h-full ${bgColor} rounded-full transition-all duration-300`} style={{ width: `${score}%` }} />
                     </div>
-                    <span className={`text-[10px] font-medium ${color}`}>{score}%</span>
+                    <span className={`text-[10px] font-bold tabular-nums ${color}`}>{score}%</span>
                     {issues.length > 0 && (
-                      <span className="text-[10px] text-muted" title={issues.join(', ')}>
+                      <span className="text-[10px] text-muted cursor-help" title={issues.join('\n')}>
                         {issues.length} issue{issues.length > 1 ? 's' : ''}
                       </span>
                     )}
@@ -495,39 +441,20 @@ export function ProfileEditorPanel({
 
               <div className="grid grid-cols-1 gap-2.5">
                 <div>
-                  <label htmlFor="user_agent" className={LABEL_CLASS}>
-                    User Agent
-                  </label>
-                  <input
-                    id="user_agent"
-                    type="text"
-                    className={`${INPUT_CLASS} text-xs font-mono`}
-                    {...register('user_agent')}
-                  />
+                  <label htmlFor="user_agent" className={LABEL_CLASS}>User Agent</label>
+                  <input id="user_agent" type="text" className={`${INPUT_CLASS} text-xs font-mono`} {...register('user_agent')} />
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label htmlFor="platform" className={LABEL_CLASS}>
-                      Platform
-                    </label>
-                    <input
-                      id="platform"
-                      type="text"
-                      className={INPUT_CLASS}
-                      {...register('platform')}
-                    />
+                    <label htmlFor="platform" className={LABEL_CLASS}>Platform</label>
+                    <input id="platform" type="text" className={INPUT_CLASS} {...register('platform')} />
                   </div>
-
                   <div>
-                    <label htmlFor="screen" className={LABEL_CLASS}>
-                      Screen
-                    </label>
+                    <label htmlFor="screen" className={LABEL_CLASS}>Screen</label>
                     <select id="screen" className={SELECT_CLASS} {...register('screen')}>
                       {SCREEN_PRESETS.map((p) => (
-                        <option key={p.value} value={p.value}>
-                          {p.label}
-                        </option>
+                        <option key={p.value} value={p.value}>{p.label}</option>
                       ))}
                       {isCustomScreen && <option value={screenValue}>{screenValue}</option>}
                     </select>
@@ -536,66 +463,34 @@ export function ProfileEditorPanel({
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label htmlFor="timezone" className={LABEL_CLASS}>
-                      Timezone
-                    </label>
+                    <label htmlFor="timezone" className={LABEL_CLASS}>Timezone</label>
                     <select id="timezone" className={SELECT_CLASS} {...register('timezone')}>
                       {TIMEZONES.map((tz) => (
-                        <option key={tz} value={tz}>
-                          {tz}
-                        </option>
+                        <option key={tz} value={tz}>{tz}</option>
                       ))}
-                      {isCustomTimezone && (
-                        <option value={timezoneValue}>{timezoneValue}</option>
-                      )}
+                      {isCustomTimezone && <option value={timezoneValue}>{timezoneValue}</option>}
                     </select>
                   </div>
-
                   <div>
-                    <label htmlFor="languages" className={LABEL_CLASS}>
-                      Languages
-                    </label>
-                    <input
-                      id="languages"
-                      type="text"
-                      placeholder="en-US, en"
-                      className={INPUT_CLASS}
-                      {...register('languages')}
-                    />
+                    <label htmlFor="languages" className={LABEL_CLASS}>Languages</label>
+                    <input id="languages" type="text" placeholder="en-US, en" className={INPUT_CLASS} {...register('languages')} />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label htmlFor="hardware_concurrency" className={LABEL_CLASS}>
-                      CPU Cores
-                    </label>
-                    <select
-                      id="hardware_concurrency"
-                      className={SELECT_CLASS}
-                      {...register('hardware_concurrency', { valueAsNumber: true })}
-                    >
+                    <label htmlFor="hardware_concurrency" className={LABEL_CLASS}>CPU Cores</label>
+                    <select id="hardware_concurrency" className={SELECT_CLASS} {...register('hardware_concurrency', { valueAsNumber: true })}>
                       {HARDWARE_CONCURRENCY_OPTIONS.map((n) => (
-                        <option key={n} value={n}>
-                          {n}
-                        </option>
+                        <option key={n} value={n}>{n}</option>
                       ))}
                     </select>
                   </div>
-
                   <div>
-                    <label htmlFor="device_memory" className={LABEL_CLASS}>
-                      Memory (GB)
-                    </label>
-                    <select
-                      id="device_memory"
-                      className={SELECT_CLASS}
-                      {...register('device_memory', { valueAsNumber: true })}
-                    >
+                    <label htmlFor="device_memory" className={LABEL_CLASS}>Memory (GB)</label>
+                    <select id="device_memory" className={SELECT_CLASS} {...register('device_memory', { valueAsNumber: true })}>
                       {DEVICE_MEMORY_OPTIONS.map((n) => (
-                        <option key={n} value={n}>
-                          {n}
-                        </option>
+                        <option key={n} value={n}>{n}</option>
                       ))}
                     </select>
                   </div>
@@ -603,28 +498,16 @@ export function ProfileEditorPanel({
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label htmlFor="color_depth" className={LABEL_CLASS}>
-                      Color Depth
-                    </label>
-                    <select
-                      id="color_depth"
-                      className={SELECT_CLASS}
-                      {...register('color_depth', { valueAsNumber: true })}
-                    >
+                    <label htmlFor="color_depth" className={LABEL_CLASS}>Color Depth</label>
+                    <select id="color_depth" className={SELECT_CLASS} {...register('color_depth', { valueAsNumber: true })}>
                       <option value={24}>24</option>
                       <option value={30}>30</option>
                       <option value={32}>32</option>
                     </select>
                   </div>
                   <div>
-                    <label htmlFor="pixel_ratio" className={LABEL_CLASS}>
-                      Pixel Ratio
-                    </label>
-                    <select
-                      id="pixel_ratio"
-                      className={SELECT_CLASS}
-                      {...register('pixel_ratio', { valueAsNumber: true })}
-                    >
+                    <label htmlFor="pixel_ratio" className={LABEL_CLASS}>Pixel Ratio</label>
+                    <select id="pixel_ratio" className={SELECT_CLASS} {...register('pixel_ratio', { valueAsNumber: true })}>
                       <option value={1}>1.0</option>
                       <option value={1.25}>1.25</option>
                       <option value={1.5}>1.5</option>
@@ -637,40 +520,23 @@ export function ProfileEditorPanel({
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label htmlFor="webgl_vendor" className={LABEL_CLASS}>
-                      WebGL Vendor
+                      WebGL Vendor <span className="text-muted/50 font-normal text-[10px]">(auto)</span>
                     </label>
-                    <input
-                      id="webgl_vendor"
-                      type="text"
-                      readOnly
-                      className={`${INPUT_CLASS} cursor-default opacity-60 text-xs font-mono`}
-                      {...register('webgl_vendor')}
-                    />
+                    <input id="webgl_vendor" type="text" readOnly className={`${INPUT_CLASS} cursor-default opacity-50 text-xs font-mono`} {...register('webgl_vendor')} />
                   </div>
-
                   <div>
                     <label htmlFor="webgl_renderer" className={LABEL_CLASS}>
-                      WebGL Renderer
+                      WebGL Renderer <span className="text-muted/50 font-normal text-[10px]">(auto)</span>
                     </label>
-                    <input
-                      id="webgl_renderer"
-                      type="text"
-                      readOnly
-                      className={`${INPUT_CLASS} cursor-default opacity-60 text-xs font-mono`}
-                      {...register('webgl_renderer')}
-                    />
+                    <input id="webgl_renderer" type="text" readOnly className={`${INPUT_CLASS} cursor-default opacity-50 text-xs font-mono`} {...register('webgl_renderer')} />
                   </div>
                 </div>
 
                 <div>
-                  <label htmlFor="webrtc_policy" className={LABEL_CLASS}>
-                    WebRTC Policy
-                  </label>
+                  <label htmlFor="webrtc_policy" className={LABEL_CLASS}>WebRTC Policy</label>
                   <select id="webrtc_policy" className={SELECT_CLASS} {...register('webrtc_policy')}>
                     {WEBRTC_POLICIES.map((p) => (
-                      <option key={p.value} value={p.value}>
-                        {p.label}
-                      </option>
+                      <option key={p.value} value={p.value}>{p.label}</option>
                     ))}
                   </select>
                 </div>
@@ -681,6 +547,7 @@ export function ProfileEditorPanel({
 
         <div className="flex items-center gap-2 pt-1">
           <button type="submit" disabled={saving} className={BTN_PRIMARY}>
+            <Save className="h-3.5 w-3.5" />
             {saving ? 'Saving...' : isEditMode ? 'Save Changes' : 'Create Profile'}
           </button>
           <button type="button" onClick={onCancel} className={BTN_SECONDARY}>
@@ -721,8 +588,9 @@ export function ProfileEditorPanel({
                   setError(err instanceof Error ? err.message : 'Failed to save template')
                 }
               }}
-              className="ml-auto text-xs text-accent hover:text-accent-dim transition-colors font-medium"
+              className="ml-auto inline-flex items-center gap-1.5 text-xs text-accent hover:text-accent-dim transition-colors font-medium"
             >
+              <Bookmark className="h-3 w-3" />
               {templateSaved ? 'Saved!' : 'Save as Template'}
             </button>
           )}

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
+import { CheckCircle2, XCircle, Info, X } from 'lucide-react'
 
 /* ------------------------------------------------------------------ */
 /*  Store                                                              */
@@ -26,7 +27,9 @@ export const useToastStore = create<ToastStore>((set) => ({
 
   addToast: (message, type = 'info') => {
     const id = ++nextId
-    set((s) => ({ toasts: [...s.toasts, { id, message, type }] }))
+    set((s) => ({
+      toasts: [...s.toasts.slice(-4), { id, message, type }]
+    }))
   },
 
   removeToast: (id) => {
@@ -39,15 +42,21 @@ export const useToastStore = create<ToastStore>((set) => ({
 /* ------------------------------------------------------------------ */
 
 const typeStyles: Record<ToastType, string> = {
-  success: 'border-ok/40 bg-ok/10 text-ok',
-  error: 'border-err/40 bg-err/10 text-err',
-  info: 'border-accent/40 bg-accent/10 text-accent'
+  success: 'border-ok/30 bg-ok/8',
+  error: 'border-err/30 bg-err/8',
+  info: 'border-accent/30 bg-accent/8'
 }
 
-const icons: Record<ToastType, string> = {
-  success: '\u2713',
-  error: '\u2715',
-  info: 'i'
+const typeIcons: Record<ToastType, typeof CheckCircle2> = {
+  success: CheckCircle2,
+  error: XCircle,
+  info: Info
+}
+
+const iconColors: Record<ToastType, string> = {
+  success: 'text-ok',
+  error: 'text-err',
+  info: 'text-accent'
 }
 
 function ToastItem({ toast }: { toast: Toast }) {
@@ -55,37 +64,35 @@ function ToastItem({ toast }: { toast: Toast }) {
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   useEffect(() => {
-    timerRef.current = setTimeout(() => remove(toast.id), 3000)
+    timerRef.current = setTimeout(() => remove(toast.id), 3500)
     return () => clearTimeout(timerRef.current)
   }, [toast.id, remove])
+
+  const Icon = typeIcons[toast.type]
 
   return (
     <div
       className={
-        'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium shadow-lg backdrop-blur-sm ' +
+        'flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-xs font-medium shadow-xl backdrop-blur-md ' +
         'animate-slideIn ' +
         typeStyles[toast.type]
       }
     >
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-current/15 text-[10px] font-bold leading-none">
-        {icons[toast.type]}
-      </span>
-
-      <span className="min-w-0 flex-1 truncate text-content">{toast.message}</span>
-
+      <Icon className={`h-4 w-4 shrink-0 ${iconColors[toast.type]}`} />
+      <span className="min-w-0 flex-1 text-content leading-relaxed">{toast.message}</span>
       <button
         onClick={() => remove(toast.id)}
-        className="ml-1 shrink-0 text-muted hover:text-content transition-colors"
+        className="ml-1 shrink-0 rounded-md p-0.5 text-muted hover:text-content transition-colors"
         aria-label="Close"
       >
-        \u2715
+        <X className="h-3.5 w-3.5" />
       </button>
     </div>
   )
 }
 
 /* ------------------------------------------------------------------ */
-/*  Container (render once at root)                                    */
+/*  Container                                                          */
 /* ------------------------------------------------------------------ */
 
 export function ToastContainer() {
@@ -94,7 +101,7 @@ export function ToastContainer() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2 w-72">
+    <div className="fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-2 w-80">
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} />
       ))}

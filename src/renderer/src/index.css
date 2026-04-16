@@ -1,22 +1,23 @@
 @import "tailwindcss";
 
 @theme {
-  --color-surface: #0a0a0f;
-  --color-surface-alt: #0d1117;
-  --color-card: #161b22;
-  --color-elevated: #1c2333;
-  --color-edge: #2a3140;
-  --color-content: #e4e4e7;
-  --color-muted: #8b949e;
-  --color-accent: #2563eb;
-  --color-accent-dim: #1d4ed8;
+  --color-surface: #09090b;
+  --color-surface-alt: #0c0c10;
+  --color-card: #131318;
+  --color-elevated: #1a1a22;
+  --color-edge: #232330;
+  --color-content: #ececef;
+  --color-muted: #71717a;
+  --color-accent: #3b82f6;
+  --color-accent-dim: #2563eb;
   --color-ok: #22c55e;
-  --color-warn: #f59e0b;
+  --color-warn: #eab308;
   --color-err: #ef4444;
 
-  --animate-slideIn: slideIn 0.25s ease-out;
-  --animate-slideInRight: slideInRight 0.2s ease-out;
+  --animate-slideIn: slideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slideInRight: slideInRight 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   --animate-fadeIn: fadeIn 0.15s ease-out;
+  --animate-scaleIn: scaleIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes slideIn {
@@ -25,7 +26,7 @@
 }
 
 @keyframes slideInRight {
-  from { opacity: 0; transform: translateX(20px); }
+  from { opacity: 0; transform: translateX(16px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 
@@ -34,23 +35,40 @@
   to   { opacity: 1; }
 }
 
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
 body {
   margin: 0;
   background-color: var(--color-surface);
   color: var(--color-content);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+  letter-spacing: -0.01em;
 }
 
 * { box-sizing: border-box; }
-*:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-edge); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--color-edge); border-radius: 999px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-muted); }
 
 /* Firefox scrollbar */
@@ -59,28 +77,27 @@ body {
   scrollbar-color: var(--color-edge) transparent;
 }
 
-/* Selection styling */
+/* Selection */
 ::selection {
   background-color: var(--color-accent);
   color: white;
 }
 
-/* Style native select dropdowns for dark theme */
+/* Select dropdowns */
 select option {
   background-color: var(--color-card);
   color: var(--color-content);
-  padding: 4px 8px;
+  padding: 6px 8px;
 }
 
-/* Custom select arrow */
 select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 32px !important;
 }
 
-/* Color picker styling */
+/* Color picker */
 input[type="color"] {
   -webkit-appearance: none;
   border: none;
@@ -91,12 +108,32 @@ input[type="color"]::-webkit-color-swatch-wrapper {
 }
 input[type="color"]::-webkit-color-swatch {
   border: 1px solid var(--color-edge);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
-/* Number input — hide spinner arrows */
+/* Number input — hide spinners */
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* Shimmer loading effect */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-elevated) 0%,
+    var(--color-edge) 50%,
+    var(--color-elevated) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Drag region for electron frameless window */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
 }

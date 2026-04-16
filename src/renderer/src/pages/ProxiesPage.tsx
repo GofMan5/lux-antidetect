@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Plus, Trash2, FlaskConical, Pencil, X, Loader2, Upload, Globe } from 'lucide-react'
+import { Plus, Trash2, FlaskConical, Pencil, X, Loader2, Upload, Globe, Search } from 'lucide-react'
 import { useProxiesStore } from '../stores/proxies'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
@@ -11,10 +11,10 @@ import { INPUT_CLASS, SELECT_CLASS, LABEL_CLASS, BTN_PRIMARY, BTN_SECONDARY, BTN
 import type { ProxyProtocol, ProxyResponse } from '../lib/types'
 
 const PROTOCOL_COLORS: Record<ProxyProtocol, string> = {
-  http: 'bg-blue-500/20 text-blue-400',
-  https: 'bg-green-500/20 text-green-400',
-  socks4: 'bg-purple-500/20 text-purple-400',
-  socks5: 'bg-orange-500/20 text-orange-400'
+  http: 'bg-blue-500/12 text-blue-400 ring-1 ring-blue-500/20',
+  https: 'bg-green-500/12 text-green-400 ring-1 ring-green-500/20',
+  socks4: 'bg-purple-500/12 text-purple-400 ring-1 ring-purple-500/20',
+  socks5: 'bg-orange-500/12 text-orange-400 ring-1 ring-orange-500/20'
 }
 
 const proxySchema = z.object({
@@ -56,6 +56,7 @@ export function ProxiesPage(): React.JSX.Element {
   const [importText, setImportText] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [bulkTesting, setBulkTesting] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const {
     register,
@@ -168,6 +169,14 @@ export function ProxiesPage(): React.JSX.Element {
     setTestingId(null)
   }
 
+  const filteredProxies = searchQuery.trim()
+    ? proxies.filter(p =>
+        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.host.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.protocol.includes(searchQuery.toLowerCase())
+      )
+    : proxies
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -177,11 +186,11 @@ export function ProxiesPage(): React.JSX.Element {
   }
 
   return (
-    <div className="p-4 flex flex-col h-full">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-3">
+    <div className="p-5 flex flex-col h-full">
+      <div className="flex items-center justify-between mb-4 shrink-0">
+        <div className="flex items-center gap-2.5">
           <h1 className="text-lg font-bold text-content">Proxies</h1>
-          <span className="text-xs text-muted bg-surface-alt px-2 py-0.5 rounded-full">
+          <span className="text-[11px] text-muted bg-elevated px-2 py-0.5 rounded-md font-medium tabular-nums">
             {proxies.length}
           </span>
         </div>
@@ -198,8 +207,7 @@ export function ProxiesPage(): React.JSX.Element {
             onClick={async () => {
               setBulkTesting(true)
               try {
-                const ids = proxies.map(p => p.id)
-                await api.bulkTestProxies(ids)
+                await api.bulkTestProxies(proxies.map(p => p.id))
                 await fetchProxies()
               } catch { /* best effort */ }
               setBulkTesting(false)
@@ -213,11 +221,30 @@ export function ProxiesPage(): React.JSX.Element {
         </div>
       </div>
 
+      {/* Search */}
+      {proxies.length > 0 && (
+        <div className="mb-3 shrink-0">
+          <div className="relative max-w-[280px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search proxies..."
+              className={`${INPUT_CLASS} pl-8 !py-1.5 text-xs`}
+            />
+          </div>
+        </div>
+      )}
+
       {proxies.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 text-center">
-          <div className="bg-card rounded-xl p-8 border border-edge">
-            <Globe className="h-8 w-8 text-muted/30 mx-auto mb-3" />
-            <p className="text-muted mb-4 text-sm">No proxies configured</p>
+          <div className="bg-card rounded-2xl p-10 border border-edge max-w-sm">
+            <div className="h-12 w-12 rounded-xl bg-elevated flex items-center justify-center mx-auto mb-4">
+              <Globe className="h-6 w-6 text-muted/40" />
+            </div>
+            <p className="text-muted text-sm font-medium mb-1">No proxies configured</p>
+            <p className="text-muted/60 text-xs mb-5">Add proxies to use with your browser profiles</p>
             <button onClick={openAdd} className={BTN_PRIMARY}>
               <Plus className="h-4 w-4" />
               Add Proxy
@@ -225,7 +252,7 @@ export function ProxiesPage(): React.JSX.Element {
           </div>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto rounded-lg border border-edge min-h-0 bg-card/30">
+        <div className="flex-1 overflow-auto rounded-xl border border-edge min-h-0 bg-card/40">
           <table className="w-full text-sm table-fixed">
             <colgroup>
               <col className="w-[22%]" />
@@ -236,79 +263,65 @@ export function ProxiesPage(): React.JSX.Element {
               <col className="w-[18%]" />
             </colgroup>
             <thead className="sticky top-0 z-10">
-              <tr className="border-b border-edge bg-surface-alt">
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Name</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Proto</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Host:Port</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">User</th>
-                <th className="text-left px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Status</th>
-                <th className="text-right px-3 py-2.5 font-medium text-muted text-xs uppercase tracking-wide">Actions</th>
+              <tr className="border-b border-edge bg-card">
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Name</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Proto</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Host:Port</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">User</th>
+                <th className="text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Status</th>
+                <th className="text-right px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {proxies.map((proxy) => (
+              {filteredProxies.map((proxy) => (
                 <tr
                   key={proxy.id}
-                  className="border-b border-edge/50 last:border-b-0 hover:bg-elevated/50 transition-colors"
+                  className="border-b border-edge/40 last:border-b-0 hover:bg-elevated/40 transition-colors"
                 >
                   <td className="px-3 py-2.5 text-content font-medium truncate" title={proxy.name}>{proxy.name}</td>
                   <td className="px-3 py-2.5">
-                    <span
-                      className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium uppercase ${PROTOCOL_COLORS[proxy.protocol]}`}
-                    >
+                    <span className={`inline-flex rounded-md px-2 py-0.5 text-[11px] font-medium uppercase ${PROTOCOL_COLORS[proxy.protocol]}`}>
                       {proxy.protocol}
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-muted font-mono text-xs truncate" title={`${proxy.host}:${proxy.port}`}>
                     {proxy.host}:{proxy.port}
                   </td>
-                  <td className="px-3 py-2.5 text-muted text-xs truncate">{proxy.username ?? <span className="text-muted/50">None</span>}</td>
+                  <td className="px-3 py-2.5 text-muted text-xs truncate">{proxy.username ?? <span className="text-muted/40">—</span>}</td>
                   <td className="px-3 py-2.5">
                     <span className="inline-flex items-center gap-1.5 text-xs">
                       {testResult?.id === proxy.id ? (
                         <>
-                          <span className={`h-2 w-2 rounded-full shrink-0 ${testResult.ok ? 'bg-ok animate-pulse' : 'bg-err animate-pulse'}`} />
-                          <span className={testResult.ok ? 'text-ok font-medium' : 'text-err font-medium'}>
-                            {testResult.ok ? 'Connected!' : 'Failed!'}
+                          <span className={`h-2 w-2 rounded-full shrink-0 ${testResult.ok ? 'bg-ok shadow-sm shadow-ok/40' : 'bg-err shadow-sm shadow-err/40'}`} />
+                          <span className={`font-medium ${testResult.ok ? 'text-ok' : 'text-err'}`}>
+                            {testResult.ok ? 'OK' : 'Fail'}
                           </span>
                         </>
                       ) : (
                         <>
-                          <span className={`h-2 w-2 rounded-full shrink-0 ${proxy.check_ok ? 'bg-ok' : 'bg-err'}`} />
+                          <span className={`h-2 w-2 rounded-full shrink-0 ${proxy.check_ok ? 'bg-ok shadow-sm shadow-ok/30' : 'bg-err shadow-sm shadow-err/30'}`} />
                           <span className="text-muted">{proxy.check_ok ? 'OK' : 'Fail'}</span>
                           {proxy.check_ok && proxy.check_latency_ms != null && (
-                            <span className="text-muted/70 font-mono">{proxy.check_latency_ms}ms</span>
+                            <span className="text-muted/60 font-mono tabular-nums">{proxy.check_latency_ms}ms</span>
                           )}
                         </>
                       )}
                     </span>
                   </td>
                   <td className="px-3 py-2.5">
-                    <div className="flex items-center justify-end gap-1 shrink-0">
+                    <div className="flex items-center justify-end gap-0.5 shrink-0">
                       <button
                         onClick={() => handleTest(proxy.id)}
                         disabled={testingId === proxy.id}
-                        className={`${BTN_ICON} hover:text-accent disabled:opacity-50`}
-                        aria-label={`Test ${proxy.name}`}
+                        className={`${BTN_ICON} hover:text-accent disabled:opacity-40`}
+                        title="Test"
                       >
-                        {testingId === proxy.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <FlaskConical className="h-4 w-4" />
-                        )}
+                        {testingId === proxy.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
                       </button>
-                      <button
-                        onClick={() => openEdit(proxy)}
-                        className={BTN_ICON}
-                        aria-label={`Edit ${proxy.name}`}
-                      >
+                      <button onClick={() => openEdit(proxy)} className={BTN_ICON} title="Edit">
                         <Pencil className="h-4 w-4" />
                       </button>
-                      <button
-                        onClick={() => handleDelete(proxy.id, proxy.name)}
-                        className={BTN_DANGER}
-                        aria-label={`Delete ${proxy.name}`}
-                      >
+                      <button onClick={() => handleDelete(proxy.id, proxy.name)} className={BTN_DANGER} title="Delete">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
@@ -320,17 +333,17 @@ export function ProxiesPage(): React.JSX.Element {
         </div>
       )}
 
-      {/* Modal */}
+      {/* Add/Edit Modal */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fadeIn"
           onClick={closeModal}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-label={editingId ? 'Edit proxy' : 'Add proxy'}
-            className="bg-card rounded-xl p-5 w-[90%] max-w-[440px] border border-edge shadow-2xl"
+            className="bg-card rounded-2xl p-6 w-[90%] max-w-[440px] border border-edge shadow-2xl animate-scaleIn"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
@@ -343,30 +356,20 @@ export function ProxiesPage(): React.JSX.Element {
             </div>
 
             {modalError && (
-              <div className="rounded-lg bg-err/10 border border-err/30 px-3 py-2 text-xs text-err mb-4">
+              <div className="rounded-xl bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err mb-4 font-medium">
                 {modalError}
               </div>
             )}
 
             <form onSubmit={handleSubmit(onSubmitProxy)} className="space-y-3">
               <div>
-                <label htmlFor="proxy-name" className={LABEL_CLASS}>
-                  Name
-                </label>
-                <input
-                  id="proxy-name"
-                  type="text"
-                  placeholder="My Proxy"
-                  className={INPUT_CLASS}
-                  {...register('name')}
-                />
+                <label htmlFor="proxy-name" className={LABEL_CLASS}>Name</label>
+                <input id="proxy-name" type="text" placeholder="My Proxy" className={INPUT_CLASS} {...register('name')} />
                 {errors.name && <p className="mt-1 text-xs text-err">{errors.name.message}</p>}
               </div>
 
               <div>
-                <label htmlFor="proxy-protocol" className={LABEL_CLASS}>
-                  Protocol
-                </label>
+                <label htmlFor="proxy-protocol" className={LABEL_CLASS}>Protocol</label>
                 <select id="proxy-protocol" className={SELECT_CLASS} {...register('protocol')}>
                   <option value="http">HTTP</option>
                   <option value="https">HTTPS</option>
@@ -377,57 +380,25 @@ export function ProxiesPage(): React.JSX.Element {
 
               <div className="grid grid-cols-3 gap-2">
                 <div className="col-span-2">
-                  <label htmlFor="proxy-host" className={LABEL_CLASS}>
-                    Host
-                  </label>
-                  <input
-                    id="proxy-host"
-                    type="text"
-                    placeholder="192.168.1.1"
-                    className={INPUT_CLASS}
-                    {...register('host')}
-                  />
+                  <label htmlFor="proxy-host" className={LABEL_CLASS}>Host</label>
+                  <input id="proxy-host" type="text" placeholder="192.168.1.1" className={INPUT_CLASS} {...register('host')} />
                   {errors.host && <p className="mt-1 text-xs text-err">{errors.host.message}</p>}
                 </div>
                 <div>
-                  <label htmlFor="proxy-port" className={LABEL_CLASS}>
-                    Port
-                  </label>
-                  <input
-                    id="proxy-port"
-                    type="number"
-                    placeholder="8080"
-                    className={INPUT_CLASS}
-                    {...register('port', { valueAsNumber: true })}
-                  />
+                  <label htmlFor="proxy-port" className={LABEL_CLASS}>Port</label>
+                  <input id="proxy-port" type="number" placeholder="8080" className={INPUT_CLASS} {...register('port', { valueAsNumber: true })} />
                   {errors.port && <p className="mt-1 text-xs text-err">{errors.port.message}</p>}
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label htmlFor="proxy-username" className={LABEL_CLASS}>
-                    Username
-                  </label>
-                  <input
-                    id="proxy-username"
-                    type="text"
-                    placeholder="optional"
-                    className={INPUT_CLASS}
-                    {...register('username')}
-                  />
+                  <label htmlFor="proxy-username" className={LABEL_CLASS}>Username</label>
+                  <input id="proxy-username" type="text" placeholder="optional" className={INPUT_CLASS} {...register('username')} />
                 </div>
                 <div>
-                  <label htmlFor="proxy-password" className={LABEL_CLASS}>
-                    Password
-                  </label>
-                  <input
-                    id="proxy-password"
-                    type="password"
-                    placeholder="optional"
-                    className={INPUT_CLASS}
-                    {...register('password')}
-                  />
+                  <label htmlFor="proxy-password" className={LABEL_CLASS}>Password</label>
+                  <input id="proxy-password" type="password" placeholder="optional" className={INPUT_CLASS} {...register('password')} />
                 </div>
               </div>
 
@@ -447,14 +418,14 @@ export function ProxiesPage(): React.JSX.Element {
       {/* Import Modal */}
       {importOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fadeIn"
           onClick={() => setImportOpen(false)}
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-label="Import proxies"
-            className="bg-card rounded-xl p-5 w-[90%] max-w-[500px] border border-edge shadow-2xl"
+            className="bg-card rounded-2xl p-6 w-[90%] max-w-[500px] border border-edge shadow-2xl animate-scaleIn"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
@@ -463,15 +434,15 @@ export function ProxiesPage(): React.JSX.Element {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <p className="text-xs text-muted mb-2">
-              One proxy per line. Formats: <code className="text-accent">host:port</code>, <code className="text-accent">host:port:user:pass</code>, <code className="text-accent">socks5://host:port</code>, <code className="text-accent">user:pass@host:port</code>
+            <p className="text-xs text-muted mb-3 leading-relaxed">
+              One proxy per line. Formats: <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">host:port</code>, <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">host:port:user:pass</code>, <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">socks5://host:port</code>, <code className="text-accent bg-accent/8 px-1 py-0.5 rounded">user:pass@host:port</code>
             </p>
             <textarea
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
               placeholder="192.168.1.1:8080&#10;socks5://proxy.example.com:1080:user:pass"
               rows={6}
-              className="w-full rounded-md border border-edge bg-surface-alt px-3 py-2 text-sm text-content font-mono placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent/60 resize-none mb-3"
+              className="w-full rounded-xl border border-edge bg-surface px-3.5 py-2.5 text-sm text-content font-mono placeholder:text-muted/50 focus:outline-none focus:ring-2 focus:ring-accent/40 resize-none mb-3"
             />
             <div className="flex items-center gap-2">
               <button
@@ -483,10 +454,7 @@ export function ProxiesPage(): React.JSX.Element {
                     let created = 0
                     for (const r of parsed) {
                       if (r.ok && r.data) {
-                        try {
-                          await api.createProxy(r.data)
-                          created++
-                        } catch { /* skip duplicates */ }
+                        try { await api.createProxy(r.data); created++ } catch { /* skip */ }
                       }
                     }
                     await fetchProxies()
