@@ -197,6 +197,23 @@ export function registerIpcHandlers(
   // Proxies
   ipcMain.handle('list-proxies', () => listProxies(db))
   ipcMain.handle('create-proxy', (_, input: ProxyInput) => createProxy(db, input))
+
+  // Build a shareable connection string for a single proxy. We include the
+  // credentials here because the caller explicitly asked for them — the
+  // ProxyResponse exposed by list-proxies strips the password for general
+  // reads, so this is the one path where it crosses the IPC boundary.
+  ipcMain.handle('get-proxy-connection-string', (_, proxyId: string) => {
+    assertUuid(proxyId)
+    const row = db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as
+      | { protocol: string; host: string; port: number; username: string | null; password: string | null }
+      | undefined
+    if (!row) throw new Error('Proxy not found')
+    const auth =
+      row.username || row.password
+        ? `${encodeURIComponent(row.username ?? '')}:${encodeURIComponent(row.password ?? '')}@`
+        : ''
+    return `${row.protocol}://${auth}${row.host}:${row.port}`
+  })
   ipcMain.handle('update-proxy', (_, proxyId: string, input: ProxyInput) => {
     assertUuid(proxyId)
     return updateProxy(db, proxyId, input)

@@ -65,6 +65,7 @@ export interface LuxAPI {
   deleteProfile(id: string): Promise<void>
   duplicateProfile(id: string): Promise<Profile>
   revealProfileDir(id: string): Promise<void>
+  getProxyConnectionString(proxyId: string): Promise<string>
 
   launchBrowser(profileId: string, opts?: { targetUrl?: string }): Promise<{ pid: number }>
   stopBrowser(profileId: string): Promise<void>

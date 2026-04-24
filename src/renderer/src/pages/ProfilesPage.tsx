@@ -892,6 +892,30 @@ export function ProfilesPage() {
       }
     )
 
+    // If this profile has a proxy attached, offer a quick copy of the full
+    // connection string (including password — the only IPC path that exposes
+    // it, intentionally).
+    const profileRec = profiles.find((p) => p.id === profileId)
+    const attachedProxyId = profileRec?.proxy_id ?? null
+    if (attachedProxyId) {
+      items.push({
+        label: 'Copy proxy string',
+        icon: <ClipboardCopy className="h-4 w-4" />,
+        onClick: async () => {
+          try {
+            const conn = await api.getProxyConnectionString(attachedProxyId)
+            await navigator.clipboard.writeText(conn)
+            addToast('Proxy string copied', 'info', { duration: 2000 })
+          } catch (err) {
+            addToast(
+              `Copy failed: ${err instanceof Error ? err.message : 'unknown'}`,
+              'error'
+            )
+          }
+        }
+      })
+    }
+
     if (isRunning) {
       items.push(
         { label: 'Export Cookies', icon: <Download className="h-4 w-4" />, onClick: () => handleExportCookies(profileId, 'json') },
@@ -938,7 +962,8 @@ export function ProfilesPage() {
     )
 
     return items
-  }, [handleLaunch, handleStop, addToast])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleLaunch, handleStop, addToast, profiles])
 
   // --- Keyboard navigation — focused row index ------------------------------
   // A keyboard-driven "selected row" cursor that moves with ↑/↓; Enter opens

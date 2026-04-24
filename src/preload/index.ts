@@ -20,6 +20,8 @@ const api: LuxAPI = {
   deleteProfile: (id: string) => ipcRenderer.invoke('delete-profile', id),
   duplicateProfile: (id: string) => ipcRenderer.invoke('duplicate-profile', id),
   revealProfileDir: (id: string) => ipcRenderer.invoke('reveal-profile-dir', id),
+  getProxyConnectionString: (proxyId: string) =>
+    ipcRenderer.invoke('get-proxy-connection-string', proxyId) as Promise<string>,
 
   launchBrowser: (profileId: string, opts?: { targetUrl?: string }) =>
     ipcRenderer.invoke('launch-browser', profileId, opts),
