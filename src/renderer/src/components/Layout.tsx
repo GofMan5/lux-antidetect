@@ -44,7 +44,7 @@ export function Layout(): React.JSX.Element {
         </div>
 
         {/* Navigation */}
-        <nav aria-label="Main navigation" className="flex flex-col gap-1 px-2 py-4 flex-1">
+        <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
             const link = (
               <NavLink
@@ -52,21 +52,22 @@ export function Layout(): React.JSX.Element {
                 to={to}
                 className={({ isActive }) =>
                   cn(
-                    'group relative flex items-center gap-3 rounded-[--radius-md] py-2.5 text-[13px] font-medium transition-all duration-200',
+                    'group relative flex items-center gap-3 rounded-[--radius-md] py-2 text-[13px] font-medium',
+                    'transition-all duration-150 ease-out',
                     collapsed ? 'justify-center px-0' : 'px-3',
                     isActive
-                      ? 'bg-accent/10 text-accent'
-                      : 'text-muted hover:bg-elevated/50 hover:text-content'
+                      ? 'bg-accent/15 text-accent shadow-[inset_0_0_0_1px_var(--color-accent-glow)]'
+                      : 'text-muted hover:bg-elevated hover:text-content'
                   )
                 }
               >
                 {({ isActive }) => (
                   <>
-                    {/* Active left bar indicator */}
+                    {/* Active left bar indicator — taller and glowing */}
                     {isActive && (
-                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-accent" />
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-accent shadow-[0_0_8px_var(--color-accent)]" />
                     )}
-                    <Icon className="h-[18px] w-[18px] shrink-0" />
+                    <Icon className="h-[18px] w-[18px] shrink-0 transition-transform group-hover:scale-110" />
                     {!collapsed && <span>{label}</span>}
                   </>
                 )}
@@ -114,8 +115,9 @@ export function Layout(): React.JSX.Element {
 
           {/* Version badge */}
           {!collapsed && (
-            <div className="px-3 py-2 text-[10px] text-muted/40 border-t border-edge/30 font-mono tracking-wide">
-              v{__APP_VERSION__}
+            <div className="mt-1 pt-2 px-3 border-t border-edge/30 flex items-center gap-2 text-[10px] text-muted/60 font-mono tracking-wide">
+              <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" aria-hidden />
+              <span>LUX v{__APP_VERSION__}</span>
             </div>
           )}
         </div>

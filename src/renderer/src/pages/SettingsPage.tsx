@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import {
-  CheckCircle2, XCircle, Plus, Trash2, Check, Palette, History, FileText,
+  CheckCircle2, Plus, Trash2, Check, Palette, History, FileText,
   Download, Upload, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw,
   Pencil, Bug, Monitor, Database, Power, Info
 } from 'lucide-react'
@@ -22,6 +22,7 @@ import { Button } from '../components/ui/Button'
 import { Toggle } from '../components/ui/Toggle'
 import { Badge } from '../components/ui/Badge'
 import { Select } from '../components/ui/Select'
+import { EmptyState } from '../components/ui/EmptyState'
 
 
 type SettingsTab = 'appearance' | 'browsers' | 'general' | 'fingerprint' | 'data' | 'about' | 'debug'
@@ -412,7 +413,12 @@ function BrowsersTab({
       {/* Managed browsers */}
       <Card title="Installed Browsers" description="Browsers downloaded and managed by Lux.">
         {managedBrowsers.length === 0 ? (
-          <p className="text-muted text-sm">No managed browsers installed yet.</p>
+          <EmptyState
+            size="sm"
+            icon={<HardDrive />}
+            title="No browsers installed yet"
+            description="Download a browser from the list below — Chromium is the recommended default."
+          />
         ) : (
           <div className="space-y-2">
             {managedBrowsers.map((b) => (
@@ -480,12 +486,17 @@ function BrowsersTab({
       {/* System browsers */}
       <Card title="System Browsers" description="Browsers detected on your system.">
         {browsersLoading ? (
-          <p className="text-muted text-sm">Detecting...</p>
-        ) : browserEntries.length === 0 ? (
-          <div className="flex items-center gap-2">
-            <XCircle className="h-3.5 w-3.5 text-err" />
-            <p className="text-sm text-muted">No system browsers detected</p>
+          <div className="flex items-center gap-2 text-sm text-muted">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Detecting system browsers…
           </div>
+        ) : browserEntries.length === 0 ? (
+          <EmptyState
+            size="sm"
+            icon={<Monitor />}
+            title="No system browsers detected"
+            description="Install Chrome, Chromium, Firefox or Edge system-wide, or download one above."
+          />
         ) : (
           <div className="space-y-1.5">
             {browserEntries.map(([name, path]) => (
@@ -765,9 +776,17 @@ function DataTab({
       {/* Session History */}
       <Card title="Session History" actions={<History className="h-4 w-4 text-accent" />}>
         {historyLoading ? (
-          <p className="text-muted text-sm">Loading...</p>
+          <div className="flex items-center gap-2 text-sm text-muted">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading history…
+          </div>
         ) : sessionHistory.length === 0 ? (
-          <p className="text-muted text-sm">No session history yet.</p>
+          <EmptyState
+            size="sm"
+            icon={<History />}
+            title="No sessions yet"
+            description="Launch a profile to start recording session history."
+          />
         ) : (
           <div className="max-h-60 overflow-y-auto rounded-[--radius-md] border border-edge">
             <table className="w-full text-sm">
@@ -808,7 +827,12 @@ function DataTab({
       {/* Templates */}
       <Card title="Templates" description="Saved profile templates." actions={<FileText className="h-4 w-4 text-accent" />}>
         {templates.length === 0 ? (
-          <p className="text-muted text-sm">No templates yet. Save a profile as template from the editor.</p>
+          <EmptyState
+            size="sm"
+            icon={<FileText />}
+            title="No templates saved"
+            description='Open any profile and click "Save as Template" to reuse its fingerprint + settings.'
+          />
         ) : (
           <div className="space-y-2">
             {templates.map((t) => (

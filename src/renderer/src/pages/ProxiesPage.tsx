@@ -23,7 +23,7 @@ import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
 import { api } from '../lib/api'
 import { cn } from '../lib/utils'
-import { CHECKBOX, TEXTAREA } from '../lib/ui'
+import { CHECKBOX, TEXTAREA, LABEL } from '../lib/ui'
 import {
   Button,
   Input,
@@ -988,7 +988,7 @@ export function ProxiesPage(): React.JSX.Element {
           <div>
             <label
               htmlFor="proxy-quick-paste"
-              className="block text-xs font-medium text-content mb-1.5"
+              className={LABEL}
             >
               Quick paste
             </label>
@@ -1049,7 +1049,7 @@ export function ProxiesPage(): React.JSX.Element {
           </div>
 
           <div>
-            <label htmlFor="proxy-name" className="block text-xs font-medium text-content mb-1.5">
+            <label htmlFor="proxy-name" className={LABEL}>
               Name
             </label>
             <Input
@@ -1063,7 +1063,7 @@ export function ProxiesPage(): React.JSX.Element {
           <div>
             <label
               htmlFor="proxy-protocol"
-              className="block text-xs font-medium text-content mb-1.5"
+              className={LABEL}
             >
               Protocol
             </label>
@@ -1079,7 +1079,7 @@ export function ProxiesPage(): React.JSX.Element {
             <div className="col-span-2">
               <label
                 htmlFor="proxy-host"
-                className="block text-xs font-medium text-content mb-1.5"
+                className={LABEL}
               >
                 Host
               </label>
@@ -1093,7 +1093,7 @@ export function ProxiesPage(): React.JSX.Element {
             <div>
               <label
                 htmlFor="proxy-port"
-                className="block text-xs font-medium text-content mb-1.5"
+                className={LABEL}
               >
                 Port
               </label>
@@ -1111,7 +1111,7 @@ export function ProxiesPage(): React.JSX.Element {
             <div>
               <label
                 htmlFor="proxy-username"
-                className="block text-xs font-medium text-content mb-1.5"
+                className={LABEL}
               >
                 Username
               </label>
@@ -1149,7 +1149,7 @@ export function ProxiesPage(): React.JSX.Element {
             <div>
               <label
                 htmlFor="proxy-password"
-                className="block text-xs font-medium text-content mb-1.5"
+                className={LABEL}
               >
                 Password
               </label>
@@ -1199,7 +1199,7 @@ export function ProxiesPage(): React.JSX.Element {
             <div>
               <label
                 htmlFor="proxy-country"
-                className="block text-xs font-medium text-content mb-1.5"
+                className={LABEL}
               >
                 Country
               </label>
@@ -1213,7 +1213,7 @@ export function ProxiesPage(): React.JSX.Element {
             <div>
               <label
                 htmlFor="proxy-group"
-                className="block text-xs font-medium text-content mb-1.5"
+                className={LABEL}
               >
                 Group tag
               </label>

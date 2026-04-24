@@ -14,10 +14,16 @@
   --color-ok: #10b981;
   --color-warn: #f59e0b;
   --color-err: #ef4444;
+  --color-info: #38bdf8;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.35);
+  --shadow-focus: 0 0 0 1px var(--color-accent), 0 0 0 3px var(--color-accent-glow);
 
   --animate-fadeIn: fadeIn 0.15s ease-out;
   --animate-fadeOut: fadeOut 0.15s ease-in;
@@ -80,12 +86,21 @@ body {
 
 * { box-sizing: border-box; }
 
-/* Focus ring */
+/* Focus ring — softer 1px + glow halo, easier on the eye than the old 2+2px stack */
 *:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--color-accent), 0 0 0 4px var(--color-accent-glow);
+  box-shadow: var(--shadow-focus);
   border-radius: var(--radius-sm);
+  transition: box-shadow 0.12s ease-out;
 }
+
+/* Buttons, rows, and anything tagged with `interactive` get a subtle hover lift. */
+.interactive {
+  transition: background-color 0.12s ease-out, border-color 0.12s ease-out,
+              transform 0.12s ease-out, box-shadow 0.12s ease-out, color 0.12s ease-out;
+}
+.interactive:hover:not(:disabled) { background-color: var(--color-elevated); }
+.interactive:active:not(:disabled) { transform: translateY(1px); }
 
 /* Scrollbar — Webkit */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
