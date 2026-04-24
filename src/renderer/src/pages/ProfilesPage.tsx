@@ -786,24 +786,41 @@ export function ProfilesPage() {
   // --- Bulk actions ----------------------------------------------------------
 
   const handleBulkLaunch = async (): Promise<void> => {
+    const count = selectedIds.size
+    if (count === 0) return
+    // Surface "launching N profiles" so users know the queue is moving,
+    // especially with the max-concurrent-sessions setting that serializes
+    // starts. We clear selection immediately so further edits don't stack.
+    const ids = Array.from(selectedIds)
+    setSelectedIds(new Set())
+    addToast(`Launching ${count} profile${count === 1 ? '' : 's'}…`, 'info', {
+      duration: 2000,
+      silent: true
+    })
     try {
-      const results = await api.bulkLaunch(Array.from(selectedIds))
+      const results = await api.bulkLaunch(ids)
       const failed = results.filter(r => !r.ok).length
       if (failed > 0) addToast(`${results.length - failed} launched, ${failed} failed`, 'warning')
-      else addToast(`${results.length} profiles launched`, 'success')
+      else addToast(`${results.length} profile${results.length === 1 ? '' : 's'} launched`, 'success')
     } catch { addToast('Bulk launch failed', 'error') }
-    setSelectedIds(new Set())
     fetchProfiles()
   }
 
   const handleBulkStop = async (): Promise<void> => {
+    const count = selectedIds.size
+    if (count === 0) return
+    const ids = Array.from(selectedIds)
+    setSelectedIds(new Set())
+    addToast(`Stopping ${count} profile${count === 1 ? '' : 's'}…`, 'info', {
+      duration: 2000,
+      silent: true
+    })
     try {
-      const results = await api.bulkStop(Array.from(selectedIds))
+      const results = await api.bulkStop(ids)
       const failed = results.filter(r => !r.ok).length
       if (failed > 0) addToast(`${results.length - failed} stopped, ${failed} failed`, 'warning')
-      else addToast(`${results.length} profiles stopped`, 'success')
+      else addToast(`${results.length} profile${results.length === 1 ? '' : 's'} stopped`, 'success')
     } catch { addToast('Bulk stop failed', 'error') }
-    setSelectedIds(new Set())
     fetchProfiles()
   }
 
