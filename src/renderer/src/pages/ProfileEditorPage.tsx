@@ -549,8 +549,16 @@ export function ProfileEditorPanel({
 
   // -- Handlers -----------------------------------------------------------
 
-  const handleCancel = (): void => {
-    if (isDirty && !window.confirm('You have unsaved changes. Discard them?')) return
+  const handleCancel = async (): Promise<void> => {
+    if (isDirty) {
+      const ok = await confirm({
+        title: 'Discard unsaved changes?',
+        message: 'You have edits in this profile that will be lost if you continue.',
+        confirmLabel: 'Discard',
+        danger: true
+      })
+      if (!ok) return
+    }
     onCancel()
   }
 

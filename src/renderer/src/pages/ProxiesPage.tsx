@@ -648,8 +648,24 @@ export function ProxiesPage(): React.JSX.Element {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-6 h-6 animate-spin text-accent" />
+      <div className="p-6 flex flex-col h-full">
+        <div className="flex items-center justify-between mb-5 shrink-0">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-content">Proxies</h1>
+            <div className="h-5 w-8 rounded-full shimmer" />
+          </div>
+        </div>
+        <div className="flex-1 min-h-0 bg-card rounded-[--radius-lg] border border-edge overflow-hidden">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-edge/40 last:border-0">
+              <div className="h-4 w-4 rounded shimmer" />
+              <div className="h-3 w-40 rounded shimmer" />
+              <div className="h-3 w-16 rounded shimmer" />
+              <div className="h-3 w-56 rounded shimmer" />
+              <div className="ml-auto h-3 w-20 rounded shimmer" />
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -659,7 +675,7 @@ export function ProxiesPage(): React.JSX.Element {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="p-5 flex flex-col h-full">
+    <div className="p-6 flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between mb-5 shrink-0">
         <div className="flex items-center gap-3">
