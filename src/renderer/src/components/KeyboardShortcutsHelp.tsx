@@ -52,7 +52,8 @@ const SHORTCUTS: ShortcutGroup[] = [
       { keys: ['Space'], description: 'Toggle selection on the focused row' },
       { keys: ['Delete'], description: 'Delete the focused row (with undo)' },
       { keys: ['Shift', 'Click'], description: 'Range-select profiles in the table' },
-      { keys: ['Double-click'], description: 'Launch profile (when idle)' }
+      { keys: ['Double-click'], description: 'Launch profile (when idle)' },
+      { keys: ['Double-click name'], description: 'Inline rename (Enter to save, Esc to cancel)' }
     ]
   },
   {

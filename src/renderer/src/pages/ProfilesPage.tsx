@@ -257,6 +257,39 @@ export function ProfilesPage() {
     browserType: BrowserType
   } | null>(null)
 
+  // Inline-rename state: profile currently being renamed + the draft value.
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+
+  const startRename = useCallback((profileId: string, current: string) => {
+    setRenamingId(profileId)
+    setRenameDraft(current)
+  }, [])
+
+  const cancelRename = useCallback(() => {
+    setRenamingId(null)
+    setRenameDraft('')
+  }, [])
+
+  const commitRename = useCallback(async (profileId: string, originalName: string): Promise<void> => {
+    const next = renameDraft.trim()
+    if (!next || next === originalName) {
+      cancelRename()
+      return
+    }
+    try {
+      await api.updateProfile(profileId, { name: next })
+      setRenamingId(null)
+      setRenameDraft('')
+      await fetchProfiles()
+    } catch (err) {
+      addToast(
+        `Rename failed: ${err instanceof Error ? err.message : 'unknown'}`,
+        'error'
+      )
+    }
+  }, [renameDraft, fetchProfiles, cancelRename, addToast])
+
   // Presets cache for "New from preset" dropdown
   const [presets, setPresets] = useState<PresetDescriptor[] | null>(null)
   const presetsLoadingRef = useRef(false)
@@ -1269,7 +1302,36 @@ export function ProfilesPage() {
                                     style={{ backgroundColor: profile.group_color }}
                                   />
                                 )}
-                                <span className="text-content font-medium truncate">{profile.name}</span>
+                                {renamingId === profile.id ? (
+                                  <input
+                                    autoFocus
+                                    value={renameDraft}
+                                    onChange={(e) => setRenameDraft(e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onDoubleClick={(e) => e.stopPropagation()}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation()
+                                      if (e.key === 'Enter') { e.preventDefault(); void commitRename(profile.id, profile.name) }
+                                      else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                                    }}
+                                    onBlur={() => { void commitRename(profile.id, profile.name) }}
+                                    className="flex-1 min-w-0 rounded-[--radius-sm] border border-accent/50 bg-surface px-2 py-0.5 text-[13px] text-content font-medium focus:outline-none focus:border-accent"
+                                  />
+                                ) : (
+                                  <span
+                                    className="text-content font-medium truncate"
+                                    onDoubleClick={(e) => {
+                                      // Shadow the row-level dblclick (which
+                                      // launches); name dblclick renames instead.
+                                      e.stopPropagation()
+                                      e.preventDefault()
+                                      startRename(profile.id, profile.name)
+                                    }}
+                                    title="Double-click to rename"
+                                  >
+                                    {profile.name}
+                                  </span>
+                                )}
                               </div>
                             </td>
 
