@@ -10,32 +10,54 @@ import { useNotificationStore } from '../stores/notifications'
 
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
+interface ToastAction {
+  label: string
+  onClick: () => void
+}
+
 interface Toast {
   id: number
   message: string
   type: ToastType
+  action?: ToastAction
+  /** Override the default auto-dismiss duration (ms). */
+  duration?: number
+}
+
+interface AddToastOptions {
+  action?: ToastAction
+  duration?: number
+  /** Skip adding the message to the persistent notification center. */
+  silent?: boolean
 }
 
 interface ToastStore {
   toasts: Toast[]
-  addToast: (message: string, type?: ToastType) => void
+  addToast: (message: string, type?: ToastType, opts?: AddToastOptions) => number
   removeToast: (id: number) => void
 }
 
 let nextId = 0
 const MAX_VISIBLE = 3
-const TOAST_DURATION = 3500
+const TOAST_DURATION_DEFAULT = 3500
 
 export const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
 
-  addToast: (message, type = 'info') => {
+  addToast: (message, type = 'info', opts) => {
     const id = ++nextId
     set((s) => ({
-      toasts: [...s.toasts.slice(-(MAX_VISIBLE - 1)), { id, message, type }]
+      toasts: [
+        ...s.toasts.slice(-(MAX_VISIBLE - 1)),
+        { id, message, type, action: opts?.action, duration: opts?.duration }
+      ]
     }))
-    // Also save to persistent notification history
-    useNotificationStore.getState().addNotification(message, type)
+    // Also save to persistent notification history (unless caller opts out
+    // — e.g. ephemeral undo toasts don't belong in the notification centre).
+    if (!opts?.silent) {
+      useNotificationStore.getState().addNotification(message, type)
+    }
+    return id
   },
 
   removeToast: (id) => {
@@ -86,6 +108,8 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
   const mountedRef = useRef(true)
   const [exiting, setExiting] = useState(false)
 
+  const duration = toast.duration ?? TOAST_DURATION_DEFAULT
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -102,9 +126,9 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
       exitTimerRef.current = setTimeout(() => {
         if (mountedRef.current) remove(toast.id)
       }, 200)
-    }, TOAST_DURATION)
+    }, duration)
     return () => clearTimeout(autoDismissRef.current)
-  }, [toast.id, remove])
+  }, [toast.id, remove, duration])
 
   const dismiss = (): void => {
     clearTimeout(autoDismissRef.current)
@@ -113,6 +137,11 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
     exitTimerRef.current = setTimeout(() => {
       if (mountedRef.current) remove(toast.id)
     }, 200)
+  }
+
+  const onAction = (): void => {
+    toast.action?.onClick()
+    dismiss()
   }
 
   const Icon = typeIcons[toast.type]
@@ -131,6 +160,19 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
     >
       <Icon className={cn('h-[18px] w-[18px] shrink-0 mt-0.5', iconColors[toast.type])} />
       <span className="min-w-0 flex-1 text-[13px] text-content leading-relaxed">{toast.message}</span>
+      {toast.action && (
+        <button
+          onClick={onAction}
+          className={cn(
+            'shrink-0 rounded-[--radius-sm] px-2 py-0.5 text-[12px] font-semibold uppercase tracking-wide',
+            'transition-colors',
+            iconColors[toast.type],
+            'hover:bg-elevated'
+          )}
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         onClick={dismiss}
         className="shrink-0 rounded-[--radius-sm] p-1 text-muted hover:text-content hover:bg-elevated/50 transition-colors"
@@ -143,7 +185,7 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
       <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden rounded-b-[--radius-lg]">
         <div
           className={cn('h-full opacity-60', progressColors[toast.type])}
-          style={{ animation: `toastProgress ${TOAST_DURATION}ms linear forwards` }}
+          style={{ animation: `toastProgress ${duration}ms linear forwards` }}
         />
       </div>
     </div>

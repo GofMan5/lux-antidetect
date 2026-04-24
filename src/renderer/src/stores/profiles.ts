@@ -17,9 +17,18 @@ interface ProfilesStore {
    * fingerprint-consistency banner, then clears it. Not persisted.
    */
   pendingHealthBannerExpand: string | null
+  /**
+   * IDs of profiles that are scheduled for deletion but not yet deleted —
+   * the row is hidden from the UI and a timer will finalize the delete
+   * unless `undoDelete` is called first. Enables Undo-toast pattern.
+   */
+  pendingDeletes: Set<string>
   fetchProfiles: () => Promise<void>
   fetchSessions: () => Promise<void>
   deleteProfile: (id: string) => Promise<void>
+  /** Hide a profile locally and finalize the delete after `delayMs`. Returns
+   *  an undo callback that cancels the pending delete if called first. */
+  scheduleDelete: (id: string, delayMs?: number) => () => void
   launchBrowser: (id: string) => Promise<void>
   stopBrowser: (id: string) => Promise<void>
   duplicateProfile: (id: string) => Promise<void>
@@ -28,6 +37,9 @@ interface ProfilesStore {
   closeEditor: () => void
   setPendingHealthBannerExpand: (id: string | null) => void
 }
+
+// Deletion timers kept outside the store state (non-serializable).
+const deleteTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function setProfileStatus(
   profiles: Profile[],
@@ -48,6 +60,7 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   editorMode: null,
   editorProfileId: null,
   pendingHealthBannerExpand: null,
+  pendingDeletes: new Set<string>(),
 
   fetchProfiles: async () => {
     if (!isApiAvailable()) return
@@ -73,8 +86,74 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   },
 
   deleteProfile: async (id) => {
+    // Cancel any pending delete for this id so we don't double-fire.
+    const timer = deleteTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      deleteTimers.delete(id)
+    }
+    set((s) => {
+      if (!s.pendingDeletes.has(id)) return {}
+      const next = new Set(s.pendingDeletes)
+      next.delete(id)
+      return { pendingDeletes: next }
+    })
     await api.deleteProfile(id)
     await get().fetchProfiles()
+  },
+
+  scheduleDelete: (id, delayMs = 5500) => {
+    // Add to pending set so the UI filters it out immediately.
+    set((s) => {
+      if (s.pendingDeletes.has(id)) return {}
+      const next = new Set(s.pendingDeletes)
+      next.add(id)
+      return { pendingDeletes: next }
+    })
+    // Replace any prior timer for this id — most recent schedule wins.
+    const prior = deleteTimers.get(id)
+    if (prior) clearTimeout(prior)
+    const timer = setTimeout(() => {
+      deleteTimers.delete(id)
+      // Finalize via the same API path as a straight delete so any server-
+      // side cleanup (fingerprint rows, extensions, lock files) is uniform.
+      api
+        .deleteProfile(id)
+        .catch(() => {
+          // On failure, put the profile back in the visible list so the
+          // user isn't left with a silently stuck "deleted" row.
+          set((s) => {
+            const next = new Set(s.pendingDeletes)
+            next.delete(id)
+            return { pendingDeletes: next }
+          })
+        })
+        .finally(() => {
+          set((s) => {
+            if (!s.pendingDeletes.has(id)) return {}
+            const next = new Set(s.pendingDeletes)
+            next.delete(id)
+            return { pendingDeletes: next }
+          })
+          void get().fetchProfiles()
+        })
+    }, delayMs)
+    deleteTimers.set(id, timer)
+
+    // Return an undo handler that cancels the finalize timer.
+    return (): void => {
+      const t = deleteTimers.get(id)
+      if (t) {
+        clearTimeout(t)
+        deleteTimers.delete(id)
+      }
+      set((s) => {
+        if (!s.pendingDeletes.has(id)) return {}
+        const next = new Set(s.pendingDeletes)
+        next.delete(id)
+        return { pendingDeletes: next }
+      })
+    }
   },
 
   launchBrowser: async (id) => {

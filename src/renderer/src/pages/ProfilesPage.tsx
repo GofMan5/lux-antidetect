@@ -3,8 +3,10 @@ import {
   Plus, Play, Square, Copy, Trash2, Loader2, X, AlertCircle,
   ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2,
   Flame, ClipboardCopy, Pencil, Terminal, Camera, MoreHorizontal,
-  LayoutGrid, ChevronDown, Check, XCircle, ExternalLink
+  LayoutGrid, ChevronDown, Check, XCircle, ExternalLink,
+  HardDrive, Sparkles, ChevronRight, Rows2, Rows3
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useProfilesStore } from '../stores/profiles'
 import { useProxiesStore } from '../stores/proxies'
@@ -93,7 +95,10 @@ const HEALTH_TOOLTIP_GOOD = 'Looks consistent'
 const HEALTH_TOOLTIP_UNKNOWN = 'Proxy not yet tested'
 
 // Virtual scroll constants (hoisted to avoid per-render allocation).
-const ROW_HEIGHT = 48
+// ROW_HEIGHT is driven by the `density` setting; these are the per-density
+// values picked up by a local ternary inside the component.
+const ROW_HEIGHT_BY_DENSITY = { compact: 36, cozy: 48 } as const
+type Density = keyof typeof ROW_HEIGHT_BY_DENSITY
 const OVERSCAN = 5
 
 // Bounded concurrency runner for IPC fan-out on health cache warm-up.
@@ -197,6 +202,7 @@ export function ProfilesPage() {
   const clearProfileError = useProfilesStore((s) => s.clearProfileError)
   const editorMode = useProfilesStore((s) => s.editorMode)
   const editorProfileId = useProfilesStore((s) => s.editorProfileId)
+  const navigate = useNavigate()
   const openEditor = useProfilesStore((s) => s.openEditor)
   const closeEditor = useProfilesStore((s) => s.closeEditor)
   const setPendingHealthBannerExpand = useProfilesStore((s) => s.setPendingHealthBannerExpand)
@@ -205,9 +211,11 @@ export function ProfilesPage() {
       launch: s.launchBrowser,
       stop: s.stopBrowser,
       delete: s.deleteProfile,
-      duplicate: s.duplicateProfile
+      duplicate: s.duplicateProfile,
+      scheduleDelete: s.scheduleDelete
     }))
   )
+  const pendingDeletes = useProfilesStore((s) => s.pendingDeletes)
 
   const proxies = useProxiesStore((s) => s.proxies)
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
@@ -220,7 +228,20 @@ export function ProfilesPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('updated_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [density, setDensity] = useState<Density>(() => {
+    try {
+      const saved = localStorage.getItem('lux.profiles.density')
+      if (saved === 'compact' || saved === 'cozy') return saved
+    } catch { /* storage disabled */ }
+    return 'cozy'
+  })
+  const ROW_HEIGHT = ROW_HEIGHT_BY_DENSITY[density]
   const lastCheckedIdx = useRef<number | null>(null)
+
+  // Persist density across sessions without a round-trip through the DB.
+  useEffect(() => {
+    try { localStorage.setItem('lux.profiles.density', density) } catch { /* ignore */ }
+  }, [density])
 
   // Right-click context menu state — coords + the profile that was clicked.
   const [contextMenu, setContextMenu] = useState<{
@@ -366,7 +387,11 @@ export function ProfilesPage() {
   ], [groups])
 
   const filteredProfiles = useMemo(() => {
-    let result = profiles
+    // Hide profiles that are in the middle of a pending (undoable) delete
+    // so they disappear from the UI while the Undo toast is visible.
+    let result = pendingDeletes.size === 0
+      ? profiles
+      : profiles.filter((p) => !pendingDeletes.has(p.id))
     if (groupFilter !== 'all') {
       result = result.filter(p => p.group_name === groupFilter)
     }
@@ -385,7 +410,7 @@ export function ProfilesPage() {
       const bv = b[sortKey] ?? ''
       return av < bv ? -dir : av > bv ? dir : 0
     })
-  }, [profiles, groupFilter, searchQuery, sortKey, sortDir])
+  }, [profiles, pendingDeletes, groupFilter, searchQuery, sortKey, sortDir])
 
   const statusCounts = useMemo(() => {
     const running = profiles.filter(p => p.status === 'running').length
@@ -436,20 +461,27 @@ export function ProfilesPage() {
   const handleDelete = async (id: string, name: string): Promise<void> => {
     const ok = await confirm({
       title: 'Delete Profile',
-      message: `Are you sure you want to delete "${name}"? This cannot be undone.`,
+      message: `Delete "${name}"? You'll have a few seconds to undo.`,
       confirmLabel: 'Delete',
       danger: true
     })
     if (!ok) return
-    try {
-      await actions.delete(id)
-      addToast('Profile deleted', 'success')
-      if (editorProfileId === id) {
-        closeEditor()
+    // Soft-delete: hide the row locally, show a toast with Undo. The
+    // actual IPC delete fires when the toast times out unless the user
+    // clicks Undo first.
+    if (editorProfileId === id) closeEditor()
+    const undo = actions.scheduleDelete(id)
+    addToast(`Profile "${name}" deleted`, 'info', {
+      duration: 5000,
+      silent: true,
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          undo()
+          addToast(`Restored "${name}"`, 'success', { silent: true, duration: 2500 })
+        }
       }
-    } catch (err) {
-      addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
-    }
+    })
   }
 
   const handleDuplicate = async (id: string): Promise<void> => {
@@ -697,22 +729,36 @@ export function ProfilesPage() {
   }
 
   const handleBulkDelete = async (): Promise<void> => {
+    const count = selectedIds.size
     const ok = await confirm({
       title: 'Delete Profiles',
-      message: `Delete ${selectedIds.size} selected profiles? This cannot be undone.`,
-      confirmLabel: 'Delete All',
+      message: `Delete ${count} selected profile${count === 1 ? '' : 's'}? You'll have a few seconds to undo.`,
+      confirmLabel: count === 1 ? 'Delete' : 'Delete All',
       danger: true
     })
     if (!ok) return
-    try {
-      const results = await api.bulkDelete(Array.from(selectedIds))
-      const failed = results.filter(r => !r.ok).length
-      if (failed > 0) addToast(`${results.length - failed} deleted, ${failed} failed`, 'warning')
-      else addToast(`${results.length} profiles deleted`, 'success')
-    } catch { addToast('Bulk delete failed', 'error') }
+    // Stage a delete for each id so Undo can restore all of them in one
+    // click. Each scheduled timer finalizes via api.deleteProfile.
+    const ids = Array.from(selectedIds)
+    const undos = ids.map((id) => actions.scheduleDelete(id))
     setSelectedIds(new Set())
     closeEditor()
-    fetchProfiles()
+    addToast(`${count} profile${count === 1 ? '' : 's'} deleted`, 'info', {
+      duration: 5000,
+      silent: true,
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          undos.forEach((u) => u())
+          addToast(
+            `Restored ${count} profile${count === 1 ? '' : 's'}`,
+            'success',
+            { silent: true, duration: 2500 }
+          )
+        }
+      }
+    })
+    return
   }
 
   // --- Row action dropdown items ---------------------------------------------
@@ -870,6 +916,14 @@ export function ProfilesPage() {
                 className="w-auto min-w-[140px] !h-9 text-xs"
               />
             )}
+            <Tooltip content={density === 'compact' ? 'Switch to cozy rows' : 'Switch to compact rows'}>
+              <Button
+                variant="ghost"
+                icon={density === 'compact' ? <Rows2 className="h-4 w-4" /> : <Rows3 className="h-4 w-4" />}
+                onClick={() => setDensity(density === 'compact' ? 'cozy' : 'compact')}
+                aria-label={density === 'compact' ? 'Switch to cozy rows' : 'Switch to compact rows'}
+              />
+            </Tooltip>
             <Tooltip content="Import profiles">
               <Button variant="ghost" icon={<Upload className="h-4 w-4" />} onClick={handleImportProfiles} />
             </Tooltip>
@@ -949,25 +1003,27 @@ export function ProfilesPage() {
 
         {/* Empty State */}
         {filteredProfiles.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center">
-            <EmptyState
-              icon={<LayoutGrid />}
-              title={profiles.length === 0 ? 'No profiles yet' : 'No matching profiles'}
-              description={profiles.length === 0
-                ? 'Create your first browser profile with a distinct fingerprint to get started.'
-                : 'Try clearing the search, changing the group filter, or resetting the tag filter above.'
-              }
-              action={profiles.length === 0 ? (
-                <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={handleNewProfile}>
-                  Create Profile
-                </Button>
-              ) : (
-                <Button variant="secondary" size="sm" onClick={() => { setSearchQuery(''); setGroupFilter('all') }}>
-                  Clear filters
-                </Button>
-              )}
+          profiles.length === 0 ? (
+            <OnboardingWelcome
+              onCreateProfile={handleNewProfile}
+              onImportProfiles={handleImportProfiles}
+              onGoSettings={() => navigate('/settings')}
+              onGoProxies={() => navigate('/proxies')}
             />
-          </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <EmptyState
+                icon={<LayoutGrid />}
+                title="No matching profiles"
+                description="Try clearing the search, changing the group filter, or resetting the tag filter above."
+                action={
+                  <Button variant="secondary" size="sm" onClick={() => { setSearchQuery(''); setGroupFilter('all') }}>
+                    Clear filters
+                  </Button>
+                }
+              />
+            </div>
+          )
         ) : (
           /* Data Table */
           <div
@@ -1330,6 +1386,126 @@ export function ProfilesPage() {
           onClose={() => setContextMenu(null)}
         />
       )}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Onboarding welcome — first-run experience (0 profiles)            */
+/* ------------------------------------------------------------------ */
+
+interface OnboardingStepProps {
+  step: number
+  icon: React.ReactNode
+  title: string
+  description: string
+  actionLabel: string
+  onAction: () => void
+  optional?: boolean
+}
+
+function OnboardingStep({ step, icon, title, description, actionLabel, onAction, optional }: OnboardingStepProps): React.JSX.Element {
+  return (
+    <li className="group relative flex items-start gap-4 rounded-[--radius-lg] border border-edge bg-surface/60 p-4 transition-colors hover:border-accent/40">
+      <div className="shrink-0 relative">
+        <div className="h-10 w-10 rounded-full bg-accent/10 border border-accent/30 flex items-center justify-center text-accent">
+          {icon}
+        </div>
+        <div className="absolute -top-1 -left-1 h-5 w-5 rounded-full bg-surface-alt border border-edge text-[10px] font-mono font-semibold text-muted flex items-center justify-center">
+          {step}
+        </div>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5">
+          <h3 className="text-[14px] font-semibold text-content">{title}</h3>
+          {optional && (
+            <span className="text-[10px] font-medium text-muted/80 uppercase tracking-wide">Optional</span>
+          )}
+        </div>
+        <p className="text-[13px] text-muted leading-relaxed">{description}</p>
+      </div>
+      <button
+        onClick={onAction}
+        className="shrink-0 inline-flex items-center gap-1 rounded-[--radius-md] border border-edge bg-surface px-3 py-2 text-[12px] font-semibold text-content transition-colors hover:border-accent hover:text-accent self-center"
+      >
+        {actionLabel}
+        <ChevronRight className="h-3.5 w-3.5" />
+      </button>
+    </li>
+  )
+}
+
+interface OnboardingWelcomeProps {
+  onCreateProfile: () => void
+  onImportProfiles: () => void
+  onGoSettings: () => void
+  onGoProxies: () => void
+}
+
+function OnboardingWelcome({
+  onCreateProfile,
+  onImportProfiles,
+  onGoSettings,
+  onGoProxies
+}: OnboardingWelcomeProps): React.JSX.Element {
+  return (
+    <div className="flex-1 overflow-y-auto px-6 pb-10">
+      <div className="mx-auto max-w-2xl animate-fadeIn">
+        {/* Hero */}
+        <div className="flex flex-col items-center text-center pt-8 pb-6">
+          <div className="relative mb-5">
+            <div className="h-16 w-16 rounded-full bg-gradient-to-br from-accent/25 to-accent/5 border border-accent/30 flex items-center justify-center shadow-[0_0_40px_var(--color-accent-glow)]">
+              <Sparkles className="h-7 w-7 text-accent" />
+            </div>
+          </div>
+          <h2 className="text-[22px] font-bold text-content tracking-tight">Welcome to Lux</h2>
+          <p className="mt-2 text-sm text-muted leading-relaxed max-w-md">
+            Let's get you set up. These three steps take about a minute and prepare
+            the app for running isolated browser profiles with distinct fingerprints.
+          </p>
+        </div>
+
+        {/* Steps */}
+        <ol className="space-y-2.5">
+          <OnboardingStep
+            step={1}
+            icon={<HardDrive className="h-5 w-5" />}
+            title="Install a browser"
+            description="Download Chromium (recommended) or another supported build from Settings → Browsers. Profiles launch inside it."
+            actionLabel="Open Settings"
+            onAction={onGoSettings}
+          />
+          <OnboardingStep
+            step={2}
+            icon={<Globe className="h-5 w-5" />}
+            title="Add a proxy"
+            description="Route each profile through a different IP. You can skip this step and add proxies later."
+            actionLabel="Open Proxies"
+            onAction={onGoProxies}
+            optional
+          />
+          <OnboardingStep
+            step={3}
+            icon={<Plus className="h-5 w-5" />}
+            title="Create your first profile"
+            description="Every profile gets its own fingerprint, storage, and optional proxy. You can also import existing profiles from a JSON file."
+            actionLabel="Create Profile"
+            onAction={onCreateProfile}
+          />
+        </ol>
+
+        {/* Secondary action */}
+        <div className="mt-6 flex items-center justify-center gap-2 text-[12px] text-muted">
+          <span>Already have profiles?</span>
+          <button
+            onClick={onImportProfiles}
+            className="inline-flex items-center gap-1 font-medium text-accent hover:text-accent-dim transition-colors"
+          >
+            Import from JSON
+            <Upload className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
