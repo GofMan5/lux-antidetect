@@ -4,12 +4,13 @@ import {
   ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2,
   Flame, ClipboardCopy, Pencil, Terminal, Camera, MoreHorizontal,
   LayoutGrid, ChevronDown, Check, XCircle, ExternalLink,
-  HardDrive, Sparkles, ChevronRight, Rows2, Rows3
+  HardDrive, Sparkles, ChevronRight, Rows2, Rows3, Star
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useProfilesStore } from '../stores/profiles'
 import { useProxiesStore } from '../stores/proxies'
+import { useFavoritesStore } from '../stores/favorites'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
 import { ProfileEditorPanel, type InitialFingerprint } from './ProfileEditorPage'
@@ -221,6 +222,8 @@ export function ProfilesPage() {
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
   const confirm = useConfirmStore((s) => s.show)
   const addToast = useToastStore((s) => s.addToast)
+  const favoriteIds = useFavoritesStore((s) => s.ids)
+  const toggleFavorite = useFavoritesStore((s) => s.toggle)
 
   // Local state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -416,11 +419,15 @@ export function ProfilesPage() {
     }
     const dir = sortDir === 'asc' ? 1 : -1
     return [...result].sort((a, b) => {
+      // Favorites always float above non-favorites regardless of sort key.
+      const aFav = favoriteIds.has(a.id)
+      const bFav = favoriteIds.has(b.id)
+      if (aFav !== bFav) return aFav ? -1 : 1
       const av = a[sortKey] ?? ''
       const bv = b[sortKey] ?? ''
       return av < bv ? -dir : av > bv ? dir : 0
     })
-  }, [profiles, pendingDeletes, groupFilter, statusFilter, searchQuery, sortKey, sortDir])
+  }, [profiles, pendingDeletes, groupFilter, statusFilter, searchQuery, sortKey, sortDir, favoriteIds])
 
   const statusCounts = useMemo(() => {
     // `pending` deletes shouldn't factor into visible counts.
@@ -1235,7 +1242,27 @@ export function ProfilesPage() {
 
                             {/* Name */}
                             <td className="px-3 truncate" title={profile.name}>
-                              <div className="flex items-center gap-2 min-w-0">
+                              <div className="flex items-center gap-2 min-w-0 group/name">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    toggleFavorite(profile.id)
+                                  }}
+                                  className={cn(
+                                    'shrink-0 rounded-[--radius-sm] p-0.5 transition-all',
+                                    favoriteIds.has(profile.id)
+                                      ? 'text-warn opacity-100'
+                                      : 'text-muted/40 opacity-0 group-hover/name:opacity-100 hover:text-warn'
+                                  )}
+                                  aria-label={favoriteIds.has(profile.id) ? 'Unstar profile' : 'Star profile'}
+                                  title={favoriteIds.has(profile.id) ? 'Unstar' : 'Star (pin to top)'}
+                                >
+                                  <Star
+                                    className="h-3.5 w-3.5"
+                                    fill={favoriteIds.has(profile.id) ? 'currentColor' : 'none'}
+                                  />
+                                </button>
                                 {profile.group_color && (
                                   <span
                                     className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-edge"
