@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { LayoutGrid, Globe, Settings, Shield, ChevronLeft, ChevronRight, Keyboard } from 'lucide-react'
+import { LayoutGrid, Globe, Settings, Shield, ChevronLeft, ChevronRight, Keyboard, Search } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { Tooltip } from '@renderer/components/ui/Tooltip'
 import { NotificationCenter } from './NotificationCenter'
 import { UpdateNotification } from './UpdateNotification'
 import { useKeyboardShortcutsStore } from './KeyboardShortcutsHelp'
+import { useCommandPaletteStore } from './CommandPalette'
 import { useProfilesStore } from '../stores/profiles'
 
 const NAV_ITEMS = [
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
 export function Layout(): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
   const showShortcuts = useKeyboardShortcutsStore((s) => s.show)
+  const showPalette = useCommandPaletteStore((s) => s.show)
   const location = useLocation()
   // Running-session count from the profiles store — drives a live badge on
   // the Profiles nav item so you can see active browsers at a glance from
@@ -126,6 +128,37 @@ export function Layout(): React.JSX.Element {
           <div className={collapsed ? 'flex justify-center' : ''}>
             <NotificationCenter />
           </div>
+
+          {/* Quick find — opens the command palette. Pairs with Ctrl+K. */}
+          {(() => {
+            const btn = (
+              <button
+                onClick={showPalette}
+                className={cn(
+                  'rounded-[--radius-md] p-2.5 text-muted hover:text-content hover:bg-elevated/50',
+                  'transition-all duration-200 flex items-center gap-2',
+                  collapsed ? 'justify-center' : ''
+                )}
+                aria-label="Open command palette"
+              >
+                <Search className="h-4 w-4" />
+                {!collapsed && (
+                  <span className="flex-1 flex items-center justify-between text-xs">
+                    Quick find
+                    <span className="flex items-center gap-0.5 text-muted/70">
+                      <kbd className="px-1 py-0.5 rounded-[--radius-sm] border border-edge bg-surface text-[10px] font-mono">Ctrl</kbd>
+                      <kbd className="px-1 py-0.5 rounded-[--radius-sm] border border-edge bg-surface text-[10px] font-mono">K</kbd>
+                    </span>
+                  </span>
+                )}
+              </button>
+            )
+            return collapsed ? (
+              <Tooltip content="Quick find (Ctrl+K)" side="right">
+                {btn}
+              </Tooltip>
+            ) : btn
+          })()}
 
           {/* Keyboard shortcuts discovery — visible affordance for `?` */}
           {(() => {

@@ -6,6 +6,7 @@ import { useSettingsStore } from './stores/settings'
 import { ToastContainer } from './components/Toast'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { KeyboardShortcutsHelp } from './components/KeyboardShortcutsHelp'
+import { CommandPalette } from './components/CommandPalette'
 import { initDebugCapture } from './stores/debug'
 
 // Pages are route-split so the first paint only loads the shell + the
@@ -109,6 +110,7 @@ export default function App(): React.JSX.Element {
       <ToastContainer />
       <ConfirmDialog />
       <KeyboardShortcutsHelp />
+      <CommandPalette />
     </>
   )
 }

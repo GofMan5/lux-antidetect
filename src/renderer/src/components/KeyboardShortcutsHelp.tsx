@@ -35,6 +35,7 @@ const SHORTCUTS: ShortcutGroup[] = [
   {
     title: 'Global',
     items: [
+      { keys: ['Ctrl', 'K'], description: 'Open command palette (navigate, launch, search profiles)' },
       { keys: ['?'], description: 'Open this keyboard shortcuts dialog' },
       { keys: ['Esc'], description: 'Close dialogs / editors / clear selection' }
     ]
