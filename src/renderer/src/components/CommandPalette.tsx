@@ -26,7 +26,30 @@ export const useCommandPaletteStore = create<CommandPaletteStore>((set) => ({
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
-type CommandKind = 'navigate' | 'action' | 'profile'
+type CommandKind = 'navigate' | 'action' | 'profile' | 'recent'
+
+const RECENTS_STORAGE_KEY = 'lux.cmdpalette.recents'
+const RECENTS_LIMIT = 5
+
+function readRecents(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENTS_STORAGE_KEY)
+    if (!raw) return []
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string').slice(0, RECENTS_LIMIT) : []
+  } catch { return [] }
+}
+
+function writeRecents(ids: string[]): void {
+  try { localStorage.setItem(RECENTS_STORAGE_KEY, JSON.stringify(ids.slice(0, RECENTS_LIMIT))) } catch { /* ignore */ }
+}
+
+function pushRecent(id: string): string[] {
+  const current = readRecents().filter((x) => x !== id)
+  const next = [id, ...current].slice(0, RECENTS_LIMIT)
+  writeRecents(next)
+  return next
+}
 
 interface Command {
   id: string
@@ -72,6 +95,7 @@ export function CommandPalette(): React.JSX.Element | null {
 
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
+  const [recentIds, setRecentIds] = useState<string[]>(() => readRecents())
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -93,11 +117,13 @@ export function CommandPalette(): React.JSX.Element | null {
     return () => document.removeEventListener('keydown', handler)
   }, [toggle, hide, open])
 
-  // Reset state every time we open — fresh query, top item selected.
+  // Reset state every time we open — fresh query, top item selected, fresh
+  // recents snapshot so any commands run in between are reflected.
   useEffect(() => {
     if (open) {
       setQuery('')
       setSelected(0)
+      setRecentIds(readRecents())
       // Autofocus the input on next tick so the animation doesn't eat it.
       requestAnimationFrame(() => inputRef.current?.focus())
     }
@@ -216,15 +242,29 @@ export function CommandPalette(): React.JSX.Element | null {
     return base
   }, [navigate, openEditor, launchBrowser, profiles, showShortcuts])
 
-  // Filter + rank. Empty query surfaces the full base set in listed order.
+  // Filter + rank. Empty query surfaces the full base set in listed order,
+  // with a "Recent" section prepended when we have history.
   const results = useMemo<Command[]>(() => {
-    if (!query.trim()) return commands
+    if (!query.trim()) {
+      if (recentIds.length === 0) return commands
+      const byId = new Map(commands.map((c) => [c.id, c]))
+      const recents: Command[] = []
+      for (const id of recentIds) {
+        const original = byId.get(id)
+        if (!original) continue
+        // Clone into a 'recent' section so the group label shows up; keep
+        // the original perform so Enter re-runs the exact same action.
+        recents.push({ ...original, kind: 'recent' })
+      }
+      if (recents.length === 0) return commands
+      return [...recents, ...commands]
+    }
     const scored = commands
       .map((c) => ({ c, score: rank(c, query.trim()) }))
       .filter(({ score }) => score < 99)
       .sort((a, b) => a.score - b.score)
     return scored.map(({ c }) => c)
-  }, [commands, query])
+  }, [commands, query, recentIds])
 
   // Clamp selected index whenever results change.
   useEffect(() => {
@@ -238,6 +278,14 @@ export function CommandPalette(): React.JSX.Element | null {
     el?.scrollIntoView({ block: 'nearest' })
   }, [selected])
 
+  function runCommand(cmd: Command): void {
+    pushRecent(cmd.id)
+    hide()
+    // Defer perform so the palette fully closes before a navigation /
+    // dialog opens that would otherwise fight for focus with our input.
+    setTimeout(() => cmd.perform(), 0)
+  }
+
   function onKeyDown(e: React.KeyboardEvent): void {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -248,18 +296,14 @@ export function CommandPalette(): React.JSX.Element | null {
     } else if (e.key === 'Enter') {
       e.preventDefault()
       const cmd = results[selected]
-      if (cmd) {
-        hide()
-        // Defer perform so the palette fully closes before a navigation /
-        // dialog opens that would otherwise fight for focus with our input.
-        setTimeout(() => cmd.perform(), 0)
-      }
+      if (cmd) runCommand(cmd)
     }
   }
 
   if (!open) return null
 
   const KIND_LABEL: Record<CommandKind, string> = {
+    recent: 'Recent',
     navigate: 'Navigate',
     action: 'Actions',
     profile: 'Profiles'
@@ -329,13 +373,10 @@ export function CommandPalette(): React.JSX.Element | null {
                 </div>
                 {section.items.map(({ cmd, idx }) => (
                   <button
-                    key={cmd.id}
+                    key={`${cmd.kind}-${cmd.id}`}
                     data-cmd-idx={idx}
                     onMouseEnter={() => setSelected(idx)}
-                    onClick={() => {
-                      hide()
-                      setTimeout(() => cmd.perform(), 0)
-                    }}
+                    onClick={() => runCommand(cmd)}
                     className={[
                       'w-full flex items-center gap-3 px-4 py-2 text-left transition-colors',
                       idx === selected
