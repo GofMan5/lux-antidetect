@@ -261,6 +261,32 @@ export function ProfilesPage() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
 
+  // Case-insensitive substring highlight for the name column — splits
+  // the name around matches and wraps each match in a tinted <mark>.
+  const highlightName = useCallback((name: string): React.ReactNode => {
+    const q = searchQuery.trim()
+    if (!q) return name
+    const lower = name.toLowerCase()
+    const needle = q.toLowerCase()
+    const parts: React.ReactNode[] = []
+    let i = 0
+    while (i < name.length) {
+      const hit = lower.indexOf(needle, i)
+      if (hit === -1) {
+        parts.push(name.slice(i))
+        break
+      }
+      if (hit > i) parts.push(name.slice(i, hit))
+      parts.push(
+        <mark key={`m${hit}`} className="bg-accent/25 text-accent rounded-sm px-0.5 font-semibold">
+          {name.slice(hit, hit + needle.length)}
+        </mark>
+      )
+      i = hit + needle.length
+    }
+    return parts
+  }, [searchQuery])
+
   const startRename = useCallback((profileId: string, current: string) => {
     setRenamingId(profileId)
     setRenameDraft(current)
@@ -1327,9 +1353,9 @@ export function ProfilesPage() {
                                       e.preventDefault()
                                       startRename(profile.id, profile.name)
                                     }}
-                                    title="Double-click to rename"
+                                    title={`Double-click to rename · ${profile.name}`}
                                   >
-                                    {profile.name}
+                                    {highlightName(profile.name)}
                                   </span>
                                 )}
                               </div>
