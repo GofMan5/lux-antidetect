@@ -6,6 +6,7 @@ import { Tooltip } from '@renderer/components/ui/Tooltip'
 import { NotificationCenter } from './NotificationCenter'
 import { UpdateNotification } from './UpdateNotification'
 import { useKeyboardShortcutsStore } from './KeyboardShortcutsHelp'
+import { useProfilesStore } from '../stores/profiles'
 
 const NAV_ITEMS = [
   { to: '/profiles', label: 'Profiles', icon: LayoutGrid },
@@ -17,6 +18,12 @@ export function Layout(): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
   const showShortcuts = useKeyboardShortcutsStore((s) => s.show)
   const location = useLocation()
+  // Running-session count from the profiles store — drives a live badge on
+  // the Profiles nav item so you can see active browsers at a glance from
+  // anywhere in the app.
+  const runningCount = useProfilesStore(
+    (s) => s.profiles.filter((p) => p.status === 'running' || p.status === 'starting').length
+  )
 
   return (
     <div className="flex h-screen w-screen min-w-[900px] min-h-[600px] overflow-hidden bg-surface">
@@ -49,6 +56,7 @@ export function Layout(): React.JSX.Element {
         {/* Navigation */}
         <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 py-4 flex-1">
           {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
+            const showRunningBadge = to === '/profiles' && runningCount > 0
             const link = (
               <NavLink
                 key={to}
@@ -70,8 +78,31 @@ export function Layout(): React.JSX.Element {
                     {isActive && (
                       <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-accent shadow-[0_0_8px_var(--color-accent)]" />
                     )}
-                    <Icon className="h-[18px] w-[18px] shrink-0 transition-transform group-hover:scale-110 group-focus-visible:scale-110" />
-                    {!collapsed && <span>{label}</span>}
+                    <div className="relative shrink-0">
+                      <Icon className="h-[18px] w-[18px] transition-transform group-hover:scale-110 group-focus-visible:scale-110" />
+                      {showRunningBadge && collapsed && (
+                        <span
+                          className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 rounded-full bg-ok text-white text-[9px] font-bold flex items-center justify-center px-1 ring-2 ring-surface-alt shadow-[0_0_6px_var(--color-ok)]"
+                          aria-label={`${runningCount} running`}
+                        >
+                          {runningCount > 9 ? '9+' : runningCount}
+                        </span>
+                      )}
+                    </div>
+                    {!collapsed && (
+                      <span className="flex-1 flex items-center justify-between">
+                        {label}
+                        {showRunningBadge && (
+                          <span
+                            className="flex items-center gap-1 text-[10px] font-semibold text-ok bg-ok/10 rounded-full px-1.5 py-0.5"
+                            aria-label={`${runningCount} running`}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" aria-hidden />
+                            {runningCount}
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </>
                 )}
               </NavLink>

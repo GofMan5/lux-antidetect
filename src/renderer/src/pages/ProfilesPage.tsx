@@ -12,7 +12,7 @@ import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
 import { ProfileEditorPanel, type InitialFingerprint } from './ProfileEditorPage'
 import { AutomationModal } from '../components/profile/AutomationModal'
-import { Button, Badge, SearchInput, DropdownMenu, EmptyState, Tooltip, Select } from '../components/ui'
+import { Button, Badge, SearchInput, DropdownMenu, EmptyState, Tooltip, Select, ContextMenu } from '../components/ui'
 import type { DropdownMenuItem } from '../components/ui'
 import { cn } from '../lib/utils'
 import { CHECKBOX } from '../lib/ui'
@@ -221,6 +221,16 @@ export function ProfilesPage() {
   const [sortKey, setSortKey] = useState<SortKey>('updated_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const lastCheckedIdx = useRef<number | null>(null)
+
+  // Right-click context menu state — coords + the profile that was clicked.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    profileId: string
+    profileName: string
+    status: ProfileStatus
+    browserType: BrowserType
+  } | null>(null)
 
   // Presets cache for "New from preset" dropdown
   const [presets, setPresets] = useState<PresetDescriptor[] | null>(null)
@@ -1034,6 +1044,17 @@ export function ProfilesPage() {
                               e.preventDefault()
                               if (profile.status === 'ready' || profile.status === 'error') handleLaunch(profile.id)
                             }}
+                            onContextMenu={(e) => {
+                              e.preventDefault()
+                              setContextMenu({
+                                x: e.clientX,
+                                y: e.clientY,
+                                profileId: profile.id,
+                                profileName: profile.name,
+                                status: profile.status,
+                                browserType: profile.browser_type
+                              })
+                            }}
                             className={cn(
                               'border-b border-edge/50 cursor-pointer transition-colors',
                               isEditing ? 'bg-accent/8' : 'hover:bg-elevated/50'
@@ -1291,6 +1312,22 @@ export function ProfilesPage() {
           open={!!automationFor}
           onClose={() => setAutomationFor(null)}
           profileId={automationFor.id}
+        />
+      )}
+
+      {/* Right-click context menu on profile rows — reuses row action items
+          so the right-click menu is always in sync with the ⋯ dropdown. */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={getRowActions(
+            contextMenu.profileId,
+            contextMenu.profileName,
+            contextMenu.status,
+            contextMenu.browserType
+          )}
+          onClose={() => setContextMenu(null)}
         />
       )}
     </div>
