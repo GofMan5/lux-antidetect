@@ -830,6 +830,19 @@ export function ProfilesPage() {
     return items
   }, [handleLaunch, handleStop, addToast])
 
+  // --- Keyboard navigation — focused row index ------------------------------
+  // A keyboard-driven "selected row" cursor that moves with ↑/↓; Enter opens
+  // the editor for the focused row, Space toggles selection, Delete triggers
+  // the soft-delete flow. Focus index clamps when the list changes.
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (focusedIdx === null) return
+    if (focusedIdx >= filteredProfiles.length) {
+      setFocusedIdx(filteredProfiles.length > 0 ? filteredProfiles.length - 1 : null)
+    }
+  }, [filteredProfiles.length, focusedIdx])
+
   // --- Keyboard shortcuts ----------------------------------------------------
 
   useEffect(() => {
@@ -851,11 +864,48 @@ export function ProfilesPage() {
       } else if (e.key === 'Escape') {
         if (editorMode) handlePanelCancel()
         else if (selectedIds.size > 0) setSelectedIds(new Set())
+        else if (focusedIdx !== null) setFocusedIdx(null)
+      } else if (!editorMode && filteredProfiles.length > 0 && !e.altKey) {
+        // Arrow-key row navigation. Only active when the editor isn't open
+        // so the editor form keeps its natural Tab focus trapping.
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          setFocusedIdx((i) => (i === null ? 0 : Math.min(filteredProfiles.length - 1, i + 1)))
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          setFocusedIdx((i) => (i === null ? 0 : Math.max(0, i - 1)))
+        } else if (e.key === 'Home') {
+          e.preventDefault()
+          setFocusedIdx(0)
+        } else if (e.key === 'End') {
+          e.preventDefault()
+          setFocusedIdx(filteredProfiles.length - 1)
+        } else if (e.key === 'Enter' && focusedIdx !== null) {
+          e.preventDefault()
+          const p = filteredProfiles[focusedIdx]
+          if (p) openEditor('edit', p.id)
+        } else if (e.key === ' ' && focusedIdx !== null) {
+          e.preventDefault()
+          const p = filteredProfiles[focusedIdx]
+          if (p) {
+            setSelectedIds((prev) => {
+              const next = new Set(prev)
+              if (next.has(p.id)) next.delete(p.id)
+              else next.add(p.id)
+              return next
+            })
+          }
+        } else if (e.key === 'Delete' && focusedIdx !== null) {
+          e.preventDefault()
+          const p = filteredProfiles[focusedIdx]
+          if (p) void handleDelete(p.id, p.name)
+        }
       }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [editorMode, selectedIds.size, handleNewProfile, handlePanelCancel])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorMode, selectedIds.size, focusedIdx, filteredProfiles, handleNewProfile, handlePanelCancel, openEditor])
 
   // --- Render helpers --------------------------------------------------------
 
@@ -1112,8 +1162,12 @@ export function ProfilesPage() {
                               })
                             }}
                             className={cn(
-                              'border-b border-edge/50 cursor-pointer transition-colors',
-                              isEditing ? 'bg-accent/8' : 'hover:bg-elevated/50'
+                              'border-b border-edge/50 cursor-pointer transition-colors relative',
+                              isEditing
+                                ? 'bg-accent/8'
+                                : focusedIdx === idx
+                                  ? 'bg-elevated/60 ring-1 ring-accent/40 ring-inset'
+                                  : 'hover:bg-elevated/50'
                             )}
                             style={{ height: ROW_HEIGHT }}
                           >

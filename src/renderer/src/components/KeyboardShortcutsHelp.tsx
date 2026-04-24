@@ -46,6 +46,11 @@ const SHORTCUTS: ShortcutGroup[] = [
       { keys: ['Ctrl', 'N'], description: 'New profile' },
       { keys: ['Ctrl', 'F'], description: 'Focus search' },
       { keys: ['/'], description: 'Focus search (alternate)' },
+      { keys: ['↑', '↓'], description: 'Move keyboard focus between rows' },
+      { keys: ['Home', 'End'], description: 'Jump to first / last row' },
+      { keys: ['Enter'], description: 'Open editor for the focused row' },
+      { keys: ['Space'], description: 'Toggle selection on the focused row' },
+      { keys: ['Delete'], description: 'Delete the focused row (with undo)' },
       { keys: ['Shift', 'Click'], description: 'Range-select profiles in the table' },
       { keys: ['Double-click'], description: 'Launch profile (when idle)' }
     ]
