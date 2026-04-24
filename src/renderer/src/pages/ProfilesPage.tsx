@@ -1057,10 +1057,12 @@ export function ProfilesPage() {
           </div>
           <div className="flex items-center gap-2">
             <SearchInput
+              id="profile-search"
               value={searchQuery}
               onChange={setSearchQuery}
               placeholder="Search profiles..."
               className="w-64"
+              matchCount={filteredProfiles.length}
             />
             {groups.length > 0 && (
               <Select

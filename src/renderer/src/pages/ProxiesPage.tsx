@@ -688,6 +688,7 @@ export function ProxiesPage(): React.JSX.Element {
             onChange={setSearchQuery}
             placeholder="Search proxies…"
             className="w-56"
+            matchCount={filteredProxies.length}
           />
           <Button variant="primary" size="md" icon={<Plus className="h-4 w-4" />} onClick={openAdd}>
             Add Proxy
