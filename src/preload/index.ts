@@ -145,8 +145,19 @@ const api: LuxAPI = {
   // Browser management
   listManagedBrowsers: () => ipcRenderer.invoke('list-managed-browsers'),
   getAvailableBrowsers: () => ipcRenderer.invoke('get-available-browsers'),
-  downloadBrowser: (browserType: string, channel?: string) =>
-    ipcRenderer.invoke('download-browser', browserType, channel),
+  downloadBrowser: (
+    browserType: string,
+    channel?: string,
+    browserOverride?: string,
+    buildIdOverride?: string
+  ) =>
+    ipcRenderer.invoke(
+      'download-browser',
+      browserType,
+      channel,
+      browserOverride,
+      buildIdOverride
+    ),
   removeManagedBrowser: (browser: string, buildId: string) =>
     ipcRenderer.invoke('remove-managed-browser', browser, buildId),
   cancelBrowserDownload: (browser: string, buildId: string) =>

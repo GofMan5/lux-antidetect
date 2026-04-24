@@ -602,8 +602,16 @@ export function registerIpcHandlers(
   // Browser management (download / list / remove)
   ipcMain.handle('list-managed-browsers', () => listManagedBrowsers())
   ipcMain.handle('get-available-browsers', () => getAvailableBrowsers())
-  ipcMain.handle('download-browser', async (_, browserType: BrowserType, channel?: string) =>
-    downloadBrowser(browserType, channel ?? 'stable')
+  ipcMain.handle(
+    'download-browser',
+    async (
+      _,
+      browserType: BrowserType,
+      channel?: string,
+      browserOverride?: string,
+      buildIdOverride?: string
+    ) =>
+      downloadBrowser(browserType, channel ?? 'stable', browserOverride, buildIdOverride)
   )
   ipcMain.handle('remove-managed-browser', async (_, browser: string, buildId: string) =>
     removeManagedBrowser(browser, buildId)

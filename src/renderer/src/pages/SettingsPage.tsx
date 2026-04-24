@@ -146,13 +146,21 @@ export function SettingsPage(): React.JSX.Element {
     if (downloading[key] !== undefined) return
     setDownloading(prev => ({ ...prev, [key]: 0 }))
     try {
-      await api.downloadBrowser(browserType as 'chromium' | 'firefox' | 'edge', channel)
+      // Pass `browser` + `buildId` explicitly so the user downloads the
+      // exact variant/version they picked in the UI (Chromium vs Chrome
+      // for Testing, specific channel build), not just the default.
+      await api.downloadBrowser(
+        browserType as 'chromium' | 'firefox' | 'edge',
+        channel,
+        browser,
+        buildId
+      )
       setDownloading(prev => {
         const next = { ...prev }
         delete next[key]
         return next
       })
-      addToast(`${browserType} downloaded successfully`, 'success')
+      addToast(`${browser} ${buildId} downloaded`, 'success')
     } catch { /* Error events handled by listener */ }
   }
 
@@ -439,8 +447,11 @@ function BrowsersTab({
                 <div key={dlKey} className="flex items-center gap-3 rounded-[--radius-md] bg-surface border border-edge px-4 py-3">
                   <Download className="h-4 w-4 shrink-0 text-accent" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-content capitalize">{ab.browserType}</p>
-                    <p className="text-xs text-muted font-mono">{ab.channel} — {ab.buildId}</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-medium text-content">{ab.label}</p>
+                      <Badge variant="accent">{ab.channel}</Badge>
+                    </div>
+                    <p className="text-xs text-muted font-mono truncate">build {ab.buildId}</p>
                     {isDownloading && (
                       <div className="mt-2 w-full bg-elevated rounded-full h-1.5 overflow-hidden">
                         <div className="bg-accent h-1.5 rounded-full transition-all duration-300" style={{ width: `${percent}%` }} />

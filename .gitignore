@@ -10,6 +10,9 @@ out
 .vscode
 .idea
 
+# Playwright MCP scratch artefacts
+.playwright-mcp/
+
 # Electron
 release/
 

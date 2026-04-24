@@ -149,7 +149,12 @@ export interface LuxAPI {
   // Browser management (download / list / remove)
   listManagedBrowsers(): Promise<ManagedBrowserResponse[]>
   getAvailableBrowsers(): Promise<AvailableBrowser[]>
-  downloadBrowser(browserType: BrowserType, channel?: string): Promise<ManagedBrowserResponse>
+  downloadBrowser(
+    browserType: BrowserType,
+    channel?: string,
+    browserOverride?: string,
+    buildIdOverride?: string
+  ): Promise<ManagedBrowserResponse>
   removeManagedBrowser(browser: string, buildId: string): Promise<void>
   cancelBrowserDownload(browser: string, buildId: string): Promise<boolean>
   onBrowserDownloadProgress(callback: (data: { browser: string; buildId: string; downloadedBytes: number; totalBytes: number; percent: number }) => void): () => void

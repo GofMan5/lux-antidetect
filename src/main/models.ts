@@ -246,6 +246,7 @@ export interface AvailableBrowser {
   browser: string
   channel: string
   buildId: string
+  label: string
 }
 
 export function toProxyResponse(row: Proxy): ProxyResponse {

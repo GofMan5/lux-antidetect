@@ -44,10 +44,35 @@ export interface DownloadProgress {
 /*  Map our BrowserType to @puppeteer/browsers Browser enum                   */
 /* -------------------------------------------------------------------------- */
 
+// Default target per BrowserType. We deliberately prefer upstream Chromium
+// snapshots over Chrome for Testing: CfT builds carry "Chrome for Testing"
+// branding in chrome://version, window title, and occasionally show an
+// infobar stating the build is intended for developer/test use. Chromium
+// snapshots are clean upstream builds with no such branding.
+//
+// `downloadBrowser()` still accepts a `browser` override so users can opt
+// into Chrome for Testing when they need Widevine / Google services.
 const BROWSER_TYPE_MAP: Record<BrowserType, Browser> = {
-  chromium: Browser.CHROME,    // Download branded Chrome (has full features)
+  chromium: Browser.CHROMIUM,
   firefox: Browser.FIREFOX,
-  edge: Browser.CHROME         // Edge not available — fallback to Chrome
+  edge: Browser.CHROMIUM // edge binary itself isn't hosted — fall through to Chromium
+}
+
+/** Per-browser channels understood by `resolveBuildId` in @puppeteer/browsers. */
+function channelsFor(browser: Browser): string[] {
+  if (browser === Browser.CHROME) return ['stable', 'beta', 'dev', 'canary']
+  if (browser === Browser.FIREFOX) return ['stable', 'beta', 'nightly', 'esr']
+  // Chromium snapshots roll continuously; only a single "latest" tag exists.
+  if (browser === Browser.CHROMIUM) return ['latest']
+  return ['stable']
+}
+
+/** Human-readable label for a browser enum value. */
+function browserLabel(browser: Browser): string {
+  if (browser === Browser.CHROMIUM) return 'Chromium'
+  if (browser === Browser.CHROME) return 'Chrome for Testing'
+  if (browser === Browser.FIREFOX) return 'Firefox'
+  return String(browser)
 }
 
 
@@ -87,15 +112,14 @@ function getPlatform(): BrowserPlatform {
 
 export async function resolveLatestVersion(
   browserType: BrowserType,
-  channel: string = 'stable'
+  channel: string = 'stable',
+  browserOverride?: string
 ): Promise<{ browser: Browser; buildId: string; platform: string }> {
   const platform = getPlatform()
-  const browser = BROWSER_TYPE_MAP[browserType]
-
-  // For firefox 'stable' tag works; for chrome 'stable' also works
-  const tag = channel === 'latest' ? 'latest' : channel
+  const browser = (browserOverride as Browser | undefined) ?? BROWSER_TYPE_MAP[browserType]
+  // Chromium uses "latest" as the only tag; other browsers use channels.
+  const tag = browser === Browser.CHROMIUM ? 'latest' : channel
   const buildId = await resolveBuildId(browser, platform, tag)
-
   return { browser, buildId, platform }
 }
 
@@ -105,11 +129,21 @@ export async function resolveLatestVersion(
 
 export async function downloadBrowser(
   browserType: BrowserType,
-  channel: string = 'stable'
+  channel: string = 'stable',
+  browserOverride?: string,
+  buildIdOverride?: string
 ): Promise<ManagedBrowser> {
   if (!browsersDir) throw new Error('Browser manager not initialized')
 
-  const { browser, buildId, platform } = await resolveLatestVersion(browserType, channel)
+  let resolved: { browser: Browser; buildId: string; platform: string }
+  if (buildIdOverride) {
+    const platform = getPlatform()
+    const browser = (browserOverride as Browser | undefined) ?? BROWSER_TYPE_MAP[browserType]
+    resolved = { browser, buildId: buildIdOverride, platform }
+  } else {
+    resolved = await resolveLatestVersion(browserType, channel, browserOverride)
+  }
+  const { browser, buildId, platform } = resolved
 
   // Check if already installed
   const exePath = computeExecutablePath({ cacheDir: browsersDir, browser, buildId })
@@ -212,12 +246,22 @@ export async function removeManagedBrowser(browser: string, buildId: string): Pr
 export function getManagedBrowserPath(browserType: BrowserType): string | null {
   if (!browsersDir) return null
 
-  const browser = BROWSER_TYPE_MAP[browserType]
   try {
     const installed = getInstalledBrowsersSync()
-    // Find best match — prefer newer builds (they sort DESC by buildId naturally)
-    const match = installed.find(b => b.browser === browser)
-    if (match) return match.executablePath
+    // Chromium-family: accept either upstream Chromium (preferred, no CfT
+    // branding) or Chrome for Testing if the user explicitly downloaded it.
+    if (browserType === 'chromium' || browserType === 'edge') {
+      const chromium = installed.find((b) => b.browser === Browser.CHROMIUM)
+      if (chromium) return chromium.executablePath
+      const chrome = installed.find((b) => b.browser === Browser.CHROME)
+      if (chrome) return chrome.executablePath
+      return null
+    }
+    if (browserType === 'firefox') {
+      const firefox = installed.find((b) => b.browser === Browser.FIREFOX)
+      if (firefox) return firefox.executablePath
+      return null
+    }
   } catch { /* ignore */ }
   return null
 }
@@ -251,23 +295,42 @@ export function cancelDownload(browser: string, buildId: string): boolean {
 /* -------------------------------------------------------------------------- */
 
 export async function getAvailableBrowsers(): Promise<
-  { browserType: BrowserType; browser: string; channel: string; buildId: string }[]
+  { browserType: BrowserType; browser: string; channel: string; buildId: string; label: string }[]
 > {
   const platform = getPlatform()
-  const results: { browserType: BrowserType; browser: string; channel: string; buildId: string }[] = []
+  const results: {
+    browserType: BrowserType
+    browser: string
+    channel: string
+    buildId: string
+    label: string
+  }[] = []
 
-  for (const [luxType, puppetBrowser] of Object.entries(BROWSER_TYPE_MAP) as [BrowserType, Browser][]) {
-    if (luxType === 'edge') continue // Skip edge — maps to chrome anyway
-    try {
-      const buildId = await resolveBuildId(puppetBrowser, platform, 'stable')
-      results.push({
-        browserType: luxType,
-        browser: puppetBrowser as string,
-        channel: 'stable',
-        buildId
-      })
-    } catch { /* unavailable for this platform */ }
-  }
+  // Build a download list across every (browser, channel) pair we support.
+  // Each BrowserType also offers Chrome for Testing alongside its default
+  // (Chromium) so users who need full Google Chrome features can choose it.
+  const plan: { browserType: BrowserType; browser: Browser }[] = [
+    { browserType: 'chromium', browser: Browser.CHROMIUM },
+    { browserType: 'chromium', browser: Browser.CHROME },
+    { browserType: 'firefox', browser: Browser.FIREFOX }
+  ]
+
+  await Promise.all(
+    plan.map(async (entry) => {
+      for (const channel of channelsFor(entry.browser)) {
+        try {
+          const buildId = await resolveBuildId(entry.browser, platform, channel)
+          results.push({
+            browserType: entry.browserType,
+            browser: entry.browser as string,
+            channel,
+            buildId,
+            label: browserLabel(entry.browser)
+          })
+        } catch { /* channel unavailable for this platform */ }
+      }
+    })
+  )
 
   return results
 }

@@ -1442,6 +1442,14 @@ export async function launchBrowser(
       args.push('--remote-debugging-port=0')
       args.push(`--user-agent=${activeFp.user_agent}`)
 
+      // Hide automation signals: removes `navigator.webdriver` and silences
+      // the "Chrome is being controlled by automated test software" infobar
+      // that Chromium shows once a CDP client connects to
+      // --remote-debugging-port. Also kills the "unsupported command-line
+      // flag" banner for --load-extension on older Chromium builds.
+      args.push('--disable-blink-features=AutomationControlled')
+      args.push('--no-default-browser-check')
+
       args.push('--dns-over-https-mode=automatic')
 
       // TLS fingerprint masking (JA3/JA4): shuffle cipher order and randomize TLS extensions
