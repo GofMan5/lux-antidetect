@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Outlet, NavLink } from 'react-router-dom'
-import { LayoutGrid, Globe, Settings, Shield, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { LayoutGrid, Globe, Settings, Shield, ChevronLeft, ChevronRight, Keyboard } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { Tooltip } from '@renderer/components/ui/Tooltip'
 import { NotificationCenter } from './NotificationCenter'
 import { UpdateNotification } from './UpdateNotification'
+import { useKeyboardShortcutsStore } from './KeyboardShortcutsHelp'
 
 const NAV_ITEMS = [
   { to: '/profiles', label: 'Profiles', icon: LayoutGrid },
@@ -14,6 +15,8 @@ const NAV_ITEMS = [
 
 export function Layout(): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
+  const showShortcuts = useKeyboardShortcutsStore((s) => s.show)
+  const location = useLocation()
 
   return (
     <div className="flex h-screen w-screen min-w-[900px] min-h-[600px] overflow-hidden bg-surface">
@@ -93,6 +96,34 @@ export function Layout(): React.JSX.Element {
             <NotificationCenter />
           </div>
 
+          {/* Keyboard shortcuts discovery — visible affordance for `?` */}
+          {(() => {
+            const hint = (
+              <button
+                onClick={showShortcuts}
+                className={cn(
+                  'rounded-[--radius-md] p-2.5 text-muted hover:text-content hover:bg-elevated/50',
+                  'transition-all duration-200 flex items-center gap-2',
+                  collapsed ? 'justify-center' : ''
+                )}
+                aria-label="Show keyboard shortcuts"
+              >
+                <Keyboard className="h-4 w-4" />
+                {!collapsed && (
+                  <span className="flex-1 flex items-center justify-between text-xs">
+                    Shortcuts
+                    <kbd className="px-1.5 py-0.5 rounded-[--radius-sm] border border-edge bg-surface text-[10px] font-mono">?</kbd>
+                  </span>
+                )}
+              </button>
+            )
+            return collapsed ? (
+              <Tooltip content="Keyboard shortcuts (?)" side="right">
+                {hint}
+              </Tooltip>
+            ) : hint
+          })()}
+
           {/* Collapse toggle */}
           <button
             onClick={() => setCollapsed(!collapsed)}
@@ -123,8 +154,12 @@ export function Layout(): React.JSX.Element {
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 min-w-0 overflow-y-auto bg-surface flex flex-col">
+      {/* Main content — keyed on pathname so route changes trigger a fresh
+          fade-in, smoothing the hop between pages. */}
+      <main
+        key={location.pathname}
+        className="flex-1 min-w-0 overflow-y-auto bg-surface flex flex-col animate-fadeIn"
+      >
         <Outlet />
       </main>
 

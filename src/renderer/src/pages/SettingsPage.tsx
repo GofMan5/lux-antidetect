@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef, lazy, Suspense } from 'react'
 import {
   CheckCircle2, Plus, Trash2, Check, Palette, History, FileText,
   Download, Upload, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw,
@@ -12,7 +12,11 @@ import type { Theme, ThemeColors } from '../lib/themes'
 import type { ManagedBrowserResponse, AvailableBrowser } from '../lib/types'
 import { useToastStore } from '../components/Toast'
 import { useConfirmStore } from '../components/ConfirmDialog'
-import { ThemeEditor } from '../components/ThemeEditor'
+// ThemeEditor pulls in the color picker + portal setup — only needed when
+// the user actually opens the editor, so keep it out of the Settings chunk.
+const ThemeEditor = lazy(() =>
+  import('../components/ThemeEditor').then((m) => ({ default: m.ThemeEditor }))
+)
 import { useLogStore } from '../stores/debug'
 import type { LogLevel } from '../stores/debug'
 import { cn } from '../lib/utils'
@@ -294,12 +298,16 @@ export function SettingsPage(): React.JSX.Element {
         </div>
       </div>
 
-      {/* Theme Editor Modal */}
-      <ThemeEditor
-        open={showThemeEditor}
-        editingTheme={editingTheme}
-        onClose={handleCloseEditor}
-      />
+      {/* Theme Editor Modal — lazy so its dependencies only load on demand */}
+      {showThemeEditor && (
+        <Suspense fallback={null}>
+          <ThemeEditor
+            open={showThemeEditor}
+            editingTheme={editingTheme}
+            onClose={handleCloseEditor}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }
