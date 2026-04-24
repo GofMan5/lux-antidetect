@@ -732,9 +732,9 @@ export function ProxiesPage(): React.JSX.Element {
       {proxies.length === 0 ? (
         <div className="flex-1 flex items-center justify-center">
           <EmptyState
-            icon={<Globe className="h-10 w-10" />}
+            icon={<Globe />}
             title="No proxies yet"
-            description="Add proxies to use with your browser profiles"
+            description="Add HTTP, HTTPS, or SOCKS proxies here — attach them to profiles from the editor to route traffic through them."
             action={
               <Button
                 variant="primary"

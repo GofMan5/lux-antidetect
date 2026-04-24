@@ -79,23 +79,48 @@ const progressColors: Record<ToastType, string> = {
 /*  Single toast item                                                  */
 /* ------------------------------------------------------------------ */
 
-function ToastItem({ toast }: { toast: Toast }) {
+function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
   const remove = useToastStore((s) => s.removeToast)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const autoDismissRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const mountedRef = useRef(true)
   const [exiting, setExiting] = useState(false)
 
   useEffect(() => {
-    timerRef.current = setTimeout(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      clearTimeout(autoDismissRef.current)
+      clearTimeout(exitTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    autoDismissRef.current = setTimeout(() => {
+      if (!mountedRef.current) return
       setExiting(true)
-      setTimeout(() => remove(toast.id), 200)
+      exitTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) remove(toast.id)
+      }, 200)
     }, TOAST_DURATION)
-    return () => clearTimeout(timerRef.current)
+    return () => clearTimeout(autoDismissRef.current)
   }, [toast.id, remove])
+
+  const dismiss = (): void => {
+    clearTimeout(autoDismissRef.current)
+    if (!mountedRef.current) return
+    setExiting(true)
+    exitTimerRef.current = setTimeout(() => {
+      if (mountedRef.current) remove(toast.id)
+    }, 200)
+  }
 
   const Icon = typeIcons[toast.type]
 
   return (
     <div
+      role="status"
+      aria-live="polite"
       className={cn(
         'relative flex items-start gap-3 rounded-[--radius-lg] border border-edge border-l-4 px-4 py-3',
         'bg-card/90 backdrop-blur-xl shadow-2xl shadow-black/40',
@@ -107,13 +132,9 @@ function ToastItem({ toast }: { toast: Toast }) {
       <Icon className={cn('h-[18px] w-[18px] shrink-0 mt-0.5', iconColors[toast.type])} />
       <span className="min-w-0 flex-1 text-[13px] text-content leading-relaxed">{toast.message}</span>
       <button
-        onClick={() => {
-          clearTimeout(timerRef.current)
-          setExiting(true)
-          setTimeout(() => remove(toast.id), 200)
-        }}
+        onClick={dismiss}
         className="shrink-0 rounded-[--radius-sm] p-1 text-muted hover:text-content hover:bg-elevated/50 transition-colors"
-        aria-label="Close"
+        aria-label="Close notification"
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -133,15 +154,20 @@ function ToastItem({ toast }: { toast: Toast }) {
 /*  Container                                                          */
 /* ------------------------------------------------------------------ */
 
-export function ToastContainer() {
+export function ToastContainer(): React.JSX.Element | null {
   const toasts = useToastStore((s) => s.toasts)
 
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[400] flex flex-col-reverse gap-2.5 w-[360px]">
+    <div
+      aria-label="Notifications"
+      className="fixed bottom-4 right-4 z-[1200] flex flex-col-reverse gap-2.5 w-[360px] pointer-events-none"
+    >
       {toasts.map((t) => (
-        <ToastItem key={t.id} toast={t} />
+        <div key={t.id} className="pointer-events-auto">
+          <ToastItem toast={t} />
+        </div>
       ))}
     </div>
   )

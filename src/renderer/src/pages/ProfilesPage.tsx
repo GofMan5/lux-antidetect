@@ -941,17 +941,21 @@ export function ProfilesPage() {
         {filteredProfiles.length === 0 ? (
           <div className="flex-1 flex items-center justify-center">
             <EmptyState
-              icon={<LayoutGrid className="h-12 w-12" />}
+              icon={<LayoutGrid />}
               title={profiles.length === 0 ? 'No profiles yet' : 'No matching profiles'}
               description={profiles.length === 0
-                ? 'Create your first browser profile to get started'
-                : 'Try adjusting your search or filter'
+                ? 'Create your first browser profile with a distinct fingerprint to get started.'
+                : 'Try clearing the search, changing the group filter, or resetting the tag filter above.'
               }
               action={profiles.length === 0 ? (
                 <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={handleNewProfile}>
                   Create Profile
                 </Button>
-              ) : undefined}
+              ) : (
+                <Button variant="secondary" size="sm" onClick={() => { setSearchQuery(''); setGroupFilter('all') }}>
+                  Clear filters
+                </Button>
+              )}
             />
           </div>
         ) : (
@@ -1036,14 +1040,20 @@ export function ProfilesPage() {
                             )}
                             style={{ height: ROW_HEIGHT }}
                           >
-                            {/* Checkbox */}
-                            <td className="px-3" onClick={(e) => e.stopPropagation()}>
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={(e) => handleCheckbox(profile.id, idx, (e.nativeEvent as MouseEvent).shiftKey)}
-                                className={CHECKBOX}
-                              />
+                            {/* Checkbox — wrapped in a full-cell label so the entire
+                                column area is a safe click target for selection. */}
+                            <td className="px-1" onClick={(e) => e.stopPropagation()}>
+                              <label
+                                className="flex h-full w-full items-center justify-center cursor-pointer select-none py-2 px-2 rounded-[--radius-sm] hover:bg-elevated/60 transition-colors"
+                                aria-label={isChecked ? 'Deselect profile' : 'Select profile'}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={(e) => handleCheckbox(profile.id, idx, (e.nativeEvent as MouseEvent).shiftKey)}
+                                  className={CHECKBOX}
+                                />
+                              </label>
                             </td>
 
                             {/* Name */}

@@ -61,6 +61,7 @@ export function ConfirmDialog(): React.JSX.Element | null {
       open={open}
       onClose={() => close(false)}
       size="sm"
+      elevated
       actions={
         <>
           <Button variant="secondary" onClick={() => close(false)}>

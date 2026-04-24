@@ -1,12 +1,13 @@
 import { cn } from '@renderer/lib/utils'
 import { BADGE } from '@renderer/lib/ui'
 
-// Each variant pairs a tinted background with a matching border so badges
-// sit cleanly on both `surface` and `elevated` rows. The border is what
-// separates "status" (ok/warn/err) from "metadata" (muted/info/accent) at
-// a glance — status variants use stronger borders, metadata stays quiet.
+// Each variant pairs a tinted background with a matching subtle border so
+// badges sit cleanly on both `surface` and `elevated` rows. `default` keeps
+// the high-contrast content color it historically had (count badges etc.),
+// `muted` is the quieter metadata variant, and colored variants read as
+// status.
 const variantStyles = {
-  default: 'bg-elevated text-muted border border-edge/60',
+  default: 'bg-elevated text-content border border-edge/60',
   muted: 'bg-surface-alt text-muted border border-edge/40',
   success: 'bg-ok/12 text-ok border border-ok/25',
   warning: 'bg-warn/12 text-warn border border-warn/25',
@@ -16,7 +17,7 @@ const variantStyles = {
 }
 
 const dotColors = {
-  default: 'bg-muted',
+  default: 'bg-content',
   muted: 'bg-muted',
   success: 'bg-ok',
   warning: 'bg-warn',

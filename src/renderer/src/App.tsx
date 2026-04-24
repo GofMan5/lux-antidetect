@@ -1,6 +1,6 @@
-import { useEffect, lazy, Suspense } from 'react'
+import { Component, useEffect, lazy, Suspense, type ReactNode, type ErrorInfo } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
+import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react'
 import { Layout } from './components/Layout'
 import { useSettingsStore } from './stores/settings'
 import { ToastContainer } from './components/Toast'
@@ -32,6 +32,63 @@ function PageFallback(): React.JSX.Element {
   )
 }
 
+/**
+ * Catches failures in lazy chunks (missing file, JSON parse error, etc.)
+ * so a bad bundle / disk corruption doesn't leave the user on a blank
+ * screen with no way back.
+ */
+class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    // eslint-disable-next-line no-console
+    console.error('[RouteErrorBoundary]', error, info.componentStack)
+  }
+
+  reset = (): void => {
+    this.setState({ error: null })
+  }
+
+  render(): ReactNode {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="flex flex-1 items-center justify-center p-8 text-center">
+        <div className="max-w-sm">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-err/10 text-err">
+            <AlertTriangle className="h-6 w-6" />
+          </div>
+          <h2 className="text-base font-semibold text-content">This page failed to load</h2>
+          <p className="mt-1.5 text-sm text-muted leading-relaxed">
+            {this.state.error.message || 'An unexpected error occurred while loading this page.'}
+          </p>
+          <button
+            onClick={() => {
+              this.reset()
+              window.location.reload()
+            }}
+            className="mt-5 inline-flex items-center gap-2 rounded-[--radius-md] bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dim transition-colors"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Reload
+          </button>
+        </div>
+      </div>
+    )
+  }
+}
+
+function LazyRoute({ children }: { children: ReactNode }): React.JSX.Element {
+  return (
+    <RouteErrorBoundary>
+      <Suspense fallback={<PageFallback />}>{children}</Suspense>
+    </RouteErrorBoundary>
+  )
+}
+
 export default function App(): React.JSX.Element {
   useEffect(() => {
     useSettingsStore.getState().initSettings()
@@ -42,30 +99,9 @@ export default function App(): React.JSX.Element {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Navigate to="/profiles" replace />} />
-          <Route
-            path="/profiles"
-            element={
-              <Suspense fallback={<PageFallback />}>
-                <ProfilesPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/proxies"
-            element={
-              <Suspense fallback={<PageFallback />}>
-                <ProxiesPage />
-              </Suspense>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <Suspense fallback={<PageFallback />}>
-                <SettingsPage />
-              </Suspense>
-            }
-          />
+          <Route path="/profiles" element={<LazyRoute><ProfilesPage /></LazyRoute>} />
+          <Route path="/proxies" element={<LazyRoute><ProxiesPage /></LazyRoute>} />
+          <Route path="/settings" element={<LazyRoute><SettingsPage /></LazyRoute>} />
           <Route path="*" element={<Navigate to="/profiles" replace />} />
         </Route>
       </Routes>

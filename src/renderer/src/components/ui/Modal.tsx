@@ -10,6 +10,8 @@ export interface ModalProps {
   children: React.ReactNode
   actions?: React.ReactNode
   size?: 'sm' | 'md' | 'lg'
+  /** Escalate z-index above other Modals (ConfirmDialog stacked on a form Modal, etc). */
+  elevated?: boolean
 }
 
 const sizeStyles = {
@@ -18,7 +20,7 @@ const sizeStyles = {
   lg: 'max-w-2xl'
 }
 
-export function Modal({ open, onClose, title, description, children, actions, size = 'md' }: ModalProps) {
+export function Modal({ open, onClose, title, description, children, actions, size = 'md', elevated = false }: ModalProps): React.JSX.Element | null {
   const panelRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
 
@@ -54,7 +56,12 @@ export function Modal({ open, onClose, title, description, children, actions, si
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 sm:p-6">
+    <div
+      className={cn(
+        'fixed inset-0 flex items-center justify-center p-4 sm:p-6',
+        elevated ? 'z-[900]' : 'z-[500]'
+      )}
+    >
       <div className={cn(OVERLAY, 'animate-fadeIn')} onClick={onClose} />
       <div
         ref={panelRef}

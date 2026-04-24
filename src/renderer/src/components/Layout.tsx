@@ -67,7 +67,7 @@ export function Layout(): React.JSX.Element {
                     {isActive && (
                       <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-accent shadow-[0_0_8px_var(--color-accent)]" />
                     )}
-                    <Icon className="h-[18px] w-[18px] shrink-0 transition-transform group-hover:scale-110" />
+                    <Icon className="h-[18px] w-[18px] shrink-0 transition-transform group-hover:scale-110 group-focus-visible:scale-110" />
                     {!collapsed && <span>{label}</span>}
                   </>
                 )}
