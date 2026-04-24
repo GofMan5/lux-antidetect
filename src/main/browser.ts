@@ -187,6 +187,101 @@ async function killBrowserByProfileDir(profileDir: string): Promise<void> {
 }
 
 
+// ─── Chrome profile identity (name + avatar in profile switcher UI) ──────
+// Chrome displays a per-profile name and avatar in the top-right profile
+// switcher. When launched with --user-data-dir, Chrome creates a "Default"
+// profile on first run and uses generic "Person 1" + default avatar. We
+// pre-populate `Local State` and `Default/Preferences` so each of our
+// profiles shows its own name and a stable pseudo-random built-in avatar.
+
+const CHROME_BUILTIN_AVATAR_COUNT = 26 // IDR_PROFILE_AVATAR_0..25 (stable across Chrome versions)
+
+function avatarIndexForProfile(profileId: string): number {
+  let hash = 0
+  for (let i = 0; i < profileId.length; i++) {
+    hash = ((hash << 5) - hash) + profileId.charCodeAt(i)
+    hash |= 0
+  }
+  return Math.abs(hash) % CHROME_BUILTIN_AVATAR_COUNT
+}
+
+type JsonObject = Record<string, unknown>
+
+/** Read a JSON file, tolerate corruption by returning {}. */
+function readJsonSafe(path: string): JsonObject {
+  try {
+    if (!existsSync(path)) return {}
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    return typeof parsed === 'object' && parsed !== null ? (parsed as JsonObject) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Get or create a nested object child on `obj[key]`, returning it. */
+function ensureObject(obj: JsonObject, key: string): JsonObject {
+  const existing = obj[key]
+  if (typeof existing === 'object' && existing !== null && !Array.isArray(existing)) {
+    return existing as JsonObject
+  }
+  const fresh: JsonObject = {}
+  obj[key] = fresh
+  return fresh
+}
+
+/**
+ * Write Chromium `Local State` and `Default/Preferences` so the profile
+ * switcher shows the profile's name and a unique avatar. Idempotent:
+ * updates only the identity fields and preserves any other keys Chrome
+ * may have added on previous runs.
+ */
+function updateChromeProfileIdentity(
+  profileDir: string,
+  profileName: string,
+  avatarIndex: number
+): void {
+  const localStatePath = join(profileDir, 'Local State')
+  const defaultDir = join(profileDir, 'Default')
+  const preferencesPath = join(defaultDir, 'Preferences')
+
+  mkdirSync(defaultDir, { recursive: true })
+
+  const avatarIcon = `chrome://theme/IDR_PROFILE_AVATAR_${avatarIndex}`
+
+  // Local State — drives the profile switcher in the top-right.
+  const localState = readJsonSafe(localStatePath)
+  const profileSection = ensureObject(localState, 'profile')
+  const infoCache = ensureObject(profileSection, 'info_cache')
+  const defaultEntry = ensureObject(infoCache, 'Default')
+  defaultEntry.name = profileName
+  defaultEntry.shortcut_name = profileName
+  defaultEntry.avatar_icon = avatarIcon
+  defaultEntry.is_using_default_name = false
+  defaultEntry.is_using_default_avatar = false
+  if (defaultEntry.gaia_name === undefined) defaultEntry.gaia_name = ''
+  if (defaultEntry.gaia_given_name === undefined) defaultEntry.gaia_given_name = ''
+  if (defaultEntry.gaia_id === undefined) defaultEntry.gaia_id = ''
+  if (defaultEntry.user_name === undefined) defaultEntry.user_name = ''
+  if (defaultEntry.managed_user_id === undefined) defaultEntry.managed_user_id = ''
+  if (defaultEntry.active_time === undefined) defaultEntry.active_time = Date.now() / 1000
+  if (profileSection.last_used === undefined) profileSection.last_used = 'Default'
+
+  try {
+    writeFileSync(localStatePath, JSON.stringify(localState), { mode: 0o600 })
+  } catch { /* directory may not be writable yet — Chrome will recreate */ }
+
+  // Default/Preferences — source of truth for the "Default" profile itself.
+  const preferences = readJsonSafe(preferencesPath)
+  const prefProfile = ensureObject(preferences, 'profile')
+  prefProfile.name = profileName
+  prefProfile.avatar_index = avatarIndex
+  if (prefProfile.managed_user_id === undefined) prefProfile.managed_user_id = ''
+
+  try {
+    writeFileSync(preferencesPath, JSON.stringify(preferences), { mode: 0o600 })
+  } catch { /* Chrome will regenerate on launch */ }
+}
+
 function writeProxyAuthExtension(extDir: string, proxy: Proxy): string | null {
   if (!proxy.username || !proxy.password) return null
 
@@ -271,14 +366,15 @@ async function waitForDebugPort(profileDir: string, timeoutMs = 15000): Promise<
   throw new Error('Timed out waiting for Chrome DevTools port')
 }
 
-/** Inject fingerprint script into all current and future pages via CDP. */
-async function injectViaCDP(port: number, script: string, fp: Fingerprint): Promise<void> {
+/** Inject fingerprint script into all current pages via CDP. Returns the target IDs that were processed. */
+async function injectViaCDP(port: number, script: string, fp: Fingerprint): Promise<string[]> {
   // Get the list of targets
   const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
   const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
 
   // For each existing page target, inject via HTTP endpoint
   const pageTargets = targets.filter((t) => t.type === 'page')
+  const processed: string[] = []
 
   for (const target of pageTargets) {
     try {
@@ -295,11 +391,11 @@ async function injectViaCDP(port: number, script: string, fp: Fingerprint): Prom
         expression: script,
         allowUnsafeEvalBlockedByCSP: true
       })
+      processed.push(target.id)
     } catch { /* target may have closed */ }
   }
 
-  // Also set up on any new tabs: listen for new targets via /json/new isn't possible w/o WS,
-  // so we use a persistent polling approach on the targets list
+  return processed
 }
 
 /** Send a CDP command via minimal WebSocket (no dependencies, uses Node's http upgrade). */
@@ -476,15 +572,26 @@ function startCDPInjection(
   profileId: string,
   profileDir: string,
   script: string,
-  fp: Fingerprint
+  fp: Fingerprint,
+  proxyCredentials?: { username: string; password: string }
 ): { stop: () => void } {
   let stopped = false
   let port = 0
   const injectedTargets = new Set<string>()
+  const authListeners = new Map<string, { stop: () => void }>()
+
+  function attachAuthListener(targetId: string): void {
+    if (!proxyCredentials || authListeners.has(targetId)) return
+    const listener = startProxyAuthListener(port, targetId, proxyCredentials, () => stopped)
+    authListeners.set(targetId, listener)
+  }
 
   async function injectTarget(targetId: string): Promise<void> {
     if (injectedTargets.has(targetId)) return
     injectedTargets.add(targetId)
+    // Attach auth listener BEFORE any navigation-triggering command so the
+    // listener is live when the first page request hits the proxy.
+    attachAuthListener(targetId)
     try {
       await cdpCommand(port, targetId, 'Page.enable', {})
       await applyCdpFingerprintOverrides(port, targetId, fp)
@@ -509,14 +616,19 @@ function startCDPInjection(
       return // browser may have been closed before debug port appeared
     }
 
-    // Initial injection for existing tabs
+    // Initial setup for existing tabs: attach proxy auth listeners FIRST
+    // (cheap, non-blocking socket open) so the first request hitting
+    // --proxy-server gets authed, THEN do the heavier fingerprint injection.
     try {
-      await injectViaCDP(port, script, fp)
       const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
       const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
       for (const t of targets) {
-        if (t.type === 'page') injectedTargets.add(t.id)
+        if (t.type === 'page') {
+          injectedTargets.add(t.id)
+          attachAuthListener(t.id)
+        }
       }
+      await injectViaCDP(port, script, fp)
     } catch { /* best effort */ }
 
     // Use browser-level WebSocket to listen for new targets in real-time.
@@ -557,7 +669,13 @@ function startCDPInjection(
   run().catch(() => {})
 
   return {
-    stop: () => { stopped = true }
+    stop: () => {
+      stopped = true
+      for (const listener of authListeners.values()) {
+        try { listener.stop() } catch { /* ignore */ }
+      }
+      authListeners.clear()
+    }
   }
 }
 
@@ -661,6 +779,135 @@ function startBrowserWsListener(
   req.on('error', () => { /* can't connect, polling fallback is active */ })
   req.setTimeout(5000, () => { req.destroy() })
   req.end()
+}
+
+/**
+ * Open a persistent WebSocket to a single page target and handle proxy auth
+ * via Fetch.authRequired. This replaces the `--load-extension` based proxy
+ * auth handler that Chrome 137+ no longer supports in branded builds.
+ *
+ * Enabling Fetch with `handleAuthRequests: true` and no patterns intercepts
+ * only auth challenges — request flow is untouched, so regular traffic is
+ * unaffected. When an auth challenge arrives we reply with the stored
+ * credentials, which matches how Puppeteer/Playwright implement proxy auth.
+ */
+function startProxyAuthListener(
+  port: number,
+  targetId: string,
+  credentials: { username: string; password: string },
+  isStopped: () => boolean
+): { stop: () => void } {
+  let socketRef: import('net').Socket | null = null
+  let stopped = false
+
+  const key = randomBytes(16).toString('base64')
+  const req = httpRequest({
+    hostname: '127.0.0.1',
+    port,
+    path: `/devtools/page/${targetId}`,
+    headers: {
+      Connection: 'Upgrade',
+      Upgrade: 'websocket',
+      'Sec-WebSocket-Version': '13',
+      'Sec-WebSocket-Key': key
+    }
+  })
+
+  req.on('upgrade', (_res, socket) => {
+    socketRef = socket
+    let msgId = 1
+
+    function sendWsMsg(method: string, params: Record<string, unknown> = {}): void {
+      const payload = JSON.stringify({ id: msgId++, method, params })
+      const buf = Buffer.from(payload, 'utf-8')
+      const mask = randomBytes(4)
+      let header: Buffer
+      if (buf.length < 126) {
+        header = Buffer.alloc(6)
+        header[0] = 0x81
+        header[1] = 0x80 | buf.length
+        header[2] = mask[0]; header[3] = mask[1]; header[4] = mask[2]; header[5] = mask[3]
+      } else if (buf.length < 65536) {
+        header = Buffer.alloc(8)
+        header[0] = 0x81
+        header[1] = 0x80 | 126
+        header.writeUInt16BE(buf.length, 2)
+        header[4] = mask[0]; header[5] = mask[1]; header[6] = mask[2]; header[7] = mask[3]
+      } else {
+        header = Buffer.alloc(14)
+        header[0] = 0x81
+        header[1] = 0x80 | 127
+        header.writeBigUInt64BE(BigInt(buf.length), 2)
+        header[10] = mask[0]; header[11] = mask[1]; header[12] = mask[2]; header[13] = mask[3]
+      }
+      const masked = Buffer.alloc(buf.length)
+      for (let i = 0; i < buf.length; i++) masked[i] = buf[i] ^ mask[i % 4]
+      try { socket.write(Buffer.concat([header, masked])) } catch { /* socket closed */ }
+    }
+
+    // Auth-only interception. No `patterns` => regular requests are NOT
+    // paused. Only `Fetch.authRequired` fires on 407/401 challenges.
+    sendWsMsg('Fetch.enable', { handleAuthRequests: true })
+
+    let accum = Buffer.alloc(0)
+    socket.on('data', (chunk: Buffer) => {
+      if (stopped || isStopped()) { socket.destroy(); return }
+      accum = Buffer.concat([accum, chunk])
+
+      while (accum.length >= 2) {
+        const payloadLen = accum[1] & 0x7f
+        let offset = 2
+        let msgLen = payloadLen
+        if (payloadLen === 126) {
+          if (accum.length < 4) break
+          msgLen = accum.readUInt16BE(2)
+          offset = 4
+        } else if (payloadLen === 127) {
+          if (accum.length < 10) break
+          msgLen = Number(accum.readBigUInt64BE(2))
+          offset = 10
+        }
+        if (accum.length < offset + msgLen) break
+
+        const msgBuf = accum.subarray(offset, offset + msgLen)
+        accum = accum.subarray(offset + msgLen)
+
+        try {
+          const msg = JSON.parse(msgBuf.toString('utf-8'))
+          if (msg.method === 'Fetch.authRequired' && msg.params?.requestId) {
+            sendWsMsg('Fetch.continueWithAuth', {
+              requestId: msg.params.requestId,
+              authChallengeResponse: {
+                response: 'ProvideCredentials',
+                username: credentials.username,
+                password: credentials.password
+              }
+            })
+          } else if (msg.method === 'Fetch.requestPaused' && msg.params?.requestId) {
+            // Shouldn't happen without `patterns`, but continue defensively
+            // so a request never hangs if Chrome fires an unexpected pause.
+            sendWsMsg('Fetch.continueRequest', { requestId: msg.params.requestId })
+          }
+        } catch { /* partial/invalid JSON */ }
+      }
+    })
+
+    socket.on('error', () => { stopped = true })
+    socket.on('close', () => { stopped = true })
+  })
+
+  req.on('error', () => { stopped = true })
+  req.setTimeout(5000, () => { req.destroy() })
+  req.end()
+
+  return {
+    stop: () => {
+      stopped = true
+      if (socketRef) {
+        try { socketRef.destroy() } catch { /* already closed */ }
+      }
+    }
+  }
 }
 
 // Track CDP injection handles so we can stop them when the browser stops
@@ -1178,6 +1425,15 @@ export async function launchBrowser(
     } else {
       const { primaryLanguage } = getFingerprintLocale(activeFp)
 
+      // Give the browser a per-profile name + avatar so the profile switcher
+      // UI (top-right circle) shows a distinct identity per window rather than
+      // the generic "Person 1" / default colour.
+      updateChromeProfileIdentity(
+        profileDir,
+        profile.name,
+        avatarIndexForProfile(profileId)
+      )
+
       args.push(`--user-data-dir=${profileDir}`)
       args.push('--no-first-run')
       args.push('--disable-default-apps')
@@ -1217,7 +1473,13 @@ export async function launchBrowser(
         args.push(`--proxy-server=${proxyUrl}`)
       }
 
-      // Proxy auth still needs an extension (CDP can't intercept onAuthRequired)
+      // Proxy auth is handled primarily via CDP (Fetch.authRequired, applied
+      // in startCDPInjection/injectTarget). We still write the legacy auth
+      // extension when credentials are present: on pre-137 Chromium builds
+      // the extension loads before CDP attaches, which closes the race
+      // between Chrome's first request and the CDP auth listener. Chrome
+      // 137+ silently ignores --load-extension, so the extension is a no-op
+      // there and CDP is the sole auth path.
       const extDirs: string[] = []
       if (proxy?.username && proxy?.password) {
         const authDir = writeProxyAuthExtension(profileDir, proxy)
@@ -1263,11 +1525,12 @@ export async function launchBrowser(
     })
     child.unref()
 
-    // WARNING: Chrome 137+ removed --load-extension from branded Chrome/Edge builds (Sept 2025).
-    // Proxy auth still uses an extension via --load-extension as a best-effort fallback because
-    // CDP cannot intercept webRequest.onAuthRequired. If the extension fails to load on newer
-    // Chrome builds, proxy authentication will not work automatically — the user will see a
-    // native auth popup instead. See also: writeProxyAuthExtension().
+    // Chrome 137+ ignores --load-extension on branded builds (Sept 2025).
+    // Proxy auth therefore falls back to CDP Fetch.authRequired, attached
+    // per-target in startCDPInjection/injectTarget. The auth extension below
+    // (writeProxyAuthExtension) is kept as a race-free fast path for older
+    // Chromium builds where it still loads before the first request hits
+    // the proxy.
     const pid = child.pid
     if (!pid) throw new Error('Failed to get browser process ID')
 
@@ -1296,9 +1559,19 @@ export async function launchBrowser(
     // Start polling for browser exit detection
     startBrowserPolling(profileId, profileDir, isFirefox, db, mainWindow)
 
-    // Start CDP-based fingerprint injection for Chromium browsers (async, non-blocking)
+    // Start CDP-based fingerprint injection + proxy auth for Chromium browsers (async, non-blocking)
     if (injectionScript) {
-      const injector = startCDPInjection(profileId, profileDir, injectionScript, activeFp)
+      const proxyCredentials =
+        proxy?.username && proxy?.password
+          ? { username: proxy.username, password: proxy.password }
+          : undefined
+      const injector = startCDPInjection(
+        profileId,
+        profileDir,
+        injectionScript,
+        activeFp,
+        proxyCredentials
+      )
       cdpInjectors.set(profileId, injector)
     }
 
