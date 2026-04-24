@@ -1076,7 +1076,7 @@ export function ProfileEditorPanel({
                 disabled
                 aria-disabled="true"
                 aria-describedby="verification-hint"
-                className="inline-flex items-center gap-1 rounded-full bg-surface border border-edge px-2.5 py-1 text-[11px] font-medium text-muted/70 cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                className="inline-flex items-center gap-1 rounded-full bg-surface/60 border border-edge/50 px-2.5 py-1 text-[11px] font-medium text-muted cursor-not-allowed opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
               >
                 {site.label}
               </button>
