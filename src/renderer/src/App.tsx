@@ -7,6 +7,7 @@ import { ToastContainer } from './components/Toast'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { KeyboardShortcutsHelp } from './components/KeyboardShortcutsHelp'
 import { CommandPalette } from './components/CommandPalette'
+import { RunningSessionsDock } from './components/RunningSessionsDock'
 import { initDebugCapture } from './stores/debug'
 
 // Pages are route-split so the first paint only loads the shell + the
@@ -111,6 +112,7 @@ export default function App(): React.JSX.Element {
       <ConfirmDialog />
       <KeyboardShortcutsHelp />
       <CommandPalette />
+      <RunningSessionsDock />
     </>
   )
 }
