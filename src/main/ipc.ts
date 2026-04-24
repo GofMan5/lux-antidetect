@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { ipcMain, BrowserWindow, dialog, shell } from 'electron'
 import type Database from 'better-sqlite3'
 import { promises as fsp } from 'fs'
 import * as fs from 'fs'
@@ -154,6 +154,22 @@ export function registerIpcHandlers(
   ipcMain.handle('duplicate-profile', (_, profileId: string) =>
     duplicateProfile(db, profileId, profilesDir)
   )
+
+  // Reveal a profile's on-disk data directory in the OS file manager.
+  // Scoped under profilesDir so a compromised renderer can't reveal
+  // arbitrary paths.
+  ipcMain.handle('reveal-profile-dir', async (_, profileId: string) => {
+    assertUuid(profileId)
+    const profileDir = path.resolve(path.join(profilesDir, profileId))
+    const allowedRoot = path.resolve(profilesDir)
+    if (!profileDir.startsWith(allowedRoot + path.sep)) {
+      throw new Error('Invalid profile directory')
+    }
+    if (!fs.existsSync(profileDir)) {
+      throw new Error('Profile directory does not exist (try launching the profile once)')
+    }
+    await shell.openPath(profileDir)
+  })
 
   // Browser (async — no longer blocks main thread)
   ipcMain.handle('launch-browser', async (_, profileId: string, opts?: { targetUrl?: string }) => {

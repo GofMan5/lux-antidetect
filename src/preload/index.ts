@@ -19,6 +19,7 @@ const api: LuxAPI = {
     ipcRenderer.invoke('update-fingerprint', id, input),
   deleteProfile: (id: string) => ipcRenderer.invoke('delete-profile', id),
   duplicateProfile: (id: string) => ipcRenderer.invoke('duplicate-profile', id),
+  revealProfileDir: (id: string) => ipcRenderer.invoke('reveal-profile-dir', id),
 
   launchBrowser: (profileId: string, opts?: { targetUrl?: string }) =>
     ipcRenderer.invoke('launch-browser', profileId, opts),

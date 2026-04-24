@@ -64,6 +64,7 @@ export interface LuxAPI {
   updateFingerprint(id: string, input: UpdateFingerprintInput): Promise<void>
   deleteProfile(id: string): Promise<void>
   duplicateProfile(id: string): Promise<Profile>
+  revealProfileDir(id: string): Promise<void>
 
   launchBrowser(profileId: string, opts?: { targetUrl?: string }): Promise<{ pid: number }>
   stopBrowser(profileId: string): Promise<void>

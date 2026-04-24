@@ -875,7 +875,21 @@ export function ProfilesPage() {
     items.push(
       { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onClick: () => handleRowClick(profileId) },
       { label: 'Duplicate', icon: <Copy className="h-4 w-4" />, onClick: () => handleDuplicate(profileId) },
-      { label: 'Copy ID', icon: <ClipboardCopy className="h-4 w-4" />, onClick: () => { navigator.clipboard.writeText(profileId); addToast('ID copied', 'info') } }
+      { label: 'Copy ID', icon: <ClipboardCopy className="h-4 w-4" />, onClick: () => { navigator.clipboard.writeText(profileId); addToast('ID copied', 'info') } },
+      {
+        label: 'Reveal profile folder',
+        icon: <HardDrive className="h-4 w-4" />,
+        onClick: async () => {
+          try {
+            await api.revealProfileDir(profileId)
+          } catch (err) {
+            addToast(
+              `Reveal failed: ${err instanceof Error ? err.message : 'unknown'}`,
+              'error'
+            )
+          }
+        }
+      }
     )
 
     if (isRunning) {
