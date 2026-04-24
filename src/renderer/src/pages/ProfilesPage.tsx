@@ -1215,7 +1215,7 @@ export function ProfilesPage() {
                               })
                             }}
                             className={cn(
-                              'border-b border-edge/50 cursor-pointer transition-colors relative',
+                              'group/row border-b border-edge/50 cursor-pointer transition-colors relative',
                               isEditing
                                 ? 'bg-accent/8'
                                 : focusedIdx === idx
@@ -1443,17 +1443,40 @@ export function ProfilesPage() {
                               </Tooltip>
                             </td>
 
-                            {/* Actions dropdown */}
+                            {/* Actions — inline quick launch/stop + ⋯ dropdown */}
                             <td className="px-2" onClick={(e) => e.stopPropagation()}>
-                              <DropdownMenu
-                                align="right"
-                                trigger={
-                                  <button className="h-7 w-7 rounded-[--radius-sm] inline-flex items-center justify-center text-muted hover:text-content hover:bg-elevated transition-colors">
-                                    <MoreHorizontal className="h-4 w-4" />
+                              <div className="flex items-center gap-0.5 justify-end">
+                                {/* Quick-launch / quick-stop — revealed on row
+                                    hover so the row stays clean when idle. */}
+                                {profile.status === 'running' ? (
+                                  <button
+                                    onClick={() => handleStop(profile.id)}
+                                    className="opacity-0 group-hover/row:opacity-100 focus:opacity-100 transition-opacity h-7 w-7 rounded-[--radius-sm] inline-flex items-center justify-center text-err hover:bg-err/10"
+                                    aria-label="Stop profile"
+                                    title="Stop"
+                                  >
+                                    <Square className="h-3.5 w-3.5" />
                                   </button>
-                                }
-                                items={getRowActions(profile.id, profile.name, profile.status, profile.browser_type)}
-                              />
+                                ) : (profile.status === 'ready' || profile.status === 'error') ? (
+                                  <button
+                                    onClick={() => handleLaunch(profile.id)}
+                                    className="opacity-0 group-hover/row:opacity-100 focus:opacity-100 transition-opacity h-7 w-7 rounded-[--radius-sm] inline-flex items-center justify-center text-ok hover:bg-ok/10"
+                                    aria-label="Launch profile"
+                                    title="Launch"
+                                  >
+                                    <Play className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : null}
+                                <DropdownMenu
+                                  align="right"
+                                  trigger={
+                                    <button className="h-7 w-7 rounded-[--radius-sm] inline-flex items-center justify-center text-muted hover:text-content hover:bg-elevated transition-colors">
+                                      <MoreHorizontal className="h-4 w-4" />
+                                    </button>
+                                  }
+                                  items={getRowActions(profile.id, profile.name, profile.status, profile.browser_type)}
+                                />
+                              </div>
                             </td>
                           </tr>
                         )
