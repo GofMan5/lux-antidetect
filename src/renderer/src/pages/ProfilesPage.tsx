@@ -225,6 +225,7 @@ export function ProfilesPage() {
   // Local state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [groupFilter, setGroupFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | ProfileStatus>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('updated_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -395,6 +396,15 @@ export function ProfilesPage() {
     if (groupFilter !== 'all') {
       result = result.filter(p => p.group_name === groupFilter)
     }
+    if (statusFilter !== 'all') {
+      result = result.filter((p) =>
+        statusFilter === 'running'
+          ? p.status === 'running' || p.status === 'starting'
+          : statusFilter === 'ready'
+            ? p.status === 'ready'
+            : p.status === statusFilter
+      )
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
       result = result.filter(p =>
@@ -410,13 +420,16 @@ export function ProfilesPage() {
       const bv = b[sortKey] ?? ''
       return av < bv ? -dir : av > bv ? dir : 0
     })
-  }, [profiles, pendingDeletes, groupFilter, searchQuery, sortKey, sortDir])
+  }, [profiles, pendingDeletes, groupFilter, statusFilter, searchQuery, sortKey, sortDir])
 
   const statusCounts = useMemo(() => {
-    const running = profiles.filter(p => p.status === 'running').length
-    const error = profiles.filter(p => p.status === 'error').length
-    return { running, error }
-  }, [profiles])
+    // `pending` deletes shouldn't factor into visible counts.
+    const pool = profiles.filter((p) => !pendingDeletes.has(p.id))
+    const running = pool.filter((p) => p.status === 'running' || p.status === 'starting').length
+    const ready = pool.filter((p) => p.status === 'ready').length
+    const error = pool.filter((p) => p.status === 'error').length
+    return { total: pool.length, running, ready, error }
+  }, [profiles, pendingDeletes])
 
   // --- Sorting ---------------------------------------------------------------
 
@@ -940,16 +953,10 @@ export function ProfilesPage() {
       {/* Main content area */}
       <div className="flex-1 flex flex-col p-6 overflow-hidden min-w-0 relative">
         {/* Page Header */}
-        <div className="flex items-center justify-between mb-5 shrink-0">
+        <div className="flex items-center justify-between mb-3 shrink-0">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-content">Profiles</h1>
             <Badge variant="default" className="text-[11px] tabular-nums">{profiles.length}</Badge>
-            {statusCounts.running > 0 && (
-              <Badge variant="warning" dot>{statusCounts.running} running</Badge>
-            )}
-            {statusCounts.error > 0 && (
-              <Badge variant="error" dot>{statusCounts.error} error</Badge>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <SearchInput
@@ -999,6 +1006,45 @@ export function ProfilesPage() {
             />
           </div>
         </div>
+
+        {/* Status filter chips — show only when there's anything to filter. */}
+        {statusCounts.total > 0 && (
+          <div className="flex items-center gap-1.5 mb-3 shrink-0 animate-fadeIn">
+            {([
+              { key: 'all', label: 'All', count: statusCounts.total, tone: 'default' },
+              { key: 'ready', label: 'Ready', count: statusCounts.ready, tone: 'muted' },
+              { key: 'running', label: 'Running', count: statusCounts.running, tone: 'success' },
+              { key: 'error', label: 'Error', count: statusCounts.error, tone: 'error' }
+            ] as const).map((chip) => {
+              if (chip.count === 0 && chip.key !== 'all') return null
+              const active = statusFilter === chip.key
+              return (
+                <button
+                  key={chip.key}
+                  onClick={() => setStatusFilter(chip.key as typeof statusFilter)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium',
+                    'transition-all duration-150 border',
+                    active
+                      ? chip.tone === 'success'
+                        ? 'bg-ok/15 text-ok border-ok/40'
+                        : chip.tone === 'error'
+                          ? 'bg-err/15 text-err border-err/40'
+                          : chip.tone === 'muted'
+                            ? 'bg-elevated text-content border-edge'
+                            : 'bg-accent/15 text-accent border-accent/40'
+                      : 'bg-surface/60 text-muted border-edge/60 hover:text-content hover:border-edge'
+                  )}
+                >
+                  {chip.tone === 'success' && <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" />}
+                  {chip.tone === 'error' && <span className="h-1.5 w-1.5 rounded-full bg-err" />}
+                  {chip.label}
+                  <span className={cn('tabular-nums', active ? '' : 'text-muted/80')}>{chip.count}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* Bulk Action Bar */}
         {hasSelection && (
