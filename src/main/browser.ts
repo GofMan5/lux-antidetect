@@ -11,7 +11,8 @@ import {
   buildWorkerInjectionScript,
   normalizeFingerprint,
   parseFingerprintLanguages,
-  regenerateFingerprint
+  regenerateFingerprint,
+  type GeoOverride
 } from './fingerprint'
 import { addSession, removeSession, getSession, isRunning } from './sessions'
 import { getManagedBrowserPath } from './browser-manager'
@@ -369,7 +370,7 @@ async function waitForDebugPort(profileDir: string, timeoutMs = 15000): Promise<
 }
 
 /** Inject fingerprint script into all current pages via CDP. Returns the target IDs that were processed. */
-async function injectViaCDP(port: number, script: string, fp: Fingerprint): Promise<string[]> {
+async function injectViaCDP(port: number, script: string, fp: Fingerprint, geoOverride?: GeoOverride): Promise<string[]> {
   // Get the list of targets
   const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
   const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
@@ -382,7 +383,7 @@ async function injectViaCDP(port: number, script: string, fp: Fingerprint): Prom
     try {
       // Enable Page domain (required for addScriptToEvaluateOnNewDocument)
       await cdpCommand(port, target.id, 'Page.enable', {})
-      await applyCdpFingerprintOverrides(port, target.id, fp)
+      await applyCdpFingerprintOverrides(port, target.id, fp, geoOverride)
       // Inject for all future navigations in this target
       await cdpCommand(port, target.id, 'Page.addScriptToEvaluateOnNewDocument', {
         source: script,
@@ -549,11 +550,12 @@ function buildUserAgentMetadata(fp: Fingerprint): Record<string, unknown> {
 async function applyCdpFingerprintOverrides(
   port: number,
   targetId: string,
-  fp: Fingerprint
+  fp: Fingerprint,
+  geoOverride?: GeoOverride
 ): Promise<void> {
   const { languages, primaryLanguage } = getFingerprintLocale(fp)
 
-  await Promise.allSettled([
+  const ops: Promise<unknown>[] = [
     cdpCommand(port, targetId, 'Emulation.setUserAgentOverride', {
       userAgent: fp.user_agent,
       acceptLanguage: languages.join(','),
@@ -566,7 +568,19 @@ async function applyCdpFingerprintOverrides(
     cdpCommand(port, targetId, 'Emulation.setLocaleOverride', {
       locale: primaryLanguage
     })
-  ])
+  ]
+  if (geoOverride) {
+    // Native CDP override — hits even in code paths that bypass the JS
+    // hook (Chrome's internal geolocation requests). The JS hook in the
+    // injection script is a parallel defense for direct API calls.
+    ops.push(cdpCommand(port, targetId, 'Emulation.setGeolocationOverride', {
+      latitude: geoOverride.latitude,
+      longitude: geoOverride.longitude,
+      accuracy: geoOverride.accuracy
+    }))
+  }
+
+  await Promise.allSettled(ops)
 }
 
 /** Background task: continuously ensure CDP injection is active for all pages of this profile. */
@@ -576,7 +590,8 @@ function startCDPInjection(
   script: string,
   workerScript: string,
   fp: Fingerprint,
-  proxyCredentials?: { username: string; password: string }
+  proxyCredentials?: { username: string; password: string },
+  geoOverride?: GeoOverride
 ): { stop: () => void } {
   let stopped = false
   let port = 0
@@ -597,7 +612,7 @@ function startCDPInjection(
     attachAuthListener(targetId)
     try {
       await cdpCommand(port, targetId, 'Page.enable', {})
-      await applyCdpFingerprintOverrides(port, targetId, fp)
+      await applyCdpFingerprintOverrides(port, targetId, fp, geoOverride)
       await cdpCommand(port, targetId, 'Page.addScriptToEvaluateOnNewDocument', {
         source: script,
         runImmediately: true
@@ -631,7 +646,7 @@ function startCDPInjection(
           attachAuthListener(t.id)
         }
       }
-      await injectViaCDP(port, script, fp)
+      await injectViaCDP(port, script, fp, geoOverride)
     } catch { /* best effort */ }
 
     // Use browser-level WebSocket to listen for new targets in real-time.
@@ -970,6 +985,12 @@ const cdpInjectors = new Map<string, { stop: () => void }>()
 // Track local SOCKS5 relays used to proxy auth-required SOCKS upstreams
 // (Chromium discards user/pass for SOCKS schemes — see socks5-relay.ts).
 const socksRelays = new Map<string, RelayHandle>()
+
+// Profiles whose launch is in flight. Prevents a double-click on the
+// "Launch" button (or two parallel bulk-launch entries) from spawning
+// two browser processes for the same profile, which would orphan the
+// first one's CDP port + relay + injector.
+const pendingLaunches = new Set<string>()
 
 /**
  * Override fingerprint timezone + primary language to match the proxy's
@@ -1464,9 +1485,27 @@ export async function launchBrowser(
   mainWindow: Electron.BrowserWindow | null,
   opts?: { targetUrl?: string }
 ): Promise<{ pid: number }> {
+  if (pendingLaunches.has(profileId)) {
+    throw new Error('Profile launch already in progress')
+  }
   if (isRunning(profileId) || isProfileBrowserActive(profileId)) {
     throw new Error('Profile is already running')
   }
+  pendingLaunches.add(profileId)
+  try {
+    return await launchBrowserInner(db, profileId, profilesDir, mainWindow, opts)
+  } finally {
+    pendingLaunches.delete(profileId)
+  }
+}
+
+async function launchBrowserInner(
+  db: Database.Database,
+  profileId: string,
+  profilesDir: string,
+  mainWindow: Electron.BrowserWindow | null,
+  opts?: { targetUrl?: string }
+): Promise<{ pid: number }> {
 
   const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as
     | Profile
@@ -1526,6 +1565,19 @@ export async function launchBrowser(
     // the IP's expected timezone — a mismatch flips match=no even if every
     // other surface is perfect.
     const activeFp = applyProxyGeoToFingerprint(baseFp, proxy)
+
+    // Geolocation override: when the proxy has lat/lon, spoof the
+    // navigator.geolocation API + CDP-level Emulation.setGeolocationOverride
+    // so a permission-granted site receives coordinates consistent with
+    // the proxy IP rather than the real machine.
+    const geoOverride: GeoOverride | undefined =
+      proxy && typeof proxy.latitude === 'number' && typeof proxy.longitude === 'number'
+        ? {
+            latitude: proxy.latitude,
+            longitude: proxy.longitude,
+            accuracy: proxy.accuracy_radius ?? 25_000
+          }
+        : undefined
 
     const browserType = profile.browser_type
     const exePath = findBrowserPath(browserType)
@@ -1641,7 +1693,7 @@ export async function launchBrowser(
       // Page.addScriptToEvaluateOnNewDocument). The worker variant runs
       // inside Worker / SharedWorker / ServiceWorker scopes via the
       // Target.setAutoAttach path in startBrowserWsListener.
-      injectionScript = buildInjectionScript(activeFp)
+      injectionScript = buildInjectionScript(activeFp, geoOverride)
     }
 
     // Caller-provided targetUrl (e.g. "open test site in this profile") wins
@@ -1716,7 +1768,8 @@ export async function launchBrowser(
         injectionScript,
         workerScript,
         activeFp,
-        proxyCredentials
+        proxyCredentials,
+        geoOverride
       )
       cdpInjectors.set(profileId, injector)
     }

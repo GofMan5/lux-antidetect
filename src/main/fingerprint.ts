@@ -818,10 +818,17 @@ function buildWorkerInjectionFromNormalized(fp: Fingerprint): string {
   )
 }
 
-export function buildInjectionScript(inputFp: Fingerprint): string {
+export interface GeoOverride {
+  latitude: number
+  longitude: number
+  accuracy: number // meters
+}
+
+export function buildInjectionScript(inputFp: Fingerprint, geoOverride?: GeoOverride): string {
   const fp = normalizeFingerprint(inputFp)
   const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
   const languagesJson = JSON.stringify(languages)
+  const geoOverrideJson = geoOverride ? JSON.stringify(geoOverride) : 'null'
 
   let fontsJson = fp.fonts_list
   try {
@@ -845,6 +852,9 @@ export function buildInjectionScript(inputFp: Fingerprint): string {
 
 // ── Seeded PRNG (Mulberry32) ──
 var _seed=${fp.canvas_noise_seed};
+// Optional geolocation override (from proxy geoip lookup).
+// null when no geo is known — geolocation API stays native in that case.
+var _geoOverride=${geoOverrideJson};
 function _m32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}}
 var _rng=_m32(_seed);
 
@@ -1876,21 +1886,74 @@ try{
 try{
   if(typeof Permissions!=='undefined'&&Permissions.prototype.query){
     var _origPermQuery=Permissions.prototype.query;
+    function _mkPermStatus(state){
+      var ps=typeof PermissionStatus!=='undefined'?Object.create(PermissionStatus.prototype):{};
+      Object.defineProperties(ps,{
+        state:{get:function(){return state;},enumerable:true,configurable:true},
+        status:{get:function(){return state;},enumerable:true,configurable:true},
+        onchange:{value:null,writable:true,enumerable:true,configurable:true}
+      });
+      ps.addEventListener=function(){};
+      ps.removeEventListener=function(){};
+      ps.dispatchEvent=function(){return true;};
+      return ps;
+    }
     _cloak(Permissions.prototype,'query',function(desc){
+      // When a geolocation override is active, advertise the permission as
+      // already granted so sites don't trigger Chrome's permission UI
+      // (which is itself a clear automation tell).
+      if(_geoOverride&&desc&&desc.name==='geolocation'){
+        return Promise.resolve(_mkPermStatus('granted'));
+      }
       return _origPermQuery.call(this,desc).catch(function(){
-        // If the query fails (invalid name, etc.), return a PermissionStatus-like object
-        var ps=typeof PermissionStatus!=='undefined'?Object.create(PermissionStatus.prototype):{};
-        Object.defineProperties(ps,{
-          state:{get:function(){return 'prompt';},enumerable:true,configurable:true},
-          status:{get:function(){return 'prompt';},enumerable:true,configurable:true},
-          onchange:{value:null,writable:true,enumerable:true,configurable:true}
-        });
-        ps.addEventListener=function(){};
-        ps.removeEventListener=function(){};
-        ps.dispatchEvent=function(){return true;};
-        return ps;
+        return _mkPermStatus('prompt');
       });
     });
+  }
+}catch(e){}
+
+// ═══════════════════════════════════════════
+// 14b. Geolocation override (when proxy geo is known)
+// ═══════════════════════════════════════════
+try{
+  if(_geoOverride&&typeof Geolocation!=='undefined'&&Geolocation.prototype){
+    var _gLat=_geoOverride.latitude, _gLon=_geoOverride.longitude, _gAcc=_geoOverride.accuracy;
+    function _mkPosition(){
+      var coords=Object.create(typeof GeolocationCoordinates!=='undefined'?GeolocationCoordinates.prototype:Object.prototype);
+      Object.defineProperties(coords,{
+        latitude:{get:function(){return _gLat;},enumerable:true,configurable:true},
+        longitude:{get:function(){return _gLon;},enumerable:true,configurable:true},
+        accuracy:{get:function(){return _gAcc;},enumerable:true,configurable:true},
+        altitude:{get:function(){return null;},enumerable:true,configurable:true},
+        altitudeAccuracy:{get:function(){return null;},enumerable:true,configurable:true},
+        heading:{get:function(){return null;},enumerable:true,configurable:true},
+        speed:{get:function(){return null;},enumerable:true,configurable:true}
+      });
+      var pos=Object.create(typeof GeolocationPosition!=='undefined'?GeolocationPosition.prototype:Object.prototype);
+      var _ts=Date.now();
+      Object.defineProperties(pos,{
+        coords:{get:function(){return coords;},enumerable:true,configurable:true},
+        timestamp:{get:function(){return _ts;},enumerable:true,configurable:true}
+      });
+      return pos;
+    }
+    _cloak(Geolocation.prototype,'getCurrentPosition',function(success){
+      if(typeof success==='function'){
+        var pos=_mkPosition();
+        // Dispatch on a microtask to match real browser async semantics.
+        Promise.resolve().then(function(){try{success(pos);}catch(e){}});
+      }
+    });
+    var _watchId=1;
+    _cloak(Geolocation.prototype,'watchPosition',function(success){
+      var id=_watchId++;
+      if(typeof success==='function'){
+        var pos=_mkPosition();
+        Promise.resolve().then(function(){try{success(pos);}catch(e){}});
+      }
+      return id;
+    });
+    _cloak(Geolocation.prototype,'clearWatch',function(){});
   }
 }catch(e){}
 

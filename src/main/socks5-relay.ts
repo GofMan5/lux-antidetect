@@ -27,6 +27,7 @@ import {
   performSocks4Handshake,
   performSocks5Handshake
 } from './proxy'
+import { logger } from './logger'
 
 // SOCKS5 protocol constants (RFC 1928). Mirrored from proxy.ts; kept local
 // to keep proxy.ts's public API focused on DB / health-check operations.
@@ -127,6 +128,8 @@ export async function startSocks5Relay(upstream: Proxy): Promise<RelayHandle> {
     throw new Error('socks5-relay: failed to bind 127.0.0.1')
   }
 
+  logger.info(`socks5-relay started: ${upstream.protocol}://${upstream.host}:${upstream.port} → 127.0.0.1:${addr.port}`)
+
   return {
     port: addr.port,
     stop: async () => {
@@ -136,6 +139,7 @@ export async function startSocks5Relay(upstream: Proxy): Promise<RelayHandle> {
       live.clear()
       for (const s of snapshot) safeDestroy(s)
       await new Promise<void>((resolve) => server.close(() => resolve()))
+      logger.info(`socks5-relay stopped on 127.0.0.1:${addr.port}`)
     }
   }
 }
@@ -223,7 +227,12 @@ async function handleClient(client: Socket, upstream: Proxy, live: Set<Socket>):
   let upstreamSock: Socket
   try {
     upstreamSock = await openUpstreamTcp(upstream)
-  } catch {
+  } catch (err) {
+    logger.warn('socks5-relay: upstream connect failed', {
+      proxy: `${upstream.protocol}://${upstream.host}:${upstream.port}`,
+      target: `${targetHost}:${targetPort}`,
+      err: err instanceof Error ? err.message : String(err)
+    })
     client.write(REPLY_FAILURE)
     client.end()
     return
@@ -235,7 +244,12 @@ async function handleClient(client: Socket, upstream: Proxy, live: Set<Socket>):
   const upstreamReader = new SocketReader(upstreamSock)
   try {
     await runUpstreamHandshake(upstream, upstreamSock, upstreamReader, targetHost, targetPort)
-  } catch {
+  } catch (err) {
+    logger.warn('socks5-relay: upstream handshake failed', {
+      proxy: `${upstream.protocol}://${upstream.host}:${upstream.port}`,
+      target: `${targetHost}:${targetPort}`,
+      err: err instanceof Error ? err.message : String(err)
+    })
     client.write(REPLY_FAILURE)
     client.end()
     safeDestroy(upstreamSock)
