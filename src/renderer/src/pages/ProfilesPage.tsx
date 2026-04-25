@@ -1047,8 +1047,12 @@ export function ProfilesPage() {
   const isAllSelected = filteredProfiles.length > 0 && selectedIds.size === filteredProfiles.length
   const hasSelection = selectedIds.size > 0
 
-  const thClass = 'text-left px-3 py-2.5 font-medium text-muted text-[11px] uppercase tracking-wider select-none'
-  const thSortable = cn(thClass, 'cursor-pointer hover:text-content transition-colors')
+  const thClass =
+    'text-left px-3 py-3 font-semibold text-muted/80 text-[10.5px] uppercase tracking-[0.08em] select-none'
+  const thSortable = cn(
+    thClass,
+    'cursor-pointer hover:text-content transition-colors duration-150 ease-[var(--ease-osmosis)]'
+  )
 
   // --- Loading state ---------------------------------------------------------
 
@@ -1075,10 +1079,10 @@ export function ProfilesPage() {
       {/* Main content area */}
       <div className="flex-1 flex flex-col p-6 overflow-hidden min-w-0 relative">
         {/* Page Header */}
-        <div className="flex items-center justify-between mb-3 shrink-0">
+        <div className="flex items-center justify-between mb-4 shrink-0">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-content">Profiles</h1>
-            <Badge variant="default" className="text-[11px] tabular-nums">{profiles.length}</Badge>
+            <h1 className="text-[22px] font-semibold text-content tracking-tight">Profiles</h1>
+            <Badge variant="muted" className="text-[11px] tabular-nums">{profiles.length}</Badge>
           </div>
           <div className="flex items-center gap-2">
             <SearchInput
@@ -1122,7 +1126,13 @@ export function ProfilesPage() {
                   type="button"
                   aria-label="New from preset"
                   title="New from preset"
-                  className="h-9 w-8 rounded-[--radius-md] inline-flex items-center justify-center bg-accent/10 text-accent hover:bg-accent/15 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                  className={cn(
+                    'h-9 w-8 rounded-[--radius-md] inline-flex items-center justify-center',
+                    'bg-accent/10 text-accent ring-1 ring-inset ring-accent/15',
+                    'hover:bg-accent/15 hover:ring-accent/25',
+                    'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
+                  )}
                 >
                   <ChevronDown className="h-4 w-4" />
                 </button>
@@ -1148,16 +1158,16 @@ export function ProfilesPage() {
                   onClick={() => setStatusFilter(chip.key as typeof statusFilter)}
                   className={cn(
                     'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium',
-                    'transition-all duration-150 border',
+                    'ring-1 ring-inset transition-colors duration-150 ease-[var(--ease-osmosis)]',
                     active
                       ? chip.tone === 'success'
-                        ? 'bg-ok/15 text-ok border-ok/40'
+                        ? 'bg-ok/12 text-ok ring-ok/30'
                         : chip.tone === 'error'
-                          ? 'bg-err/15 text-err border-err/40'
+                          ? 'bg-err/12 text-err ring-err/30'
                           : chip.tone === 'muted'
-                            ? 'bg-elevated text-content border-edge'
-                            : 'bg-accent/15 text-accent border-accent/40'
-                      : 'bg-surface/60 text-muted border-edge/60 hover:text-content hover:border-edge'
+                            ? 'bg-elevated text-content ring-edge'
+                            : 'bg-accent/12 text-accent ring-accent/30'
+                      : 'bg-surface/60 text-muted ring-edge/60 hover:text-content hover:ring-edge/90'
                   )}
                 >
                   {chip.tone === 'success' && <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" />}
@@ -1249,7 +1259,7 @@ export function ProfilesPage() {
           <div
             ref={scrollRef}
             onScroll={handleTableScroll}
-            className="flex-1 overflow-auto min-h-0 bg-card rounded-[--radius-lg] border border-edge"
+            className="flex-1 overflow-auto min-h-0 bg-card rounded-[--radius-lg] border border-edge/80 surface-lit shadow-[var(--shadow-sm)]"
           >
             <table className="w-full text-sm table-fixed">
               <colgroup>
@@ -1264,7 +1274,7 @@ export function ProfilesPage() {
                 <col className="w-[52px]" />
               </colgroup>
               <thead className="sticky top-0 z-10">
-                <tr className="bg-surface-alt/50 border-b border-edge">
+                <tr className="bg-surface-alt/80 backdrop-blur-sm border-b border-edge/80">
                   <th className="px-3 py-2.5">
                     <input
                       type="checkbox"
@@ -1332,12 +1342,13 @@ export function ProfilesPage() {
                               })
                             }}
                             className={cn(
-                              'group/row border-b border-edge/50 cursor-pointer transition-colors relative',
+                              'group/row border-b border-edge/40 cursor-pointer relative',
+                              'transition-colors duration-150 ease-[var(--ease-osmosis)]',
                               isEditing
-                                ? 'bg-accent/8'
+                                ? 'bg-accent/10 shadow-[inset_2px_0_0_0_var(--color-accent)]'
                                 : focusedIdx === idx
-                                  ? 'bg-elevated/60 ring-1 ring-accent/40 ring-inset'
-                                  : 'hover:bg-elevated/50'
+                                  ? 'bg-elevated/60 shadow-[inset_2px_0_0_0_var(--color-accent)]'
+                                  : 'hover:bg-elevated/40'
                             )}
                             style={{ height: ROW_HEIGHT }}
                           >

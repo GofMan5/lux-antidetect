@@ -213,7 +213,7 @@ export function SettingsPage(): React.JSX.Element {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
       <div className="shrink-0 px-6 pt-6 pb-0">
-        <h1 className="text-2xl font-bold text-content mb-4">Settings</h1>
+        <h1 className="text-[22px] font-semibold text-content tracking-tight mb-4">Settings</h1>
         <Tabs
           tabs={TAB_ITEMS}
           activeTab={activeTab}
@@ -222,7 +222,7 @@ export function SettingsPage(): React.JSX.Element {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-2xl">
           {activeTab === 'appearance' && (
             <AppearanceTab

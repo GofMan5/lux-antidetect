@@ -651,11 +651,11 @@ export function ProxiesPage(): React.JSX.Element {
       <div className="p-6 flex flex-col h-full">
         <div className="flex items-center justify-between mb-5 shrink-0">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-content">Proxies</h1>
+            <h1 className="text-[22px] font-semibold text-content tracking-tight">Proxies</h1>
             <div className="h-5 w-8 rounded-full shimmer" />
           </div>
         </div>
-        <div className="flex-1 min-h-0 bg-card rounded-[--radius-lg] border border-edge overflow-hidden">
+        <div className="flex-1 min-h-0 bg-card rounded-[--radius-lg] border border-edge/80 surface-lit shadow-[var(--shadow-sm)] overflow-hidden">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-edge/40 last:border-0">
               <div className="h-4 w-4 rounded shimmer" />
@@ -679,8 +679,8 @@ export function ProxiesPage(): React.JSX.Element {
       {/* Header */}
       <div className="flex items-center justify-between mb-5 shrink-0">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-content">Proxies</h1>
-          <Badge variant="default">{proxies.length}</Badge>
+          <h1 className="text-[22px] font-semibold text-content tracking-tight">Proxies</h1>
+          <Badge variant="muted">{proxies.length}</Badge>
         </div>
         <div className="flex items-center gap-2">
           <SearchInput
@@ -778,9 +778,9 @@ export function ProxiesPage(): React.JSX.Element {
                 <col className="w-[10%]" />
                 <col className="w-12" />
               </colgroup>
-              <thead className="sticky top-0 z-10 bg-surface-alt/50">
-                <tr className="border-b border-edge">
-                  <th className="px-3 py-2.5 text-left">
+              <thead className="sticky top-0 z-10 bg-surface-alt/80 backdrop-blur-sm">
+                <tr className="border-b border-edge/80">
+                  <th className="px-3 py-3 text-left">
                     <input
                       type="checkbox"
                       checked={allSelected}
@@ -789,22 +789,22 @@ export function ProxiesPage(): React.JSX.Element {
                       aria-label="Select all"
                     />
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
                     Name / Host
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
                     Type
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
                     Port
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
                     Country
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
                     Status
                   </th>
-                  <th className="px-3 py-2.5 text-left text-xs font-medium text-muted uppercase tracking-wider">
+                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
                     Speed
                   </th>
                   <th className="px-3 py-2.5" />
@@ -825,8 +825,8 @@ export function ProxiesPage(): React.JSX.Element {
                       <tr
                         key={proxy.id}
                         className={cn(
-                          'border-b border-edge/50 transition-colors',
-                          selected.has(proxy.id) ? 'bg-accent/5' : 'hover:bg-elevated/50'
+                          'border-b border-edge/40 transition-colors duration-150 ease-[var(--ease-osmosis)]',
+                          selected.has(proxy.id) ? 'bg-accent/8 shadow-[inset_2px_0_0_0_var(--color-accent)]' : 'hover:bg-elevated/40'
                         )}
                       >
                         {/* Checkbox */}

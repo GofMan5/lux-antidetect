@@ -32,21 +32,27 @@ export function Toggle({
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
-          'relative h-5 w-9 shrink-0 rounded-full transition-colors duration-200',
-          checked ? 'bg-accent' : 'bg-edge'
+          'relative h-[22px] w-[40px] shrink-0 rounded-full',
+          'transition-colors duration-200 ease-[var(--ease-osmosis)]',
+          'ring-1 ring-inset',
+          checked
+            ? 'bg-accent ring-accent/40 shadow-[0_0_12px_var(--color-accent-glow)]'
+            : 'bg-elevated ring-edge'
         )}
       >
         <span
           className={cn(
-            'absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200',
-            checked && 'translate-x-4'
+            'absolute top-[3px] left-[3px] h-4 w-4 rounded-full',
+            'transition-[transform,background-color] duration-200 ease-[var(--ease-osmosis)]',
+            'shadow-[0_1px_3px_rgba(0,0,0,0.4)]',
+            checked ? 'translate-x-[18px] bg-[#1a1612]' : 'bg-content'
           )}
         />
       </button>
       {(label || description) && (
         <div className="min-w-0">
-          {label && <div className="text-sm text-content">{label}</div>}
-          {description && <div className="text-xs text-muted">{description}</div>}
+          {label && <div className="text-[13px] font-medium text-content">{label}</div>}
+          {description && <div className="text-xs text-muted leading-relaxed">{description}</div>}
         </div>
       )}
     </label>

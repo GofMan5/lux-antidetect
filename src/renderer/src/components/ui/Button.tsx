@@ -2,11 +2,17 @@ import { forwardRef } from 'react'
 import { cn } from '@renderer/lib/utils'
 import { BTN_BASE } from '@renderer/lib/ui'
 
+// Champagne Noir variants. Primary uses the gold token with dark text for
+// AAA contrast; secondary stays neutral with edge border; danger is muted
+// rose, not screaming red. Active state settles 0.5px instead of scaling
+// — easier on the eye in long sessions.
 const variantStyles = {
-  primary: 'bg-accent text-white hover:bg-accent-dim active:scale-[0.97] shadow-[0_0_20px_var(--color-accent-glow)]',
-  secondary: 'bg-elevated text-content border border-edge hover:bg-card hover:border-muted/30',
-  danger: 'bg-err/10 text-err border border-err/20 hover:bg-err/20',
-  ghost: 'text-muted hover:text-content hover:bg-elevated'
+  primary:
+    'bg-accent text-[#1a1612] hover:bg-accent-dim active:translate-y-[0.5px] ' +
+    'shadow-[0_1px_0_0_rgba(255,255,255,0.18)_inset,0_2px_8px_rgba(212,176,117,0.18)]',
+  secondary: 'bg-elevated/60 text-content border border-edge hover:bg-elevated hover:border-edge/80 active:translate-y-[0.5px]',
+  danger: 'bg-err/8 text-err border border-err/25 hover:bg-err/15 hover:border-err/40 active:translate-y-[0.5px]',
+  ghost: 'text-muted hover:text-content hover:bg-elevated/60 active:translate-y-[0.5px]'
 }
 
 const sizeStyles = {
@@ -28,9 +34,9 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       const iconSizeMap = { sm: 'h-7 w-7', md: 'h-9 w-9', lg: 'h-11 w-11' }
       const iconVariantMap = {
         primary: 'text-accent hover:text-accent-dim hover:bg-accent/10',
-        secondary: 'text-muted hover:text-content hover:bg-elevated',
-        danger: 'text-err hover:bg-err/10',
-        ghost: 'text-muted hover:text-content hover:bg-elevated'
+        secondary: 'text-muted hover:text-content hover:bg-elevated/60',
+        danger: 'text-err hover:bg-err/12',
+        ghost: 'text-muted hover:text-content hover:bg-elevated/60'
       }
       return (
         <button
@@ -38,7 +44,9 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           type={type}
           disabled={disabled || loading}
           className={cn(
-            'inline-flex items-center justify-center rounded-[--radius-md] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed',
+            'inline-flex items-center justify-center rounded-[--radius-md]',
+            'transition-[background-color,color] duration-150 ease-[var(--ease-osmosis)]',
+            'cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed',
             iconSizeMap[size],
             iconVariantMap[variant],
             className

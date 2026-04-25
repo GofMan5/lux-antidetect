@@ -22,7 +22,7 @@ export function Tabs({ tabs, activeTab, onChange, className }: TabsProps) {
   }, [activeTab])
 
   return (
-    <div ref={containerRef} role="tablist" className={cn('relative flex gap-1 border-b border-edge', className)}>
+    <div ref={containerRef} role="tablist" className={cn('relative flex gap-0.5 border-b border-edge/60', className)}>
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -32,8 +32,9 @@ export function Tabs({ tabs, activeTab, onChange, className }: TabsProps) {
           data-tab-id={tab.id}
           onClick={() => onChange(tab.id)}
           className={cn(
-            'relative inline-flex items-center gap-1.5 px-3 pb-2.5 pt-1 text-sm transition-colors',
-            activeTab === tab.id ? 'text-content' : 'text-muted hover:text-content'
+            'relative inline-flex items-center gap-1.5 px-3.5 pb-2.5 pt-1.5 text-[13px] font-medium',
+            'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+            activeTab === tab.id ? 'text-content' : 'text-muted hover:text-content/90'
           )}
         >
           {tab.icon}
@@ -41,7 +42,7 @@ export function Tabs({ tabs, activeTab, onChange, className }: TabsProps) {
         </button>
       ))}
       <div
-        className="absolute bottom-0 h-0.5 bg-accent rounded-full transition-all duration-200"
+        className="absolute -bottom-px h-[2px] bg-accent rounded-full shadow-[0_0_8px_var(--color-accent-glow)] transition-all duration-200 ease-[var(--ease-osmosis)]"
         style={{ left: indicator.left, width: indicator.width }}
       />
     </div>

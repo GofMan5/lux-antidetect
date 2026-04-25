@@ -47,9 +47,10 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
         <span
           className={cn(
             'absolute right-9 top-1/2 -translate-y-1/2 rounded-full px-1.5 py-0.5 text-[10px] font-mono tabular-nums',
+            'ring-1 ring-inset',
             matchCount === 0
-              ? 'bg-err/10 text-err border border-err/25'
-              : 'bg-elevated text-muted border border-edge/60'
+              ? 'bg-err/10 text-err ring-err/20'
+              : 'bg-elevated text-muted ring-edge/80'
           )}
           aria-label={`${matchCount} match${matchCount === 1 ? '' : 'es'}`}
         >
@@ -60,7 +61,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
         <button
           type="button"
           onClick={() => onChange('')}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-[--radius-sm] p-0.5 text-muted hover:text-content hover:bg-elevated transition-colors"
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-[--radius-sm] p-0.5 text-muted hover:text-content hover:bg-elevated transition-colors duration-150 ease-[var(--ease-osmosis)]"
           aria-label="Clear search"
           title="Clear (Esc)"
         >

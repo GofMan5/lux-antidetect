@@ -69,20 +69,21 @@ export function Modal({ open, onClose, title, description, children, actions, si
         aria-modal
         aria-labelledby={title ? titleId : undefined}
         className={cn(
-          'relative z-10 w-full rounded-[--radius-xl] bg-card border border-edge p-6 shadow-2xl animate-scaleIn',
+          'relative z-10 w-full rounded-[--radius-xl] bg-card border border-edge/80 p-6',
+          'surface-lit shadow-[var(--shadow-lg)] animate-scaleIn',
           'max-h-[calc(100dvh-2rem)] overflow-y-auto',
           sizeStyles[size]
         )}
       >
         {title && (
-          <div className="mb-4">
-            <h2 id={titleId} className="text-base font-semibold text-content">{title}</h2>
-            {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+          <div className="mb-5">
+            <h2 id={titleId} className="text-[15px] font-semibold text-content tracking-tight">{title}</h2>
+            {description && <p className="mt-1.5 text-[13px] text-muted leading-relaxed">{description}</p>}
           </div>
         )}
         <div>{children}</div>
         {actions && (
-          <div className="mt-5 flex items-center justify-end gap-2">{actions}</div>
+          <div className="mt-6 flex items-center justify-end gap-2">{actions}</div>
         )}
       </div>
     </div>

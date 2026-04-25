@@ -18,19 +18,20 @@ export function EmptyState({ icon, title, description, action, size = 'md' }: Em
     >
       <div
         className={[
-          'mb-4 flex items-center justify-center rounded-full',
+          'mb-4 flex items-center justify-center rounded-full surface-lit',
           'bg-gradient-to-b from-elevated to-surface-alt',
-          'border border-edge/60 text-muted/70 shadow-sm',
-          isSm ? 'h-10 w-10 [&>svg]:h-5 [&>svg]:w-5' : 'h-14 w-14 [&>svg]:h-6 [&>svg]:w-6'
+          'border border-edge/60 text-muted/70',
+          'shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_4px_12px_rgba(0,0,0,0.3)]',
+          isSm ? 'h-10 w-10 [&>svg]:h-5 [&>svg]:w-5' : 'h-16 w-16 [&>svg]:h-7 [&>svg]:w-7'
         ].join(' ')}
       >
         {icon}
       </div>
-      <h3 className={isSm ? 'text-sm font-medium text-content' : 'text-base font-semibold text-content'}>
+      <h3 className={isSm ? 'text-[13px] font-semibold text-content tracking-tight' : 'text-[15px] font-semibold text-content tracking-tight'}>
         {title}
       </h3>
       {description && (
-        <p className={['mt-1.5 max-w-sm text-muted leading-relaxed', isSm ? 'text-xs' : 'text-sm'].join(' ')}>
+        <p className={['mt-1.5 max-w-sm text-muted leading-relaxed', isSm ? 'text-xs' : 'text-[13px]'].join(' ')}>
           {description}
         </p>
       )}

@@ -143,7 +143,7 @@ export function DropdownMenu({ trigger, items, align = 'right' }: DropdownMenuPr
         <div
           ref={menuRef}
           role="menu"
-          className="fixed min-w-[200px] max-w-[320px] max-h-[min(60vh,480px)] overflow-y-auto rounded-[--radius-lg] bg-elevated border border-edge p-1 shadow-xl animate-scaleIn"
+          className="fixed min-w-[200px] max-w-[320px] max-h-[min(60vh,480px)] overflow-y-auto rounded-[--radius-lg] bg-elevated/95 border border-edge/80 p-1 backdrop-blur-md surface-lit shadow-[var(--shadow-md)] animate-scaleIn"
           style={{ top: pos.top, left: pos.left, zIndex: 200 }}
         >
           {items.map((item, i) => {
@@ -165,12 +165,13 @@ export function DropdownMenu({ trigger, items, align = 'right' }: DropdownMenuPr
                 disabled={item.disabled}
                 onClick={() => { item.onClick(); close() }}
                 className={cn(
-                  'flex w-full items-center gap-2 rounded-[--radius-md] px-2.5 py-1.5 text-sm transition-colors whitespace-nowrap',
+                  'flex w-full items-center gap-2 rounded-[--radius-md] px-2.5 py-[7px] text-[13px] whitespace-nowrap',
+                  'transition-colors duration-150 ease-[var(--ease-osmosis)]',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                   item.disabled && 'opacity-40 pointer-events-none',
                   i === focusIdx && 'bg-card',
                   item.variant === 'danger'
-                    ? 'text-err hover:bg-err/10'
+                    ? 'text-err hover:bg-err/12'
                     : 'text-content hover:bg-card'
                 )}
               >

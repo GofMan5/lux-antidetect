@@ -77,18 +77,19 @@ export function ConfirmDialog(): React.JSX.Element | null {
         </>
       }
     >
-      <div className="flex flex-col items-center text-center pt-2 pb-1">
+      <div className="flex flex-col items-center text-center pt-1 pb-1">
         <div
-          className={`h-12 w-12 rounded-full flex items-center justify-center mb-4 ${
-            danger ? 'bg-err/10' : 'bg-warn/10'
+          className={`h-14 w-14 rounded-full flex items-center justify-center mb-4 ring-1 ring-inset ${
+            danger ? 'bg-err/10 ring-err/25' : 'bg-warn/10 ring-warn/25'
           }`}
         >
           <IconComponent
             className={`h-6 w-6 ${danger ? 'text-err' : 'text-warn'}`}
+            strokeWidth={1.9}
           />
         </div>
-        <h2 className="text-base font-semibold text-content mb-2">{title}</h2>
-        <p className="text-sm text-muted leading-relaxed">{message}</p>
+        <h2 className="text-[15px] font-semibold text-content tracking-tight mb-2">{title}</h2>
+        <p className="text-[13px] text-muted leading-relaxed max-w-[320px]">{message}</p>
       </div>
     </Modal>
   )

@@ -15,8 +15,8 @@ export function Card({ title, description, children, actions, className }: CardP
       {(title || actions) && (
         <div className={CARD_HEADER}>
           <div>
-            {title && <h3 className="text-sm font-semibold text-content">{title}</h3>}
-            {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
+            {title && <h3 className="text-[14px] font-semibold text-content tracking-tight">{title}</h3>}
+            {description && <p className="mt-1 text-[12px] text-muted leading-relaxed">{description}</p>}
           </div>
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </div>

@@ -151,9 +151,10 @@ function ToastItem({ toast }: { toast: Toast }): React.JSX.Element {
       role="status"
       aria-live="polite"
       className={cn(
-        'relative flex items-start gap-3 rounded-[--radius-lg] border border-edge border-l-4 px-4 py-3',
-        'bg-card/90 backdrop-blur-xl shadow-2xl shadow-black/40',
-        'transition-all duration-200',
+        'relative flex items-start gap-3 rounded-[--radius-lg] border border-edge/80 border-l-[3px] px-4 py-3',
+        'bg-card/95 backdrop-blur-xl surface-lit',
+        'shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_8px_24px_rgba(0,0,0,0.5)]',
+        'transition-all duration-200 ease-[var(--ease-osmosis)]',
         accentBorder[toast.type],
         exiting ? 'opacity-0 translate-x-4' : 'animate-slideInRight'
       )}
