@@ -20,95 +20,97 @@ export interface Theme {
   isCustom?: boolean
 }
 
+// Status colors are intentionally muted across all presets — neon green
+// and screaming red are fatiguing on a tool you stare at for hours. Keep
+// them legible but quiet.
+const STATUS_MUTED = { ok: '#7eaa6c', warn: '#d4a168', err: '#c95960' }
+
 export const THEME_PRESETS: Theme[] = [
   {
-    id: 'midnight-blue',
-    name: 'Midnight Blue',
+    // Default. Champagne gold accent on a deep ink surface with a faint
+    // warm undertone — distinct from the cyan / blue / purple stack
+    // every other dev tool ships.
+    id: 'champagne-noir',
+    name: 'Champagne Noir',
     colors: {
-      surface: '#09090b',
-      surfaceAlt: '#0c0c10',
-      card: '#131318',
-      elevated: '#1a1a22',
-      edge: '#232330',
-      content: '#ececef',
-      muted: '#71717a',
-      accent: '#3b82f6',
-      accentDim: '#2563eb',
-      ok: '#22c55e',
-      warn: '#eab308',
-      err: '#ef4444'
+      surface: '#0a0b0d',
+      surfaceAlt: '#0e0f12',
+      card: '#15171b',
+      elevated: '#1d2026',
+      edge: '#2a2d34',
+      content: '#e8e6e3',
+      muted: '#7a7d85',
+      accent: '#d4b075',
+      accentDim: '#b8965e',
+      ...STATUS_MUTED
     }
   },
   {
-    id: 'midnight-purple',
-    name: 'Violet Night',
+    // Cool counterpart for users who prefer blue-leaning accents.
+    id: 'sapphire-noir',
+    name: 'Sapphire Noir',
     colors: {
-      surface: '#09090b',
-      surfaceAlt: '#0e0c14',
-      card: '#15131e',
-      elevated: '#1c1a28',
-      edge: '#282636',
-      content: '#ececef',
-      muted: '#8b85a0',
-      accent: '#8b5cf6',
-      accentDim: '#7c3aed',
-      ok: '#22c55e',
-      warn: '#eab308',
-      err: '#ef4444'
+      surface: '#0a0b0e',
+      surfaceAlt: '#0e1014',
+      card: '#14171d',
+      elevated: '#1c2029',
+      edge: '#282d38',
+      content: '#e6e7eb',
+      muted: '#7a7f8a',
+      accent: '#7ea7d4',
+      accentDim: '#5d8bbd',
+      ...STATUS_MUTED
     }
   },
   {
-    id: 'emerald-dark',
-    name: 'Emerald',
+    // Mossy / forest green — calmer than typical neon-emerald tools.
+    id: 'verdant-noir',
+    name: 'Verdant Noir',
     colors: {
-      surface: '#09090b',
-      surfaceAlt: '#0a0e0c',
-      card: '#111916',
-      elevated: '#182620',
-      edge: '#203028',
-      content: '#ececef',
-      muted: '#6b8577',
-      accent: '#10b981',
-      accentDim: '#059669',
-      ok: '#22c55e',
-      warn: '#eab308',
-      err: '#ef4444'
+      surface: '#0a0c0a',
+      surfaceAlt: '#0d100e',
+      card: '#141812',
+      elevated: '#1c2118',
+      edge: '#283021',
+      content: '#e7e9e3',
+      muted: '#7d847a',
+      accent: '#9ab87a',
+      accentDim: '#7da062',
+      ...STATUS_MUTED
     }
   },
   {
-    id: 'crimson-dark',
-    name: 'Crimson',
+    // Dusty rose — distinct from "cyber red" tropes.
+    id: 'rose-noir',
+    name: 'Rose Noir',
     colors: {
-      surface: '#09090b',
-      surfaceAlt: '#0e0a0a',
-      card: '#181214',
-      elevated: '#241a1c',
-      edge: '#302224',
-      content: '#ececef',
-      muted: '#9a7b7e',
-      accent: '#f43f5e',
-      accentDim: '#e11d48',
-      ok: '#22c55e',
-      warn: '#eab308',
-      err: '#f87171'
+      surface: '#0c0a0b',
+      surfaceAlt: '#0f0c0e',
+      card: '#181317',
+      elevated: '#221b1f',
+      edge: '#2f2429',
+      content: '#ebe4e7',
+      muted: '#857a7e',
+      accent: '#c97e93',
+      accentDim: '#b06578',
+      ...STATUS_MUTED
     }
   },
   {
-    id: 'ocean-teal',
-    name: 'Ocean',
+    // Cool mineral teal — premium, not "ocean blue Cancun".
+    id: 'mineral-noir',
+    name: 'Mineral Noir',
     colors: {
-      surface: '#09090b',
-      surfaceAlt: '#0a0d0e',
-      card: '#111819',
-      elevated: '#182424',
-      edge: '#202e30',
-      content: '#ececef',
-      muted: '#6b8a8e',
-      accent: '#14b8a6',
-      accentDim: '#0d9488',
-      ok: '#22c55e',
-      warn: '#eab308',
-      err: '#ef4444'
+      surface: '#0a0c0d',
+      surfaceAlt: '#0d0f11',
+      card: '#13181a',
+      elevated: '#1a2123',
+      edge: '#252e30',
+      content: '#e4e8ea',
+      muted: '#7a8488',
+      accent: '#86b9bd',
+      accentDim: '#699ba0',
+      ...STATUS_MUTED
     }
   }
 ]

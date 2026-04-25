@@ -1,37 +1,76 @@
 @import "tailwindcss";
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * Lux design system — "Champagne Noir"
+ *
+ * Surfaces: deep ink with a faint warm undertone. Each layer steps up by
+ * a tiny luminance and adds a 1px inset highlight at the top — that gives
+ * cards a felt sense of being "lit from above" without the cheap gradient
+ * trick.
+ *
+ * Accent: champagne gold (#d4b075). Distinct from the cyan / purple /
+ * cobalt-blue palette that every other dev tool ships, signals the "Lux"
+ * (luxury / light) brand without being gaudy. Used sparingly — primary
+ * actions, active nav, focus rings.
+ *
+ * Status colors are intentionally muted (sage / amber / dusty rose). On a
+ * tool people stare at for hours, neon green and screaming red are
+ * fatiguing. The muted set is still readable but stops shouting.
+ *
+ * Typography: Inter Variable, tabular-nums for IDs/timestamps via
+ * font-feature-settings. Letter-spacing is slightly negative (-0.012em)
+ * so dense rows don't feel airy.
+ *
+ * Motion easing comes from one curve everywhere — `cubic-bezier(0.32,
+ * 0.72, 0, 1)`. It's the "osmosis" curve: gentle entry, slight overshoot
+ * at the end, no bounce.
+ * ──────────────────────────────────────────────────────────────────────── */
+
 @theme {
-  --color-surface: #08080c;
-  --color-surface-alt: #0c0c12;
-  --color-card: #12121a;
-  --color-elevated: #1a1a26;
-  --color-edge: #252535;
-  --color-content: #e4e4ec;
-  --color-muted: #6e6e82;
-  --color-accent: #7c5cfc;
-  --color-accent-dim: #6a4ce6;
-  --color-accent-glow: #7c5cfc26;
-  --color-ok: #10b981;
-  --color-warn: #f59e0b;
-  --color-err: #ef4444;
-  --color-info: #38bdf8;
+  /* Surfaces — warmer near-blacks, layered by ~3% luminance */
+  --color-surface: #0a0b0d;
+  --color-surface-alt: #0e0f12;
+  --color-card: #15171b;
+  --color-elevated: #1d2026;
+  --color-edge: #2a2d34;
+
+  /* Type — content is warm off-white (not pure #fff), muted slightly cool */
+  --color-content: #e8e6e3;
+  --color-muted: #7a7d85;
+
+  /* Accent — champagne gold, distinct from typical dev-tool palettes */
+  --color-accent: #d4b075;
+  --color-accent-dim: #b8965e;
+  --color-accent-glow: rgba(212, 176, 117, 0.18);
+
+  /* Status — muted: sage / warm amber / dusty rose / soft teal */
+  --color-ok: #7eaa6c;
+  --color-warn: #d4a168;
+  --color-err: #c95960;
+  --color-info: #7da9c4;
+
+  /* Radii — slightly tighter than before; aggressive rounding feels toy-ish on a pro tool */
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.35);
-  --shadow-focus: 0 0 0 1px var(--color-accent), 0 0 0 3px var(--color-accent-glow);
+  /* Shadows — every elevated surface gets a 1px inset top highlight (premium feel) + soft drop */
+  --shadow-sm: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 16px 48px rgba(0, 0, 0, 0.6);
+  --shadow-focus: 0 0 0 1px var(--color-accent), 0 0 0 4px rgba(212, 176, 117, 0.15);
 
-  --animate-fadeIn: fadeIn 0.15s ease-out;
+  /* Motion — single easing curve everywhere */
+  --ease-osmosis: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --animate-fadeIn: fadeIn 0.18s var(--ease-osmosis);
   --animate-fadeOut: fadeOut 0.15s ease-in;
-  --animate-slideUp: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  --animate-slideDown: slideDown 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  --animate-scaleIn: scaleIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slideUp: slideUp 0.24s var(--ease-osmosis);
+  --animate-slideDown: slideDown 0.24s var(--ease-osmosis);
+  --animate-scaleIn: scaleIn 0.18s var(--ease-osmosis);
   --animate-shimmer: shimmer 2s linear infinite;
-  --animate-slideInRight: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slideInRight: slideInRight 0.32s var(--ease-osmosis);
   --animate-toastProgress: toastProgress linear forwards;
 }
 
@@ -66,7 +105,7 @@
 }
 
 @keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
+  from { opacity: 0; transform: scale(0.97); }
   to   { opacity: 1; transform: scale(1); }
 }
 
@@ -75,38 +114,65 @@
   100% { background-position: 200% 0; }
 }
 
+/* ─── Inter font (variable weight) — bundled via Google Fonts CSS import ─── */
+@import url('https://rsms.me/inter/inter.css');
+
 /* Base reset */
+html {
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+@supports (font-variation-settings: normal) {
+  html { font-family: 'Inter var', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+}
+
 body {
-  @apply bg-surface text-content font-sans antialiased;
+  @apply bg-surface text-content antialiased;
   margin: 0;
   font-size: 13px;
+  font-feature-settings: 'cv11', 'ss01', 'ss03'; /* curated alternates: open 4, alt 1/L, alt G */
+  font-variation-settings: 'opsz' 14;
+  letter-spacing: -0.012em;
   overflow: hidden;
-  letter-spacing: -0.01em;
+  /* Subtle vignette — warm radial darkening at the edges, perceived as depth */
+  background-image: radial-gradient(circle at 50% 0%, rgba(212, 176, 117, 0.025) 0%, transparent 60%),
+                    radial-gradient(circle at 100% 100%, rgba(122, 125, 133, 0.02) 0%, transparent 50%);
 }
+
+/* Tabular numbers for densely-packed numeric data (timestamps, ports, sizes). */
+.tabular-nums { font-feature-settings: 'tnum'; }
 
 * { box-sizing: border-box; }
 
-/* Focus ring — softer 1px + glow halo, easier on the eye than the old 2+2px stack */
+/* Focus ring — gold halo, 1px inner + 4px outer at low opacity. */
 *:focus-visible {
   outline: none;
   box-shadow: var(--shadow-focus);
   border-radius: var(--radius-sm);
-  transition: box-shadow 0.12s ease-out;
+  transition: box-shadow 0.16s var(--ease-osmosis);
 }
 
-/* Buttons, rows, and anything tagged with `interactive` get a subtle hover lift. */
+/* Anything tagged `interactive` gets a uniform hover lift + active press. */
 .interactive {
-  transition: background-color 0.12s ease-out, border-color 0.12s ease-out,
-              transform 0.12s ease-out, box-shadow 0.12s ease-out, color 0.12s ease-out;
+  transition:
+    background-color 0.16s var(--ease-osmosis),
+    border-color 0.16s var(--ease-osmosis),
+    transform 0.12s var(--ease-osmosis),
+    box-shadow 0.16s var(--ease-osmosis),
+    color 0.16s var(--ease-osmosis);
 }
 .interactive:hover:not(:disabled) { background-color: var(--color-elevated); }
-.interactive:active:not(:disabled) { transform: translateY(1px); }
+.interactive:active:not(:disabled) { transform: translateY(0.5px); }
 
-/* Scrollbar — Webkit */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+/* Scrollbar — Webkit. Edge-tone thumb, gold on hover. */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-edge); border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-accent); }
+::-webkit-scrollbar-thumb {
+  background: var(--color-edge);
+  border-radius: 999px;
+  transition: background 0.16s var(--ease-osmosis);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-accent-dim); }
 
 /* Scrollbar — Firefox */
 * {
@@ -117,10 +183,10 @@ body {
 /* Selection */
 ::selection {
   background-color: var(--color-accent);
-  color: white;
+  color: #1a1a1a;
 }
 
-/* Select styling */
+/* Native select dropdown — chevron uses muted tone. */
 select option {
   background-color: var(--color-card);
   color: var(--color-content);
@@ -130,28 +196,32 @@ select option {
 select {
   -webkit-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a7d85' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 32px !important;
 }
 
-/* Input resets */
-input:focus, select:focus, textarea:focus {
-  outline: none;
-}
+input:focus, select:focus, textarea:focus { outline: none; }
 
 /* Electron drag region */
 .drag-region { -webkit-app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; }
 
-/* Glass effect */
+/* Glass — warm-undertone version of the surface */
 .glass {
-  backdrop-filter: blur(12px);
-  background: rgba(12, 12, 18, 0.8);
+  backdrop-filter: blur(14px) saturate(140%);
+  background: rgba(14, 15, 18, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
-/* Scrollbar hide */
+/* Surface highlight — a 1px inset gradient at the top of any card-style
+ * element. Adds a "lit from above" feel without being a separate visible
+ * line. Apply via `.surface-lit`. */
+.surface-lit {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, transparent 24px);
+}
+
 .scrollbar-hide::-webkit-scrollbar { display: none; }
 .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
 input[type="color"] {
@@ -159,9 +229,7 @@ input[type="color"] {
   border: none;
   padding: 0;
 }
-input[type="color"]::-webkit-color-swatch-wrapper {
-  padding: 2px;
-}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
 input[type="color"]::-webkit-color-swatch {
   border: 1px solid var(--color-edge);
   border-radius: 6px;
@@ -174,7 +242,7 @@ input[type="number"]::-webkit-outer-spin-button {
   margin: 0;
 }
 
-/* Shimmer loading effect */
+/* Loading shimmer — uses elevated→edge gradient sweep. */
 .shimmer {
   background: linear-gradient(
     90deg,
@@ -186,27 +254,31 @@ input[type="number"]::-webkit-outer-spin-button {
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
-/* Update progress bar shimmer */
+/* Update progress bar — gold + dim shimmer */
 .shimmer-bar {
   background-image: linear-gradient(
     90deg,
-    var(--color-accent) 0%,
-    var(--color-accent-dim) 40%,
-    #9b7eff 50%,
-    var(--color-accent-dim) 60%,
-    var(--color-accent) 100%
+    var(--color-accent-dim) 0%,
+    var(--color-accent) 50%,
+    var(--color-accent-dim) 100%
   );
   background-size: 200% 100%;
   animation: shimmer 2s linear infinite;
 }
 
-/* Pulsing glow for CTA buttons */
+/* Pulsing glow — used sparingly (running session indicator, primary CTA on hero) */
 @keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 20px var(--color-accent-glow); }
-  50% { box-shadow: 0 0 30px var(--color-accent-glow), 0 0 60px var(--color-accent-glow); }
+  0%, 100% { box-shadow: 0 0 14px var(--color-accent-glow); }
+  50% { box-shadow: 0 0 22px var(--color-accent-glow), 0 0 44px var(--color-accent-glow); }
 }
 
-.pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
-}
+.pulse-glow { animation: pulse-glow 2.4s ease-in-out infinite; }
 
+/* Subtle hover lift — applied to clickable cards / row groups. */
+.hover-lift {
+  transition: transform 0.16s var(--ease-osmosis), box-shadow 0.16s var(--ease-osmosis);
+}
+.hover-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
