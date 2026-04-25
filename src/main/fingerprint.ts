@@ -779,6 +779,45 @@ function defaultFontListFor(platform: string): readonly string[] {
 
 // ─── Injection script ────────────────────────────────────────────────────
 
+/**
+ * Build the spoof script applied inside a Worker / SharedWorker / ServiceWorker
+ * scope. Subset of the main-world script: only `navigator.*`, `Intl.*`, and
+ * `Date.prototype.toLocale*` exist in WorkerGlobalScope.
+ *
+ * The script is self-contained — no closures from the caller, no DOM refs —
+ * so it can be sent verbatim to a worker target via CDP `Runtime.evaluate`
+ * after `Target.setAutoAttach`.
+ *
+ * Re-normalizes the input. To guarantee main-world / worker-world spoof
+ * identity (so cross-context fingerprint comparators see the same values),
+ * `buildInjectionScript` uses the unexported `buildWorkerInjectionFromNormalized`
+ * with the already-normalized fingerprint.
+ */
+export function buildWorkerInjectionScript(inputFp: Fingerprint): string {
+  return buildWorkerInjectionFromNormalized(normalizeFingerprint(inputFp))
+}
+
+function buildWorkerInjectionFromNormalized(fp: Fingerprint): string {
+  const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
+  const languagesJson = JSON.stringify(languages)
+  return (
+    `(function(){try{var n=navigator;var d=Object.defineProperty;var langs=${languagesJson};var tz=${JSON.stringify(fp.timezone)};` +
+    `d(n,"language",{get:function(){return ${JSON.stringify(languages[0] || 'en-US')}},configurable:true});` +
+    `d(n,"languages",{get:function(){return langs.slice()},configurable:true});` +
+    `d(n,"userAgent",{get:function(){return ${JSON.stringify(fp.user_agent)}},configurable:true});` +
+    `d(n,"appVersion",{get:function(){return ${JSON.stringify(fp.user_agent.replace('Mozilla/', ''))}},configurable:true});` +
+    `d(n,"platform",{get:function(){return ${JSON.stringify(fp.platform)}},configurable:true});` +
+    `d(n,"vendor",{get:function(){return "Google Inc."},configurable:true});` +
+    `d(n,"maxTouchPoints",{get:function(){return ${fp.device_type === 'mobile' ? 5 : 0}},configurable:true});` +
+    `d(n,"hardwareConcurrency",{get:function(){return ${fp.hardware_concurrency}},configurable:true});` +
+    `d(n,"deviceMemory",{get:function(){return ${fp.device_memory}},configurable:true});` +
+    `var ODTF=Intl.DateTimeFormat;Intl.DateTimeFormat=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();if(options&&typeof options==="object"){if(!options.timeZone)options.timeZone=tz;}else if(!options){options={timeZone:tz};}return new ODTF(locales,options);};` +
+    `Intl.DateTimeFormat.prototype=ODTF.prototype;Intl.DateTimeFormat.supportedLocalesOf=ODTF.supportedLocalesOf.bind(ODTF);` +
+    `["toLocaleString","toLocaleDateString","toLocaleTimeString"].forEach(function(name){var orig=Date.prototype[name];Date.prototype[name]=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();options=options&&typeof options==="object"?options:{};if(!options.timeZone)options.timeZone=tz;return orig.call(this,locales,options);};});` +
+    `}catch(e){}})();\n`
+  )
+}
+
 export function buildInjectionScript(inputFp: Fingerprint): string {
   const fp = normalizeFingerprint(inputFp)
   const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
@@ -796,23 +835,10 @@ export function buildInjectionScript(inputFp: Fingerprint): string {
 
   const isChrome = fp.user_agent.includes('Chrome/')
 
-  // Pre-build worker spoofing code (injected into Worker/SharedWorker constructors)
-  const workerSpoofCode = JSON.stringify(
-    `(function(){try{var n=navigator;var d=Object.defineProperty;var langs=${languagesJson};var tz=${JSON.stringify(fp.timezone)};` +
-    `d(n,"language",{get:function(){return ${JSON.stringify(languages[0] || 'en-US')}},configurable:true});` +
-    `d(n,"languages",{get:function(){return langs.slice()},configurable:true});` +
-    `d(n,"userAgent",{get:function(){return ${JSON.stringify(fp.user_agent)}},configurable:true});` +
-    `d(n,"appVersion",{get:function(){return ${JSON.stringify(fp.user_agent.replace('Mozilla/', ''))}},configurable:true});` +
-    `d(n,"platform",{get:function(){return ${JSON.stringify(fp.platform)}},configurable:true});` +
-    `d(n,"vendor",{get:function(){return "Google Inc."},configurable:true});` +
-    `d(n,"maxTouchPoints",{get:function(){return ${fp.device_type === 'mobile' ? 5 : 0}},configurable:true});` +
-    `d(n,"hardwareConcurrency",{get:function(){return ${fp.hardware_concurrency}},configurable:true});` +
-    `d(n,"deviceMemory",{get:function(){return ${fp.device_memory}},configurable:true});` +
-    `var ODTF=Intl.DateTimeFormat;Intl.DateTimeFormat=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();if(options&&typeof options==="object"){if(!options.timeZone)options.timeZone=tz;}else if(!options){options={timeZone:tz};}return new ODTF(locales,options);};` +
-    `Intl.DateTimeFormat.prototype=ODTF.prototype;Intl.DateTimeFormat.supportedLocalesOf=ODTF.supportedLocalesOf.bind(ODTF);` +
-    `["toLocaleString","toLocaleDateString","toLocaleTimeString"].forEach(function(name){var orig=Date.prototype[name];Date.prototype[name]=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();options=options&&typeof options==="object"?options:{};if(!options.timeZone)options.timeZone=tz;return orig.call(this,locales,options);};});` +
-    `}catch(e){}})();\n`
-  )
+  // Pre-build worker spoofing code (injected into Worker/SharedWorker constructors).
+  // Uses the same normalized `fp` so main-world spoof and worker-world spoof
+  // never diverge on Math.random() fallbacks during normalization.
+  const workerSpoofCode = JSON.stringify(buildWorkerInjectionFromNormalized(fp))
 
   return `(function(){
 'use strict';

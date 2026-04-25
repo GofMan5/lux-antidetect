@@ -7,6 +7,7 @@ import { killAllSessions, initSessionsDb } from './sessions'
 import { killAllBrowsers } from './browser'
 import { initAutoUpdater } from './updater'
 import { initBrowserManager, setMainWindow as setBrowserManagerMainWindow } from './browser-manager'
+import { initLogger, installCrashHandlers, logger, getLogFilePath } from './logger'
 import type Database from 'better-sqlite3'
 
 // Portable mode: if a "data" directory exists next to the executable, use it
@@ -105,8 +106,16 @@ function setupTray(mainWindow: BrowserWindow): void {
   ]))
 }
 
+// Crash handlers can be installed before ready — they catch errors thrown
+// during the rest of bootstrap. The file logger must wait until the app
+// path is available.
+installCrashHandlers()
+
 app.whenReady().then(async () => {
   app.setAppUserModelId('com.lux.antidetect')
+
+  initLogger(app.getPath('logs'))
+  logger.info(`app starting v${app.getVersion()} ${process.platform}/${process.arch}`)
 
   app.on('browser-window-created', (_, window) => {
     window.removeMenu()
@@ -153,6 +162,14 @@ app.whenReady().then(async () => {
     minimizeToTray = enabled
     if (enabled) setupTray(mainWindow)
     else if (tray) { tray.destroy(); tray = null }
+  })
+
+  // Expose logs folder so users can attach main.log to bug reports.
+  ipcMain.handle('open-logs-folder', () => {
+    const path = getLogFilePath()
+    if (!path) return { ok: false, error: 'logger not initialized' }
+    shell.showItemInFolder(path)
+    return { ok: true, path }
   })
 
   // Database backup/restore
@@ -208,7 +225,9 @@ app.whenReady().then(async () => {
       for (const profileId of autoStartProfiles) {
         try {
           await launchBrowser(db, profileId, profilesDir, mainWindow)
-        } catch { /* skip failed auto-launches */ }
+        } catch (err) {
+          logger.warn('auto-launch failed', { profileId }, err)
+        }
       }
     }, 3000)
   }

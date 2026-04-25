@@ -8,6 +8,7 @@ import type Database from 'better-sqlite3'
 import type { BrowserType, Fingerprint, Profile, Proxy } from './models'
 import {
   buildInjectionScript,
+  buildWorkerInjectionScript,
   normalizeFingerprint,
   parseFingerprintLanguages,
   regenerateFingerprint
@@ -573,6 +574,7 @@ function startCDPInjection(
   profileId: string,
   profileDir: string,
   script: string,
+  workerScript: string,
   fp: Fingerprint,
   proxyCredentials?: { username: string; password: string }
 ): { stop: () => void } {
@@ -641,7 +643,7 @@ function startCDPInjection(
       if (wsUrl) {
         // Extract path from ws://127.0.0.1:PORT/devtools/browser/UUID
         const wsPath = new URL(wsUrl).pathname
-        startBrowserWsListener(port, wsPath, script, injectedTargets, injectTarget, () => stopped)
+        startBrowserWsListener(port, wsPath, workerScript, injectedTargets, injectTarget, () => stopped)
       }
     } catch { /* fall back to polling */ }
 
@@ -680,11 +682,20 @@ function startCDPInjection(
   }
 }
 
-/** Open a persistent WebSocket to the browser endpoint and listen for Target.targetCreated events. */
+/**
+ * Open a persistent WebSocket to the browser endpoint, listen for new
+ * targets, and inject the worker spoof into Worker / SharedWorker /
+ * ServiceWorker targets via CDP `Target.setAutoAttach` (flatten mode).
+ *
+ * Without this, `new Worker(blob)` opens a fresh `WorkerGlobalScope` with
+ * native `navigator.userAgent` etc. — CreepJS exploits this directly,
+ * which would flag the profile as automation. Page targets keep the
+ * existing per-target WS injection path.
+ */
 function startBrowserWsListener(
   port: number,
   wsPath: string,
-  _script: string,
+  workerScript: string,
   injectedTargets: Set<string>,
   injectTarget: (targetId: string) => Promise<void>,
   isStopped: () => boolean
@@ -704,9 +715,16 @@ function startBrowserWsListener(
 
   req.on('upgrade', (_res, socket) => {
     let msgId = 1
+    // Dedup attached sessions — `Target.attachedToTarget` can fire twice on
+    // reconnect / target reuse and we don't want to inject the spoof twice
+    // (idempotent in theory but doubles overhead).
+    const attachedSessions = new Set<string>()
 
-    function sendWsMsg(method: string, params: Record<string, unknown> = {}): void {
-      const payload = JSON.stringify({ id: msgId++, method, params })
+    function sendWsMsg(method: string, params: Record<string, unknown> = {}, sessionId?: string): void {
+      const frame = sessionId
+        ? { sessionId, id: msgId++, method, params }
+        : { id: msgId++, method, params }
+      const payload = JSON.stringify(frame)
       const buf = Buffer.from(payload, 'utf-8')
       const mask = randomBytes(4)
       let header: Buffer
@@ -733,8 +751,17 @@ function startBrowserWsListener(
       try { socket.write(Buffer.concat([header, masked])) } catch { /* socket closed */ }
     }
 
-    // Subscribe to target discovery
+    // Subscribe to target discovery (existing path: page targetCreated → injectTarget).
     sendWsMsg('Target.setDiscoverTargets', { discover: true })
+
+    // Auto-attach all child targets (workers, iframes) with a debugger pause
+    // so we can inject the spoof BEFORE any user code runs. flatten=true
+    // routes child-session messages on this same WebSocket via `sessionId`.
+    sendWsMsg('Target.setAutoAttach', {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true
+    })
 
     // Read frames from browser WebSocket
     let accum = Buffer.alloc(0)
@@ -767,6 +794,32 @@ function startBrowserWsListener(
             const info = msg.params?.targetInfo
             if (info && info.type === 'page' && !injectedTargets.has(info.targetId)) {
               injectTarget(info.targetId).catch(() => {})
+            }
+          } else if (msg.method === 'Target.attachedToTarget') {
+            const sessionId: string | undefined = msg.params?.sessionId
+            const type: string | undefined = msg.params?.targetInfo?.type
+            if (!sessionId || attachedSessions.has(sessionId)) continue
+            attachedSessions.add(sessionId)
+            if (type === 'worker' || type === 'shared_worker' || type === 'service_worker') {
+              // Inject spoof into the worker before its code runs, then resume.
+              // CDP commands are FIFO per-session, so the evaluate completes
+              // before runIfWaitingForDebugger releases the debugger pause.
+              sendWsMsg('Runtime.evaluate', { expression: workerScript }, sessionId)
+              sendWsMsg('Runtime.runIfWaitingForDebugger', {}, sessionId)
+            } else {
+              // For page / iframe / tab / other child targets the existing
+              // per-target injection path runs the main-world spoof. Cascade
+              // auto-attach into the page session so workers spawned from
+              // sub-frames also reach this listener — browser-level
+              // setAutoAttach only catches top-level children.
+              if (type === 'page' || type === 'iframe' || type === 'tab') {
+                sendWsMsg('Target.setAutoAttach', {
+                  autoAttach: true,
+                  waitForDebuggerOnStart: true,
+                  flatten: true
+                }, sessionId)
+              }
+              sendWsMsg('Runtime.runIfWaitingForDebugger', {}, sessionId)
             }
           }
         } catch { /* partial/invalid JSON */ }
@@ -917,6 +970,40 @@ const cdpInjectors = new Map<string, { stop: () => void }>()
 // Track local SOCKS5 relays used to proxy auth-required SOCKS upstreams
 // (Chromium discards user/pass for SOCKS schemes — see socks5-relay.ts).
 const socksRelays = new Map<string, RelayHandle>()
+
+/**
+ * Override fingerprint timezone + primary language to match the proxy's
+ * known geo. Returns a new object — does NOT mutate the persisted
+ * fingerprint, since profile identity must stay stable in the DB.
+ *
+ * Falls back to the fingerprint's own values when the proxy has no geo
+ * (e.g., user just added the proxy and geoip lookup hasn't run yet).
+ */
+function applyProxyGeoToFingerprint(fp: Fingerprint, proxy: Proxy | undefined): Fingerprint {
+  if (!proxy) return fp
+  const tz = proxy.timezone
+  const locale = proxy.locale
+  if (!tz && !locale) return fp
+
+  let languages = fp.languages
+  if (locale) {
+    try {
+      const existing = JSON.parse(fp.languages) as unknown
+      if (Array.isArray(existing)) {
+        const list = existing.filter((v): v is string => typeof v === 'string')
+        const filtered = list.filter((l) => l !== locale)
+        languages = JSON.stringify([locale, ...filtered])
+      }
+      // Else: keep fp.languages unchanged — corrupt JSON is preserved
+      // rather than overwritten so we don't silently drop user data.
+    } catch { /* keep fp.languages unchanged */ }
+  }
+  return {
+    ...fp,
+    timezone: tz ?? fp.timezone,
+    languages
+  }
+}
 
 function stopSocksRelay(profileId: string): void {
   const relay = socksRelays.get(profileId)
@@ -1413,7 +1500,7 @@ export async function launchBrowser(
       .prepare("SELECT value FROM settings WHERE key = 'auto_regenerate_fingerprint'")
       .get() as { value: string } | undefined
     const shouldRegenerate = autoRegenRow ? JSON.parse(autoRegenRow.value) !== false : true
-    const activeFp = shouldRegenerate
+    const baseFp = shouldRegenerate
       ? regenerateFingerprint(db, profileId, profile.browser_type)
       : normalizeFingerprint(fingerprint)
 
@@ -1432,6 +1519,13 @@ export async function launchBrowser(
       }
     }
     const isSocksProxy = proxy?.protocol === 'socks4' || proxy?.protocol === 'socks5'
+
+    // When the proxy has known geo (from geoip lookup), force the
+    // fingerprint's timezone + primary language to match. Anti-bot vendors
+    // cross-check `Intl.DateTimeFormat().resolvedOptions().timeZone` against
+    // the IP's expected timezone — a mismatch flips match=no even if every
+    // other surface is perfect.
+    const activeFp = applyProxyGeoToFingerprint(baseFp, proxy)
 
     const browserType = profile.browser_type
     const exePath = findBrowserPath(browserType)
@@ -1542,7 +1636,11 @@ export async function launchBrowser(
         args.push(`--disable-extensions-except=${extDirs.join(',')}`)
       }
 
-      // Build the fingerprint injection script for CDP injection after launch
+      // Build the fingerprint injection scripts for CDP injection after launch.
+      // Main-world script covers window/document/navigator + iframes (via
+      // Page.addScriptToEvaluateOnNewDocument). The worker variant runs
+      // inside Worker / SharedWorker / ServiceWorker scopes via the
+      // Target.setAutoAttach path in startBrowserWsListener.
       injectionScript = buildInjectionScript(activeFp)
     }
 
@@ -1611,10 +1709,12 @@ export async function launchBrowser(
         proxy?.username && proxy?.password && !isSocksProxy
           ? { username: proxy.username, password: proxy.password }
           : undefined
+      const workerScript = buildWorkerInjectionScript(activeFp)
       const injector = startCDPInjection(
         profileId,
         profileDir,
         injectionScript,
+        workerScript,
         activeFp,
         proxyCredentials
       )
