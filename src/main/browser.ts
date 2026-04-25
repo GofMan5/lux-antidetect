@@ -14,6 +14,7 @@ import {
 } from './fingerprint'
 import { addSession, removeSession, getSession, isRunning } from './sessions'
 import { getManagedBrowserPath } from './browser-manager'
+import { startSocks5Relay, type RelayHandle } from './socks5-relay'
 
 const execFileAsync = promisify(execFile)
 
@@ -913,6 +914,17 @@ function startProxyAuthListener(
 // Track CDP injection handles so we can stop them when the browser stops
 const cdpInjectors = new Map<string, { stop: () => void }>()
 
+// Track local SOCKS5 relays used to proxy auth-required SOCKS upstreams
+// (Chromium discards user/pass for SOCKS schemes — see socks5-relay.ts).
+const socksRelays = new Map<string, RelayHandle>()
+
+function stopSocksRelay(profileId: string): void {
+  const relay = socksRelays.get(profileId)
+  if (!relay) return
+  socksRelays.delete(profileId)
+  relay.stop().catch(() => { /* best effort */ })
+}
+
 interface FirefoxProxyConfig {
   protocol: string
   host: string
@@ -1004,6 +1016,9 @@ function startBrowserPolling(
     const injector = cdpInjectors.get(profileId)
     if (injector) { injector.stop(); cdpInjectors.delete(profileId) }
 
+    // Stop SOCKS auth relay if one was started for this profile
+    stopSocksRelay(profileId)
+
     try {
       db.prepare(
         `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
@@ -1075,16 +1090,20 @@ function stopBrowserPolling(profileId: string): void {
 
 export async function killAllBrowsers(): Promise<void> {
   const kills: Promise<void>[] = []
+  const relayStops: Promise<void>[] = []
   for (const [profileId, active] of activeBrowsers) {
     clearInterval(active.pollTimer)
     kills.push(killBrowserByProfileDir(active.profileDir))
     removeSession(profileId, null)
     const injector = cdpInjectors.get(profileId)
     if (injector) injector.stop()
+    const relay = socksRelays.get(profileId)
+    if (relay) relayStops.push(relay.stop().catch(() => { /* best effort */ }))
   }
   activeBrowsers.clear()
   cdpInjectors.clear()
-  await Promise.all(kills)
+  socksRelays.clear()
+  await Promise.all([...kills, ...relayStops])
 }
 
 export function isProfileBrowserActive(profileId: string): boolean {
@@ -1329,6 +1348,7 @@ function teardownStaleBrowserState(profileId: string): void {
   removeSession(profileId, null)
   const injector = cdpInjectors.get(profileId)
   if (injector) { injector.stop(); cdpInjectors.delete(profileId) }
+  stopSocksRelay(profileId)
 }
 
 /** Capture a screenshot of the active tab via CDP. Returns base64-encoded PNG. */
@@ -1411,6 +1431,7 @@ export async function launchBrowser(
         proxy = assignedProxy
       }
     }
+    const isSocksProxy = proxy?.protocol === 'socks4' || proxy?.protocol === 'socks5'
 
     const browserType = profile.browser_type
     const exePath = findBrowserPath(browserType)
@@ -1472,24 +1493,38 @@ export async function launchBrowser(
         args.push('--enable-touch-events')
       }
 
-      if (activeFp.webrtc_policy === 'disable_non_proxied_udp') {
+      // SOCKS proxies with credentials need a local unauthenticated SOCKS5
+      // relay because Chromium silently drops user/pass from --proxy-server
+      // for SOCKS schemes (Chromium issue 256785) and neither CDP
+      // Fetch.authRequired nor webRequest.onAuthRequired fires for SOCKS
+      // (both are HTTP-layer hooks). HTTP/HTTPS proxies keep the direct
+      // path — their auth flows through CDP / the proxy-auth extension.
+      const needsSocksRelay = !!(proxy && isSocksProxy && proxy.username)
+      if (proxy) {
+        if (needsSocksRelay) {
+          const relay = await startSocks5Relay(proxy)
+          socksRelays.set(profileId, relay)
+          args.push(`--proxy-server=socks5://127.0.0.1:${relay.port}`)
+        } else {
+          args.push(`--proxy-server=${proxy.protocol}://${proxy.host}:${proxy.port}`)
+        }
+      }
+
+      // WebRTC routes ICE over UDP, which never traverses a TCP SOCKS
+      // tunnel — STUN would otherwise expose the user's real IP. Force
+      // disable_non_proxied_udp whenever any SOCKS proxy is configured;
+      // for HTTP(S) proxies honor the fingerprint setting.
+      if (isSocksProxy || activeFp.webrtc_policy === 'disable_non_proxied_udp') {
         args.push('--webrtc-ip-handling-policy=disable_non_proxied_udp')
       }
 
-      if (proxy) {
-        const proxyUrl = `${proxy.protocol}://${proxy.host}:${proxy.port}`
-        args.push(`--proxy-server=${proxyUrl}`)
-      }
-
-      // Proxy auth is handled primarily via CDP (Fetch.authRequired, applied
-      // in startCDPInjection/injectTarget). We still write the legacy auth
-      // extension when credentials are present: on pre-137 Chromium builds
-      // the extension loads before CDP attaches, which closes the race
-      // between Chrome's first request and the CDP auth listener. Chrome
-      // 137+ silently ignores --load-extension, so the extension is a no-op
-      // there and CDP is the sole auth path.
+      // Proxy auth extension (HTTP/HTTPS only). On pre-137 Chromium it
+      // closes the race between the first request and CDP's auth listener;
+      // on 137+ --load-extension is silently ignored and CDP is the sole
+      // auth path. SOCKS proxies are excluded — their auth happens before
+      // any HTTP layer, so webRequestAuthProvider never sees a challenge.
       const extDirs: string[] = []
-      if (proxy?.username && proxy?.password) {
+      if (proxy?.username && proxy?.password && !isSocksProxy) {
         const authDir = writeProxyAuthExtension(profileDir, proxy)
         if (authDir) extDirs.push(authDir)
       }
@@ -1569,8 +1604,11 @@ export async function launchBrowser(
 
     // Start CDP-based fingerprint injection + proxy auth for Chromium browsers (async, non-blocking)
     if (injectionScript) {
+      // For SOCKS+auth, the local relay supplies the credentials; CDP
+      // Fetch.authRequired never fires for SOCKS handshakes, so passing
+      // creds here would just register a dead listener.
       const proxyCredentials =
-        proxy?.username && proxy?.password
+        proxy?.username && proxy?.password && !isSocksProxy
           ? { username: proxy.username, password: proxy.password }
           : undefined
       const injector = startCDPInjection(
@@ -1585,6 +1623,8 @@ export async function launchBrowser(
 
     return { pid }
   } catch (err) {
+    // Tear down any SOCKS relay started for this launch so it doesn't leak.
+    stopSocksRelay(profileId)
     try {
       db.prepare(
         `UPDATE profiles SET status = ?, updated_at = datetime('now') WHERE id = ?`
@@ -1625,6 +1665,9 @@ export async function stopBrowser(
   // Stop CDP injection
   const injector = cdpInjectors.get(profileId)
   if (injector) { injector.stop(); cdpInjectors.delete(profileId) }
+
+  // Stop SOCKS auth relay if one was started for this profile
+  stopSocksRelay(profileId)
 
   // Kill by profile directory (finds real browser PIDs) — ASYNC, no longer blocks main thread
   if (activeBrowser) {

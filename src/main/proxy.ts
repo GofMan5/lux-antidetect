@@ -413,7 +413,7 @@ function openProxySocket(proxy: Proxy): Promise<Socket> {
   })
 }
 
-class SocketReader {
+export class SocketReader {
   private buffer: Buffer = Buffer.alloc(0)
   private waiters: Array<{ check: (buf: Buffer) => number; resolve: (b: Buffer) => void; reject: (e: Error) => void }> = []
   private closed: Error | null = null
@@ -536,7 +536,7 @@ async function checkHttpProxy(proxy: Proxy, sock: Socket): Promise<HealthResult>
   }
 }
 
-async function performSocks5Handshake(
+export async function performSocks5Handshake(
   sock: Socket,
   reader: SocketReader,
   proxy: Proxy,
@@ -625,7 +625,7 @@ function ipv6ToBytes(addr: string): Buffer {
   return buf
 }
 
-async function performSocks4Handshake(
+export async function performSocks4Handshake(
   sock: Socket,
   reader: SocketReader,
   proxy: Proxy,
