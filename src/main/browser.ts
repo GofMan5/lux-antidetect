@@ -1623,10 +1623,18 @@ async function launchBrowserInner(
       //    but to send the bare hostname through SOCKS (ATYP=domain), so
       //    the proxy resolves. Prevents DNS leaks via DoH/system resolver
       //    and avoids local-cache inconsistencies.
-      //  - Without a SOCKS proxy, leave DoH on automatic for ISP-level
-      //    privacy.
+      //  - With an HTTP(S) proxy, disable DoH entirely. Chrome already
+      //    sends `CONNECT host:port` with the hostname for HTTPS — the
+      //    proxy resolves it. DoH would otherwise resolve via Cloudflare/
+      //    Google DIRECTLY (bypassing the proxy), which means the DoH
+      //    provider sees the user's real IP and the queried hostname.
+      //    For HTTP CONNECT to absolute URIs and IPv literal connects,
+      //    DoH-off keeps everything on the upstream proxy's resolver.
+      //  - Without any proxy, leave DoH on automatic for ISP privacy.
       if (isSocksProxy) {
         args.push('--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1')
+      } else if (proxy) {
+        args.push('--dns-over-https-mode=off')
       } else {
         args.push('--dns-over-https-mode=automatic')
       }
@@ -1668,11 +1676,24 @@ async function launchBrowserInner(
         }
       }
 
-      // WebRTC routes ICE over UDP, which never traverses a TCP SOCKS
-      // tunnel — STUN would otherwise expose the user's real IP. Force
-      // disable_non_proxied_udp whenever any SOCKS proxy is configured;
-      // for HTTP(S) proxies honor the fingerprint setting.
-      if (isSocksProxy || activeFp.webrtc_policy === 'disable_non_proxied_udp') {
+      // ─── IP leak hardening when any proxy is configured ─────────────
+      //
+      // QUIC/HTTP3 runs over UDP. Chrome's --proxy-server only routes
+      // TCP-tunneled HTTP(S) — UDP packets escape the proxy entirely,
+      // exposing the real IP to any QUIC-enabled endpoint (Google, YT,
+      // Cloudflare, many CDNs). Disable QUIC + the QUIC feature flag
+      // unconditionally when a proxy is set so the destination is always
+      // reached over TCP via the proxy.
+      //
+      // WebRTC ICE candidates also go over UDP and historically have
+      // been the #1 IP leak vector for proxied browsers. Force the most
+      // restrictive routing policy (disable_non_proxied_udp) whenever
+      // any proxy is in use, regardless of the fingerprint setting —
+      // user-visible IP privacy outranks fingerprint variance.
+      if (proxy) {
+        args.push('--disable-quic')
+        args.push('--webrtc-ip-handling-policy=disable_non_proxied_udp')
+      } else if (activeFp.webrtc_policy === 'disable_non_proxied_udp') {
         args.push('--webrtc-ip-handling-policy=disable_non_proxied_udp')
       }
 
