@@ -1,6 +1,7 @@
 import { autoUpdater } from 'electron-updater'
 import type { BrowserWindow } from 'electron'
 import type Database from 'better-sqlite3'
+import { logger } from './logger'
 
 let checkInterval: ReturnType<typeof setInterval> | undefined
 let initialized = false
@@ -12,7 +13,16 @@ export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Databas
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
+  autoUpdater.on('checking-for-update', () => {
+    logger.info('autoUpdater: checking for update')
+  })
+
+  autoUpdater.on('update-not-available', (info) => {
+    logger.info(`autoUpdater: up-to-date (current ${info?.version ?? 'unknown'})`)
+  })
+
   autoUpdater.on('update-available', (info) => {
+    logger.info(`autoUpdater: update available v${info.version}`)
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update:available', {
         version: info.version,
@@ -35,6 +45,7 @@ export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Databas
   })
 
   autoUpdater.on('update-downloaded', (info) => {
+    logger.info(`autoUpdater: update downloaded v${info.version}`)
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update:downloaded', {
         version: info.version
@@ -43,6 +54,7 @@ export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Databas
   })
 
   autoUpdater.on('error', (err) => {
+    logger.warn('autoUpdater: error', err)
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update:error', {
         message: err.message
@@ -63,10 +75,12 @@ export function initAutoUpdater(mainWindow: BrowserWindow, db?: Database.Databas
   }
 
   if (autoCheckEnabled) {
-    // Check 10 seconds after launch
+    // Check 3 seconds after launch (down from 10) so the update prompt
+    // appears soon after the window paints rather than feeling like the
+    // app forgot to look for updates.
     setTimeout(() => {
       autoUpdater.checkForUpdates().catch(() => {})
-    }, 10_000)
+    }, 3_000)
 
     // Re-check every 2 hours
     checkInterval = setInterval(() => {
@@ -87,5 +101,8 @@ export function checkForUpdates(): Promise<unknown> {
 }
 
 export function installUpdate(): void {
-  autoUpdater.quitAndInstall(false, true)
+  // (isSilent, isForceRunAfter)
+  //   isSilent=true        → pass `/S` to NSIS, no UI dialogs / prompts
+  //   isForceRunAfter=true → relaunch the app after install completes
+  autoUpdater.quitAndInstall(true, true)
 }

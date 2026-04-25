@@ -1566,16 +1566,21 @@ export function ProfilesPage() {
 
                             {/* Tags */}
                             <td className="px-3">
-                              <div className="flex items-center gap-1 overflow-hidden">
+                              <div className="flex items-center gap-1 min-w-0">
                                 {tags.length > 0 ? tags.slice(0, 2).map(tag => (
-                                  <Badge key={tag} variant="accent" className="text-[10px] px-1.5 py-0">
-                                    {tag}
-                                  </Badge>
+                                  <span key={tag} title={tag} className="min-w-0">
+                                    <Badge
+                                      variant="accent"
+                                      className="text-[10px] px-1.5 py-0 max-w-[60px] truncate block"
+                                    >
+                                      {tag}
+                                    </Badge>
+                                  </span>
                                 )) : (
                                   <span className="text-xs text-muted/30">{'\u2014'}</span>
                                 )}
                                 {tags.length > 2 && (
-                                  <span className="text-[10px] text-muted/50">+{tags.length - 2}</span>
+                                  <span className="text-[10px] text-muted/50 shrink-0">+{tags.length - 2}</span>
                                 )}
                               </div>
                             </td>

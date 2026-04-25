@@ -1617,7 +1617,19 @@ async function launchBrowserInner(
       args.push('--disable-blink-features=AutomationControlled')
       args.push('--no-default-browser-check')
 
-      args.push('--dns-over-https-mode=automatic')
+      // DNS strategy:
+      //  - With a SOCKS proxy, force remote DNS by mapping every hostname
+      //    to NOTFOUND in the local resolver. Chrome then has no choice
+      //    but to send the bare hostname through SOCKS (ATYP=domain), so
+      //    the proxy resolves. Prevents DNS leaks via DoH/system resolver
+      //    and avoids local-cache inconsistencies.
+      //  - Without a SOCKS proxy, leave DoH on automatic for ISP-level
+      //    privacy.
+      if (isSocksProxy) {
+        args.push('--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1')
+      } else {
+        args.push('--dns-over-https-mode=automatic')
+      }
 
       // TLS fingerprint masking (JA3/JA4): shuffle cipher order and randomize TLS extensions
       const tlsCiphers = [

@@ -597,7 +597,13 @@ export async function performSocks5Handshake(
 
   const head = await reader.read(4)
   if (head[0] !== SOCKS5_VERSION) throw new Error('socks5_bad_version')
-  if (head[1] !== SOCKS5_REP_SUCCESS) throw new Error('socks5_connect_failed')
+  if (head[1] !== SOCKS5_REP_SUCCESS) {
+    // RFC 1928 §6 reply codes:
+    //   0x01 general failure | 0x02 not allowed by ruleset | 0x03 network unreachable
+    //   0x04 host unreachable | 0x05 connection refused    | 0x06 TTL expired
+    //   0x07 command not supported | 0x08 address type not supported
+    throw new Error(`socks5_connect_failed:0x${head[1].toString(16).padStart(2, '0')}`)
+  }
   const atyp = head[3]
   let addrLen: number
   if (atyp === SOCKS5_ATYP_IPV4) addrLen = 4

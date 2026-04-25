@@ -34,7 +34,11 @@ export function Layout(): React.JSX.Element {
         className={cn(
           'shrink-0 flex flex-col border-r border-edge/60',
           'bg-surface-alt',
-          'transition-all duration-300 ease-out relative z-30',
+          // Animate ONLY width — `transition-all` was also tweening
+          // every interior class change (color, padding, alignment) when
+          // toggling collapsed, which made the sidebar look like it was
+          // morphing piece by piece. 150ms keeps the toggle snappy.
+          'transition-[width] duration-150 ease-out relative z-30',
           collapsed ? 'w-[68px]' : 'w-[240px]'
         )}
       >
