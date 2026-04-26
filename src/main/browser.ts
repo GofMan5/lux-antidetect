@@ -1609,17 +1609,16 @@ async function launchBrowserInner(
       args.push('--disable-blink-features=AutomationControlled')
       args.push('--no-default-browser-check')
 
-      // Silence Chrome 137+'s "you're using unsupported command line flags"
-      // yellow infobar. The banner appears whenever \`kBadFlags\` (which
-      // includes --host-resolver-rules) is present, regardless of why the
-      // flag is set. Chromium's BadFlagsPrompt has one bypass:
-      // \`HasSwitch(kTestType)\` returns early. \`--test-type\` is purely a
-      // browser-process switch — \`navigator.webdriver\` is set by
-      // \`--enable-automation\`, not this — so the value is invisible to
-      // page JS. The "webdriver" value matches Puppeteer / Playwright /
-      // Selenium convention so any internal Chrome metric blends with
-      // ordinary automation traffic.
-      args.push('--test-type=webdriver')
+      // NOTE: `--test-type=webdriver` was previously added to silence the
+      // Chromium 137+ "unsupported command line flag" yellow infobar, but
+      // it activates internal test-mode handling that disables CDP
+      // `Fetch.authRequired` — the path Lux uses for HTTP/HTTPS proxy auth
+      // on Chrome 137+ where `--load-extension` is ignored. Result: HTTP
+      // proxies with username/password silently fail to authenticate, no
+      // page traffic loads. The infobar is cosmetic; broken proxies are
+      // not. Flag stays out until we replace `--host-resolver-rules` with
+      // a different DNS-leak-prevention mechanism that isn't on
+      // Chromium's bad-flags list.
 
       // ─── DNS hardening ──────────────────────────────────────────────
       //

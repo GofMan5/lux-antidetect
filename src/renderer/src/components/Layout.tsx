@@ -29,7 +29,13 @@ import { useProfilesStore } from '../stores/profiles'
 // ─── Constants ─────────────────────────────────────────────────────────────
 
 const TOPBAR_HEIGHT_PX = 56
-const LEFTRAIL_WIDTH_PX = 56
+// Rail width — 72px gives icon items a 48×48 hit area with 12px breathing
+// room on each side. Anything narrower (we previously shipped 56) makes the
+// items feel cramped and visually inconsistent across icons whose intrinsic
+// glyphs have slightly different stroke weight (Lucide FileText / Settings).
+const LEFTRAIL_WIDTH_PX = 72
+const LEFTRAIL_ITEM_SIZE_PX = 48
+const LEFTRAIL_ICON_SIZE_PX = 20
 
 // LocalStorage key from the previous collapsible-sidebar design. Kept here
 // only so we can clear it on mount — the new shell isn't collapsible.
@@ -299,13 +305,62 @@ interface LeftRailItemProps {
   runningCount: number
 }
 
+// Inner wrapper used by every rail item so the icon + optional running-count
+// badge composition is structurally identical across items. Mounted both for
+// navigable and coming-soon entries to guarantee identical DOM dimensions
+// (some lucide icons have intrinsic optical asymmetry — FileText leans left
+// of its bounding box; symmetric wrappers absorb the difference).
+function LeftRailItemBody({
+  Icon,
+  active,
+  showRunningBadge,
+  runningCount
+}: {
+  Icon: typeof LayoutGrid
+  active: boolean
+  showRunningBadge: boolean
+  runningCount: number
+}): React.JSX.Element {
+  return (
+    <span className="relative inline-flex">
+      <Icon
+        style={{ width: LEFTRAIL_ICON_SIZE_PX, height: LEFTRAIL_ICON_SIZE_PX }}
+        strokeWidth={active ? 2.1 : 1.85}
+      />
+      {showRunningBadge && (
+        <span
+          className={cn(
+            'absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full px-1',
+            'bg-ok text-background text-[9px] font-bold leading-none',
+            'inline-flex items-center justify-center ring-2 ring-card'
+          )}
+          aria-label={`${runningCount} running`}
+        >
+          {runningCount > 9 ? '9+' : runningCount}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Element {
   const Icon = item.icon
   const isProfiles = item.to === '/profiles'
   const showRunningBadge = isProfiles && runningCount > 0
 
-  // Coming-soon items are non-navigating buttons disguised as a NavLink-styled
-  // disc. Keep keyboard-accessible (focusable, `aria-disabled`).
+  // The shared item shell — same dimensions, same centering, same rounded
+  // chrome — so all four entries produce identical bounding boxes.
+  const itemBaseClass = cn(
+    'group relative inline-flex items-center justify-center mx-auto',
+    'rounded-[--radius-md] transition-colors duration-150 ease-[var(--ease-osmosis)]',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
+  )
+  const itemSizeStyle: React.CSSProperties = {
+    width: LEFTRAIL_ITEM_SIZE_PX,
+    height: LEFTRAIL_ITEM_SIZE_PX
+  }
+
+  // Coming-soon — non-navigating button using the same shell as the NavLinks.
   if (item.comingSoon) {
     return (
       <Tooltip content={`${item.label} — Coming in iteration 2`} side="right">
@@ -314,13 +369,18 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
           aria-disabled="true"
           aria-label={item.label}
           tabIndex={0}
+          style={itemSizeStyle}
           className={cn(
-            'h-10 w-10 mx-auto inline-flex items-center justify-center rounded-[--radius-md]',
-            'text-muted-foreground/40 cursor-not-allowed',
-            'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            itemBaseClass,
+            'text-muted-foreground/40 cursor-not-allowed'
           )}
         >
-          <Icon className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          <LeftRailItemBody
+            Icon={Icon}
+            active={false}
+            showRunningBadge={false}
+            runningCount={0}
+          />
         </button>
       </Tooltip>
     )
@@ -340,11 +400,10 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
     >
       <NavLink
         to={item.to}
+        style={itemSizeStyle}
         className={({ isActive }) =>
           cn(
-            'group relative h-10 w-10 mx-auto inline-flex items-center justify-center',
-            'rounded-[--radius-md] transition-colors duration-150 ease-[var(--ease-osmosis)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+            itemBaseClass,
             isActive
               ? 'bg-primary/10 text-primary'
               : 'text-muted-foreground hover:bg-elevated/40 hover:text-foreground'
@@ -357,24 +416,15 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
             {isActive && (
               <span
                 aria-hidden
-                className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-primary"
+                className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-primary"
               />
             )}
-            <span className="relative">
-              <Icon className="h-[18px] w-[18px]" strokeWidth={isActive ? 2.2 : 1.9} />
-              {showRunningBadge && (
-                <span
-                  className={cn(
-                    'absolute -top-1.5 -right-1.5 min-w-[16px] h-4 rounded-full px-1',
-                    'bg-ok text-[#0a0b0d] text-[9px] font-bold leading-none',
-                    'inline-flex items-center justify-center ring-2 ring-card'
-                  )}
-                  aria-label={`${runningCount} running`}
-                >
-                  {runningCount > 9 ? '9+' : runningCount}
-                </span>
-              )}
-            </span>
+            <LeftRailItemBody
+              Icon={Icon}
+              active={isActive}
+              showRunningBadge={showRunningBadge}
+              runningCount={runningCount}
+            />
           </>
         )}
       </NavLink>
@@ -396,7 +446,7 @@ function LeftRail({ runningCount }: LeftRailProps): React.JSX.Element {
       )}
       style={{ width: LEFTRAIL_WIDTH_PX }}
     >
-      <div className="flex flex-col gap-1 py-3 flex-1">
+      <div className="flex flex-col gap-1.5 py-3 flex-1">
         {RAIL_ITEMS.map((item) => (
           <LeftRailItem key={item.to} item={item} runningCount={runningCount} />
         ))}
