@@ -48,7 +48,9 @@ import {
   ArrowUpDown,
   Rows3,
   Rows2,
-  Filter
+  Filter,
+  Shield,
+  ShieldOff
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
@@ -352,70 +354,54 @@ interface FilterChipProps {
   active: boolean
   onClick: () => void
   onClear?: () => void
-  children: React.ReactNode
+  /** Visible label. Always passed for tooltip + a11y; collapses below `lg`. */
+  label: string
+  /** Optional left-edge tinted dot (status filters). */
   dotClass?: string
+  /** Optional left-edge icon (browser / proxy filters). */
+  icon?: React.ReactNode
 }
 
-// Memoized so it skips re-renders on unrelated parent updates (filter
-// typing, scroll, selection drift). Memo only pays off when the parent
-// passes stable handler identities — see the `clear*Filter` /
-// `setStatusFilter*` `useCallback`s in the page below.
+// Square, single-button chip. One hit target: clicking an active chip clears
+// it (delegates to `onClear` when provided), otherwise activates via `onClick`.
+// Below `lg` (1024px) the chip collapses to a 28x28 icon-only square; at and
+// above `lg` it expands to icon + label. Memoized — parent passes stable
+// callbacks so re-renders on unrelated updates are short-circuited.
 const FilterChip = memo(function FilterChip({
   active,
   onClick,
   onClear,
-  children,
-  dotClass
+  label,
+  dotClass,
+  icon
 }: FilterChipProps): React.JSX.Element {
-  // Active chip pairs the toggle action with an inline "clear" button. Two
-  // sibling <button>s inside a flex container avoid nesting <button> inside
-  // <button> (invalid HTML) while keeping the cluster visually unified.
-  if (active && onClear) {
-    return (
-      <span
-        className={cn(
-          'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
-          'bg-primary text-primary-foreground pl-2.5 pr-1'
-        )}
-      >
-        {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
-        <button
-          type="button"
-          onClick={onClick}
-          className="leading-none"
-          aria-pressed="true"
-        >
-          {children}
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onClear()
-          }}
-          aria-label={typeof children === 'string' ? `Clear ${children} filter` : 'Clear filter'}
-          className="inline-flex items-center justify-center h-4 w-4 rounded-full hover:bg-white/15"
-        >
-          <X className="h-2.5 w-2.5" />
-        </button>
-      </span>
-    )
-  }
+  const handleClick = active && onClear ? onClear : onClick
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={handleClick}
       aria-pressed={active}
+      aria-label={label}
+      title={label}
       className={cn(
-        'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
-        'transition-colors duration-150 ease-[var(--ease-osmosis)] px-2.5',
+        'inline-flex items-center justify-center gap-1.5 shrink-0',
+        'h-7 w-7 lg:w-auto lg:px-2.5',
+        'rounded-[--radius-md] text-[11.5px] font-medium',
+        'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
         active
           ? 'bg-primary text-primary-foreground'
-          : 'bg-transparent border border-border text-muted-foreground hover:text-foreground hover:border-edge'
+          : 'text-muted-foreground hover:bg-elevated/60 hover:text-foreground'
       )}
     >
-      {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
-      <span>{children}</span>
+      {dotClass && (
+        <span
+          aria-hidden
+          className={cn('h-2 w-2 lg:h-1.5 lg:w-1.5 rounded-full shrink-0', dotClass)}
+        />
+      )}
+      {icon}
+      <span className="hidden lg:inline">{label}</span>
     </button>
   )
 })
@@ -2212,37 +2198,69 @@ export function ProfilesPage(): React.JSX.Element {
           matchCount={filteredProfiles.length}
         />
 
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 grow shrink-0 basis-auto">
-          <FilterChip active={statusFilter === 'running'} onClick={setStatusRunning} onClear={clearStatusFilter} dotClass="bg-ok">
-            Running
-          </FilterChip>
-          <FilterChip active={statusFilter === 'ready'} onClick={setStatusReady} onClear={clearStatusFilter} dotClass="bg-muted-foreground/60">
-            Ready
-          </FilterChip>
-          <FilterChip active={statusFilter === 'error'} onClick={setStatusError} onClear={clearStatusFilter} dotClass="bg-destructive">
-            Error
-          </FilterChip>
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-1 grow shrink-0 basis-auto">
+          <FilterChip
+            active={statusFilter === 'running'}
+            onClick={setStatusRunning}
+            onClear={clearStatusFilter}
+            dotClass="bg-ok"
+            label="Running"
+          />
+          <FilterChip
+            active={statusFilter === 'ready'}
+            onClick={setStatusReady}
+            onClear={clearStatusFilter}
+            dotClass="bg-muted-foreground/60"
+            label="Ready"
+          />
+          <FilterChip
+            active={statusFilter === 'error'}
+            onClick={setStatusError}
+            onClear={clearStatusFilter}
+            dotClass="bg-destructive"
+            label="Error"
+          />
 
-          <div className="h-5 w-px bg-border/60 mx-1" />
+          <div aria-hidden className="h-5 w-px bg-border/60 mx-0.5" />
 
-          <FilterChip active={browserFilter === 'chromium'} onClick={setBrowserChromium} onClear={clearBrowserFilter}>
-            Chromium
-          </FilterChip>
-          <FilterChip active={browserFilter === 'firefox'} onClick={setBrowserFirefox} onClear={clearBrowserFilter}>
-            Firefox
-          </FilterChip>
-          <FilterChip active={browserFilter === 'edge'} onClick={setBrowserEdge} onClear={clearBrowserFilter}>
-            Edge
-          </FilterChip>
+          <FilterChip
+            active={browserFilter === 'chromium'}
+            onClick={setBrowserChromium}
+            onClear={clearBrowserFilter}
+            icon={<Globe className="h-3 w-3" aria-hidden />}
+            label="Chromium"
+          />
+          <FilterChip
+            active={browserFilter === 'firefox'}
+            onClick={setBrowserFirefox}
+            onClear={clearBrowserFilter}
+            icon={<Flame className="h-3 w-3" aria-hidden />}
+            label="Firefox"
+          />
+          <FilterChip
+            active={browserFilter === 'edge'}
+            onClick={setBrowserEdge}
+            onClear={clearBrowserFilter}
+            icon={<Globe2 className="h-3 w-3" aria-hidden />}
+            label="Edge"
+          />
 
-          <div className="h-5 w-px bg-border/60 mx-1" />
+          <div aria-hidden className="h-5 w-px bg-border/60 mx-0.5" />
 
-          <FilterChip active={proxyFilter === 'with-proxy'} onClick={setProxyWith} onClear={clearProxyFilter}>
-            With proxy
-          </FilterChip>
-          <FilterChip active={proxyFilter === 'no-proxy'} onClick={setProxyWithout} onClear={clearProxyFilter}>
-            No proxy
-          </FilterChip>
+          <FilterChip
+            active={proxyFilter === 'with-proxy'}
+            onClick={setProxyWith}
+            onClear={clearProxyFilter}
+            icon={<Shield className="h-3 w-3" aria-hidden />}
+            label="With proxy"
+          />
+          <FilterChip
+            active={proxyFilter === 'no-proxy'}
+            onClick={setProxyWithout}
+            onClear={clearProxyFilter}
+            icon={<ShieldOff className="h-3 w-3" aria-hidden />}
+            label="No proxy"
+          />
 
           {allGroups.length > 0 && (
             <SelectRoot
@@ -2251,9 +2269,9 @@ export function ProfilesPage(): React.JSX.Element {
                 setGroupFilter(v === NO_GROUP_SENTINEL ? NO_GROUP_KEY : v)
               }
             >
-              {/* w-[150px] overrides SelectTrigger's baked-in w-full so the
-                  trigger doesn't stretch to fill the wrapped row. */}
-              <SelectTrigger className="ml-1 !h-7 !text-[11.5px] w-[150px] shrink-0">
+              {/* w-[120px] at narrow / w-[150px] at lg overrides the trigger's
+                  baked-in w-full so it doesn't stretch on a wrapped row. */}
+              <SelectTrigger className="ml-1 !h-7 !text-[11.5px] w-[120px] lg:w-[150px] shrink-0">
                 <SelectValue placeholder="Group" />
               </SelectTrigger>
               <SelectContent>
@@ -2325,7 +2343,7 @@ export function ProfilesPage(): React.JSX.Element {
             setSortDir(d)
           }}
         >
-          <SelectTrigger className="!h-7 !text-[11.5px] w-[130px] shrink-0">
+          <SelectTrigger className="!h-7 !text-[11.5px] w-[110px] lg:w-[130px] shrink-0">
             <SelectValue placeholder="Sort by..." />
           </SelectTrigger>
           <SelectContent>
