@@ -2189,6 +2189,14 @@ export function ProfilesPage(): React.JSX.Element {
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-background relative">
       {/* ── Filter strip ──────────────────────────────────────────────── */}
+      {/*
+       * Layout strategy: outer is a single flex-wrap row. Each section claims
+       * its natural width (shrink-0 + flex-wrap inside for content reflow).
+       * Chip group has flex-grow so on wide viewports it absorbs slack; the
+       * right-block uses ml-auto so it sticks to the trailing edge until the
+       * row runs out of space, at which point flex-wrap drops it to row 2 —
+       * the chips DO NOT collapse into a vertical column.
+       */}
       <div
         className={cn(
           'sticky top-0 z-10 shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 py-1.5 min-h-12 min-w-0',
@@ -2200,11 +2208,11 @@ export function ProfilesPage(): React.JSX.Element {
           value={searchQuery}
           onChange={setSearchQuery}
           placeholder="Search profiles…"
-          className="w-full sm:w-[260px] md:w-[280px] shrink-0"
+          className="w-full sm:w-[240px] md:w-[260px] shrink-0"
           matchCount={filteredProfiles.length}
         />
 
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 grow shrink-0 basis-auto">
           <FilterChip active={statusFilter === 'running'} onClick={setStatusRunning} onClear={clearStatusFilter} dotClass="bg-ok">
             Running
           </FilterChip>
@@ -2259,7 +2267,7 @@ export function ProfilesPage(): React.JSX.Element {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 shrink-0">
+        <div className="flex flex-wrap items-center gap-1 shrink-0 ml-auto">
 
         {/* Density toggle — 2-segment pill so both options are visible at once */}
         <div
