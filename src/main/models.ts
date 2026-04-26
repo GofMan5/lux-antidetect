@@ -43,7 +43,10 @@ export interface Fingerprint {
   device_type: string // 'desktop' | 'mobile'
 }
 
-export type FraudRisk = 'low' | 'high' | 'unknown'
+// Fraud risk buckets — coarse user-facing labels derived from the 0-100
+// fraud_score by the proxy fraud module. 'clean' is dominant residential /
+// mobile, 'critical' is Tor / known-abuser / multi-provider-flagged.
+export type FraudRisk = 'clean' | 'low' | 'medium' | 'high' | 'critical' | 'unknown'
 
 export interface Proxy {
   id: string
@@ -65,15 +68,25 @@ export interface Proxy {
   longitude: number | null
   accuracy_radius: number | null
   locale: string | null
-  // Fraud reputation (populated by lookupProxyMetadata via ip-api.com).
-  // SQLite booleans are 0/1 integers; null = field never populated.
+  // Fraud reputation (multi-provider ensemble — ip-api.com + ipapi.is).
+  // SQLite booleans are 0/1 integers; null = field never populated by any
+  // provider. fraud_providers is a JSON array of names that responded.
+  external_ip: string | null
   isp: string | null
   org: string | null
   asn: string | null
+  asn_type: string | null
   is_proxy_detected: number | null
   is_hosting: number | null
+  is_datacenter: number | null
+  is_vpn: number | null
+  is_tor: number | null
+  is_abuser: number | null
   is_mobile: number | null
+  abuse_score: number | null
+  fraud_score: number | null
   fraud_risk: FraudRisk | null
+  fraud_providers: string | null
   last_fraud_check: string | null
   created_at: string
 }
@@ -98,13 +111,22 @@ export interface ProxyResponse {
   longitude: number | null
   accuracy_radius: number | null
   locale: string | null
+  external_ip: string | null
   isp: string | null
   org: string | null
   asn: string | null
+  asn_type: string | null
   is_proxy_detected: boolean | null
   is_hosting: boolean | null
+  is_datacenter: boolean | null
+  is_vpn: boolean | null
+  is_tor: boolean | null
+  is_abuser: boolean | null
   is_mobile: boolean | null
+  abuse_score: number | null
+  fraud_score: number | null
   fraud_risk: FraudRisk | null
+  fraud_providers: string[]
   last_fraud_check: string | null
   created_at: string
 }
@@ -273,6 +295,16 @@ function intToBool(v: number | null | undefined): boolean | null {
   return v === null || v === undefined ? null : !!v
 }
 
+function parseProvidersJson(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const v = JSON.parse(raw) as unknown
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 export function toProxyResponse(row: Proxy): ProxyResponse {
   return {
     id: row.id,
@@ -294,13 +326,22 @@ export function toProxyResponse(row: Proxy): ProxyResponse {
     longitude: row.longitude ?? null,
     accuracy_radius: row.accuracy_radius ?? null,
     locale: row.locale ?? null,
+    external_ip: row.external_ip ?? null,
     isp: row.isp ?? null,
     org: row.org ?? null,
     asn: row.asn ?? null,
+    asn_type: row.asn_type ?? null,
     is_proxy_detected: intToBool(row.is_proxy_detected),
     is_hosting: intToBool(row.is_hosting),
+    is_datacenter: intToBool(row.is_datacenter),
+    is_vpn: intToBool(row.is_vpn),
+    is_tor: intToBool(row.is_tor),
+    is_abuser: intToBool(row.is_abuser),
     is_mobile: intToBool(row.is_mobile),
+    abuse_score: row.abuse_score ?? null,
+    fraud_score: row.fraud_score ?? null,
     fraud_risk: row.fraud_risk ?? null,
+    fraud_providers: parseProvidersJson(row.fraud_providers),
     last_fraud_check: row.last_fraud_check ?? null,
     created_at: row.created_at
   }

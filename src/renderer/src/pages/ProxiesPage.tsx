@@ -39,7 +39,7 @@ import {
   DropdownMenu,
   Tooltip
 } from '../components/ui'
-import type { ProxyProtocol, ProxyResponse, ProxyInput } from '../lib/types'
+import type { ProxyProtocol, ProxyResponse, ProxyInput, FraudRisk, IpFraudReport } from '../lib/types'
 
 // ---------------------------------------------------------------------------
 // Schema & defaults
@@ -132,61 +132,82 @@ function countryFlag(code: string): string {
   return String.fromCodePoint(...[...upper].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
 }
 
-// Reputation = ip-api.com classification of the proxy's external IP.
-//   'high'    → datacenter / hosting / known-proxy ASN. Google & most
-//               anti-bot vendors blocklist these on sight.
-//   'low'     → residential or mobile carrier pool.
-//   'unknown' → ip-api responded but returned no signal flags, OR the
-//               lookup never ran.
-// The tooltip body is a ReactNode — Tooltip's string branch renders
-// whitespace-nowrap which would collapse multi-line metadata onto a
-// single overflowing row.
+// Reputation = ensemble verdict from ip-api.com + ipapi.is over the proxy's
+// external IP. The 0-100 score is bucketed into clean / low / medium / high
+// / critical / unknown — see geoip.ts:combineSignals for the weights. The
+// badge shows "<bucket> <score>" so the user sees both the coarse class and
+// the precise number; the tooltip lists per-flag detail.
+const FRAUD_BUCKET_META: Record<
+  Exclude<FraudRisk, never>,
+  { variant: 'success' | 'error' | 'warning' | 'default'; label: string; icon: 'check' | 'alert' | 'shield' }
+> = {
+  clean:    { variant: 'success', label: 'Clean',    icon: 'check' },
+  low:      { variant: 'success', label: 'Low',      icon: 'check' },
+  medium:   { variant: 'warning', label: 'Medium',   icon: 'alert' },
+  high:     { variant: 'error',   label: 'High',     icon: 'alert' },
+  critical: { variant: 'error',   label: 'Critical', icon: 'alert' },
+  unknown:  { variant: 'default', label: 'Unknown',  icon: 'shield' }
+}
+
+function fraudBucketIcon(name: 'check' | 'alert' | 'shield'): React.ReactNode {
+  if (name === 'check') return <ShieldCheck className="h-3 w-3" />
+  if (name === 'alert') return <ShieldAlert className="h-3 w-3" />
+  return <Shield className="h-3 w-3" />
+}
+
 function reputationBadge(proxy: ProxyResponse): {
-  variant: 'success' | 'error' | 'default'
+  variant: 'success' | 'error' | 'warning' | 'default'
   label: string
   icon: React.ReactNode
   tooltip: React.ReactNode
   ariaLabel: string
 } {
+  // Pre-lookup state.
   if (proxy.fraud_risk === null || proxy.last_fraud_check === null) {
     const note = 'Reputation not checked yet — click to refresh or wait for the auto-lookup to finish.'
     return {
       variant: 'default',
       label: 'Unknown',
-      icon: <Shield className="h-3 w-3" />,
+      icon: fraudBucketIcon('shield'),
       tooltip: <div>{note}</div>,
       ariaLabel: `Reputation: unknown. ${note}`
     }
   }
-  const flags: string[] = []
-  if (proxy.is_hosting) flags.push('datacenter / hosting ASN')
-  if (proxy.is_proxy_detected) flags.push('listed in known-proxy databases')
-  if (proxy.is_mobile) flags.push('mobile carrier IP')
-  const ispText = proxy.isp ? `ISP: ${proxy.isp}` : null
-  const asnText = proxy.asn ? `ASN: ${proxy.asn}` : null
-  const flagsText = flags.length > 0 ? `Flags: ${flags.join(', ')}` : 'Flags: none — residential / business ISP'
-  const tooltip = (
-    <div className="space-y-0.5 leading-snug">
-      {ispText && <div>{ispText}</div>}
-      {asnText && <div>{asnText}</div>}
-      <div>{flagsText}</div>
-    </div>
-  )
-  const ariaLabel = `Reputation: ${proxy.fraud_risk === 'high' ? 'risky' : 'clean'}. ${[ispText, asnText, flagsText].filter(Boolean).join('. ')}`
 
-  if (proxy.fraud_risk === 'high') {
-    return { variant: 'error', label: 'Risky', icon: <ShieldAlert className="h-3 w-3" />, tooltip, ariaLabel }
+  const flags: string[] = []
+  if (proxy.is_datacenter) flags.push('datacenter / hosting ASN')
+  if (proxy.is_vpn) flags.push('known VPN')
+  if (proxy.is_proxy_detected) flags.push('listed in known-proxy databases')
+  if (proxy.is_tor) flags.push('Tor exit node')
+  if (proxy.is_abuser) flags.push('past abuse history')
+  if (proxy.is_mobile) flags.push('mobile carrier (low-risk)')
+
+  const lines: React.ReactNode[] = []
+  if (proxy.external_ip) lines.push(<div key="ip"><span className="text-muted">IP</span> <span className="font-mono">{proxy.external_ip}</span></div>)
+  if (proxy.isp) lines.push(<div key="isp"><span className="text-muted">ISP</span> {proxy.isp}</div>)
+  if (proxy.asn) lines.push(<div key="asn"><span className="text-muted">ASN</span> <span className="font-mono">{proxy.asn}</span>{proxy.asn_type ? ` (${proxy.asn_type})` : ''}</div>)
+  if (proxy.abuse_score !== null) lines.push(
+    <div key="abuse"><span className="text-muted">Abuse</span> {(proxy.abuse_score * 100).toFixed(1)}%</div>
+  )
+  lines.push(
+    <div key="flags"><span className="text-muted">Flags</span> {flags.length > 0 ? flags.join(', ') : 'none'}</div>
+  )
+  if (proxy.fraud_providers.length > 0) lines.push(
+    <div key="src" className="text-muted/70 text-[11px]">via {proxy.fraud_providers.join(' + ')}</div>
+  )
+
+  const meta = FRAUD_BUCKET_META[proxy.fraud_risk]
+  const score = proxy.fraud_score ?? 0
+  const tooltip = <div className="space-y-0.5 leading-snug">{lines}</div>
+  const ariaLabel = `Reputation: ${meta.label}, score ${score} of 100. Flags: ${flags.length > 0 ? flags.join(', ') : 'none'}.`
+
+  return {
+    variant: meta.variant,
+    label: proxy.fraud_risk === 'unknown' ? 'Unknown' : `${meta.label} ${score}`,
+    icon: fraudBucketIcon(meta.icon),
+    tooltip,
+    ariaLabel
   }
-  if (proxy.fraud_risk === 'unknown') {
-    return {
-      variant: 'default',
-      label: 'Unknown',
-      icon: <Shield className="h-3 w-3" />,
-      tooltip: <div>Lookup completed but ip-api returned no risk signals for this IP.</div>,
-      ariaLabel: 'Reputation: unknown — lookup completed but no risk signals returned'
-    }
-  }
-  return { variant: 'success', label: 'Clean', icon: <ShieldCheck className="h-3 w-3" />, tooltip, ariaLabel }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +237,12 @@ export function ProxiesPage(): React.JSX.Element {
   const [importLoading, setImportLoading] = useState(false)
   const [importFilterFraud, setImportFilterFraud] = useState(true)
   const [importProgress, setImportProgress] = useState<{ checked: number; total: number; risky: number } | null>(null)
+  // Standalone "Check IP" tool state
+  const [ipCheckOpen, setIpCheckOpen] = useState(false)
+  const [ipCheckInput, setIpCheckInput] = useState('')
+  const [ipCheckLoading, setIpCheckLoading] = useState(false)
+  const [ipCheckReport, setIpCheckReport] = useState<IpFraudReport | null>(null)
+  const [ipCheckError, setIpCheckError] = useState<string | null>(null)
   const [importParsed, setImportParsed] = useState<
     { ok: boolean; data?: { name: string; host: string; port: number; protocol: string } }[] | null
   >(null)
@@ -574,6 +601,25 @@ export function ProxiesPage(): React.JSX.Element {
     })
   }
 
+  const handleStandaloneIpCheck = async (): Promise<void> => {
+    const ip = ipCheckInput.trim()
+    if (!ip) return
+    setIpCheckLoading(true)
+    setIpCheckError(null)
+    setIpCheckReport(null)
+    try {
+      const report = await api.lookupFraudByIp(ip)
+      if (!report) {
+        setIpCheckError('No data — invalid IP, network failure, or both providers rate-limited.')
+      } else {
+        setIpCheckReport(report)
+      }
+    } catch (err) {
+      setIpCheckError(err instanceof Error ? err.message : 'Check failed')
+    }
+    setIpCheckLoading(false)
+  }
+
   const handleRecheckFraud = async (id: string): Promise<void> => {
     // Functional set update so a double-click within one render tick can't
     // fire a duplicate ip-api request — second call sees `prev.has(id)` and
@@ -756,7 +802,14 @@ export function ProxiesPage(): React.JSX.Element {
           const probe = await api.dryRunFraudCheck(
             row.data as Parameters<typeof api.dryRunFraudCheck>[0]
           )
-          if (probe === null || probe.fraud_risk === 'high') {
+          // Drop everything that's high / critical / unknown / null. Keep
+          // clean / low / medium — medium covers residential pools that one
+          // provider tagged as proxy-listed but the other didn't, which is
+          // typical for dual-purpose IPs the user may still want.
+          const verdict = probe?.fraud_risk
+          const keep =
+            verdict === 'clean' || verdict === 'low' || verdict === 'medium'
+          if (!keep) {
             skippedRisky++
           } else {
             await api.createProxy(row.data as Parameters<typeof api.createProxy>[0])
@@ -867,6 +920,14 @@ export function ProxiesPage(): React.JSX.Element {
             onClick={() => setImportOpen(true)}
           >
             Import
+          </Button>
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<ShieldCheck className="h-4 w-4" />}
+            onClick={() => { setIpCheckOpen(true); setIpCheckInput(''); setIpCheckReport(null); setIpCheckError(null) }}
+          >
+            Check IP
           </Button>
         </div>
       </div>
@@ -1017,7 +1078,12 @@ export function ProxiesPage(): React.JSX.Element {
                         <td className="px-3 py-2.5">
                           <div className="min-w-0">
                             <p className="text-content font-medium truncate">{proxy.name}</p>
-                            <p className="text-xs text-muted font-mono truncate">{proxy.host}</p>
+                            <p className="text-xs text-muted font-mono truncate">
+                              {proxy.host}
+                              {proxy.external_ip && proxy.external_ip !== proxy.host && (
+                                <span className="text-muted/60"> → {proxy.external_ip}</span>
+                              )}
+                            </p>
                           </div>
                         </td>
 
@@ -1583,6 +1649,132 @@ export function ProxiesPage(): React.JSX.Element {
           </div>
         )}
       </Modal>
+
+      {/* Standalone IP fraud-check tool */}
+      <Modal
+        open={ipCheckOpen}
+        onClose={() => setIpCheckOpen(false)}
+        title="Check IP reputation"
+        description="Investigate any IP without adding it as a proxy. Both providers (ip-api + ipapi.is) are queried directly from this machine."
+        size="md"
+        actions={
+          <Button
+            variant="primary"
+            size="md"
+            icon={<ShieldCheck className="h-4 w-4" />}
+            onClick={() => handleStandaloneIpCheck()}
+            loading={ipCheckLoading}
+            disabled={ipCheckLoading || !ipCheckInput.trim()}
+          >
+            Check
+          </Button>
+        }
+      >
+        <div className="space-y-3">
+          <Input
+            label="IP address"
+            placeholder="e.g. 84.54.120.38"
+            value={ipCheckInput}
+            onChange={(e) => setIpCheckInput(e.target.value)}
+            disabled={ipCheckLoading}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && ipCheckInput.trim() && !ipCheckLoading) {
+                handleStandaloneIpCheck()
+              }
+            }}
+          />
+          <p className="text-[11px] text-muted/70 leading-relaxed">
+            Privacy note: this query runs from your real machine — both providers will see your
+            actual IP alongside the IP under investigation. Use the per-row Recheck action when
+            you want to characterize a proxy without revealing your host.
+          </p>
+          {ipCheckError && (
+            <div className="rounded-[--radius-md] bg-err/8 border border-err/20 px-3 py-2 text-xs text-err">
+              {ipCheckError}
+            </div>
+          )}
+          {ipCheckReport && <IpFraudReportPanel report={ipCheckReport} />}
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// IP Fraud Report panel — shared shape between the standalone tool and any
+// future inline lookup. Mirrors the reputation tooltip but in a full panel
+// so the user can read every signal without hovering.
+// ---------------------------------------------------------------------------
+
+function IpFraudReportPanel({ report }: { report: IpFraudReport }): React.JSX.Element {
+  const meta = FRAUD_BUCKET_META[report.fraud_risk]
+  const flags: { label: string; on: boolean | null; tone: 'warn' | 'ok' | 'neutral' }[] = [
+    { label: 'Datacenter / hosting', on: report.is_datacenter ?? report.is_hosting, tone: 'warn' },
+    { label: 'Known proxy', on: report.is_proxy_detected, tone: 'warn' },
+    { label: 'VPN', on: report.is_vpn, tone: 'warn' },
+    { label: 'Tor', on: report.is_tor, tone: 'warn' },
+    { label: 'Past abuse', on: report.is_abuser, tone: 'warn' },
+    { label: 'Mobile carrier', on: report.is_mobile, tone: 'ok' }
+  ]
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3 px-3 py-2.5 rounded-[--radius-md] bg-elevated/40 border border-edge/40">
+        <Badge variant={meta.variant} className="inline-flex items-center gap-1">
+          {fraudBucketIcon(meta.icon)}
+          {meta.label} {report.fraud_score}
+        </Badge>
+        <span className="text-xs text-muted">/ 100</span>
+        <span className="ml-auto font-mono text-xs text-content">{report.ip}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        {report.country && (
+          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2">
+            <p className="text-muted text-[10px] uppercase tracking-wider">Country</p>
+            <p className="text-content">
+              {report.country_code && <span className="mr-1">{countryFlag(report.country_code)}</span>}
+              {report.country}{report.city ? ` — ${report.city}` : ''}
+            </p>
+          </div>
+        )}
+        {report.isp && (
+          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2">
+            <p className="text-muted text-[10px] uppercase tracking-wider">ISP</p>
+            <p className="text-content truncate" title={report.isp}>{report.isp}</p>
+          </div>
+        )}
+        {report.asn && (
+          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2 col-span-2">
+            <p className="text-muted text-[10px] uppercase tracking-wider">ASN</p>
+            <p className="text-content font-mono truncate" title={report.asn}>
+              {report.asn}{report.asn_type ? <span className="text-muted ml-1">({report.asn_type})</span> : null}
+            </p>
+          </div>
+        )}
+        {report.abuse_score !== null && (
+          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2 col-span-2">
+            <p className="text-muted text-[10px] uppercase tracking-wider">Abuse score (ipapi.is)</p>
+            <p className="text-content font-mono">{(report.abuse_score * 100).toFixed(2)}%</p>
+          </div>
+        )}
+      </div>
+      <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2">
+        <p className="text-muted text-[10px] uppercase tracking-wider mb-2">Signals</p>
+        <div className="flex flex-wrap gap-1.5">
+          {flags.map((f) => (
+            <Badge
+              key={f.label}
+              variant={f.on === true ? (f.tone === 'warn' ? 'error' : 'success') : 'default'}
+              className="text-[11px]"
+            >
+              {f.on === null ? '— ' : f.on ? '✓ ' : '✗ '}
+              {f.label}
+            </Badge>
+          ))}
+        </div>
+      </div>
+      <p className="text-[11px] text-muted/70">
+        Sources: {report.fraud_providers.join(', ') || 'none'}
+      </p>
     </div>
   )
 }

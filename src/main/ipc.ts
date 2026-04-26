@@ -14,7 +14,7 @@ import {
   duplicateProfile
 } from './profile'
 import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, parseProxyLine } from './proxy'
-import { lookupProxyGeo, dryRunProxyMetadata } from './geoip'
+import { lookupProxyGeo, dryRunProxyMetadata, lookupFraudByIp } from './geoip'
 import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot, openUrlInProfile } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
 import { generateDefaultFingerprint } from './fingerprint'
@@ -306,6 +306,16 @@ export function registerIpcHandlers(
       username: input.username ?? null,
       password: input.password ?? null
     })
+  })
+
+  // Standalone IP fraud check — investigate an arbitrary IP without binding
+  // to a proxy in the DB. Both providers are queried directly from the Lux
+  // host. Privacy tradeoff: Lux's real IP is visible in their logs alongside
+  // the IP under investigation. Returns null on bad input or no provider data.
+  ipcMain.handle('lookup-fraud-by-ip', async (_, ip: string) => {
+    if (typeof ip !== 'string') throw new Error('IP must be a string')
+    if (ip.length > 64) throw new Error('IP string too long')
+    return lookupFraudByIp(ip)
   })
 
   // Bulk proxy test — bounded concurrency pool with per-id UUID validation.

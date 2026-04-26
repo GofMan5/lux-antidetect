@@ -183,17 +183,37 @@ export function initDatabase(userDataPath: string): Database.Database {
   addColumnIfMissing(db, 'proxies', 'accuracy_radius', 'accuracy_radius INTEGER')
   addColumnIfMissing(db, 'proxies', 'locale', 'locale TEXT')
 
-  // Migration: fraud-reputation columns. Populated by lookupProxyMetadata
-  // (ip-api.com response fields proxy / hosting / mobile + ISP / ASN data).
-  // fraud_risk is the computed bucket: 'low' | 'high' | 'unknown' — used by
-  // the Proxies UI to flag datacenter / known-proxy IPs that Google blacklists.
+  // Migration: fraud-reputation columns. Populated by the proxy fraud
+  // lookup in geoip.ts which calls 1+ providers (ip-api.com over plain HTTP,
+  // ipapi.is over HTTPS) and computes a 0-100 score. Used by the Proxies UI
+  // to flag datacenter / VPN / Tor / known-abuser IPs that Google and most
+  // anti-bot vendors blocklist on sight.
+  //
+  // Columns:
+  //   external_ip      — the proxy's apparent egress IP (provider's `query`)
+  //   isp / org / asn  — identifying strings (max 120/120/64 chars)
+  //   asn_type         — 'datacenter' | 'isp' | 'business' | 'mobile' | null
+  //   is_*             — bool flags from any provider (0/1, null = unknown)
+  //   abuse_score      — 0..1 from ipapi.is (null when not provided)
+  //   fraud_score      — 0..100 ensemble score
+  //   fraud_risk       — bucket: 'clean'|'low'|'medium'|'high'|'critical'|'unknown'
+  //   fraud_providers  — JSON array of provider names that responded
+  addColumnIfMissing(db, 'proxies', 'external_ip', 'external_ip TEXT')
   addColumnIfMissing(db, 'proxies', 'isp', 'isp TEXT')
   addColumnIfMissing(db, 'proxies', 'org', 'org TEXT')
   addColumnIfMissing(db, 'proxies', 'asn', 'asn TEXT')
+  addColumnIfMissing(db, 'proxies', 'asn_type', 'asn_type TEXT')
   addColumnIfMissing(db, 'proxies', 'is_proxy_detected', 'is_proxy_detected INTEGER')
   addColumnIfMissing(db, 'proxies', 'is_hosting', 'is_hosting INTEGER')
+  addColumnIfMissing(db, 'proxies', 'is_datacenter', 'is_datacenter INTEGER')
+  addColumnIfMissing(db, 'proxies', 'is_vpn', 'is_vpn INTEGER')
+  addColumnIfMissing(db, 'proxies', 'is_tor', 'is_tor INTEGER')
+  addColumnIfMissing(db, 'proxies', 'is_abuser', 'is_abuser INTEGER')
   addColumnIfMissing(db, 'proxies', 'is_mobile', 'is_mobile INTEGER')
+  addColumnIfMissing(db, 'proxies', 'abuse_score', 'abuse_score REAL')
+  addColumnIfMissing(db, 'proxies', 'fraud_score', 'fraud_score INTEGER')
   addColumnIfMissing(db, 'proxies', 'fraud_risk', 'fraud_risk TEXT')
+  addColumnIfMissing(db, 'proxies', 'fraud_providers', 'fraud_providers TEXT')
   addColumnIfMissing(db, 'proxies', 'last_fraud_check', 'last_fraud_check TEXT')
 
   // Migration: add rotation_group column to profiles (for proxy rotation)

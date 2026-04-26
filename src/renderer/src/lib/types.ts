@@ -43,7 +43,7 @@ export interface Fingerprint {
   device_type: string
 }
 
-export type FraudRisk = 'low' | 'high' | 'unknown'
+export type FraudRisk = 'clean' | 'low' | 'medium' | 'high' | 'critical' | 'unknown'
 
 export interface ProxyResponse {
   id: string
@@ -65,15 +65,47 @@ export interface ProxyResponse {
   longitude: number | null
   accuracy_radius: number | null
   locale: string | null
+  external_ip: string | null
   isp: string | null
   org: string | null
   asn: string | null
+  asn_type: string | null
   is_proxy_detected: boolean | null
   is_hosting: boolean | null
+  is_datacenter: boolean | null
+  is_vpn: boolean | null
+  is_tor: boolean | null
+  is_abuser: boolean | null
   is_mobile: boolean | null
+  abuse_score: number | null
+  fraud_score: number | null
   fraud_risk: FraudRisk | null
+  fraud_providers: string[]
   last_fraud_check: string | null
   created_at: string
+}
+
+export interface IpFraudReport {
+  ip: string
+  external_ip: string | null
+  country: string | null
+  country_code: string | null
+  city: string | null
+  isp: string | null
+  org: string | null
+  asn: string | null
+  asn_type: string | null
+  is_proxy_detected: boolean | null
+  is_hosting: boolean | null
+  is_datacenter: boolean | null
+  is_vpn: boolean | null
+  is_tor: boolean | null
+  is_abuser: boolean | null
+  is_mobile: boolean | null
+  abuse_score: number | null
+  fraud_score: number
+  fraud_risk: FraudRisk
+  fraud_providers: string[]
 }
 
 export interface ProfileDetail {

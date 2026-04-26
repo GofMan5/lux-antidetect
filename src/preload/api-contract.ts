@@ -16,7 +16,7 @@ import type {
   ManagedBrowserResponse,
   AvailableBrowser
 } from '../main/models'
-import type { ProxyGeoBundle } from '../main/geoip'
+import type { ProxyGeoBundle, IpFraudReport } from '../main/geoip'
 import type { PresetDescriptor } from '../main/fingerprint-presets'
 
 export type { PresetDescriptor } from '../main/fingerprint-presets'
@@ -87,6 +87,9 @@ export interface LuxAPI {
   // Dry-run reputation check — same bundle as lookupProxyGeo but for an
   // un-persisted ProxyInput. Used by the bulk-import filter.
   dryRunFraudCheck(input: ProxyInput): Promise<ProxyGeoBundle | null>
+  // Standalone IP fraud check — investigate an arbitrary IP without binding
+  // to a proxy. Direct query (Lux host visible to the providers).
+  lookupFraudByIp(ip: string): Promise<IpFraudReport | null>
   parseProxyString(raw: string): Promise<{ ok: boolean; data?: ProxyInput; error?: string; line: string }[]>
   bulkTestProxies(ids: string[]): Promise<{ id: string; ok: boolean }[]>
 

@@ -923,3 +923,230 @@ export async function httpGetThroughProxy(
     sock.destroy()
   }
 }
+
+// ---------------------------------------------------------------------------
+// HTTPS GET tunneled through the proxy
+// ---------------------------------------------------------------------------
+
+function buildConnectRequest(proxy: Proxy, targetHost: string, targetPort: number): string {
+  const hostHeader = `${targetHost}:${targetPort}`
+  const lines = [
+    `CONNECT ${hostHeader} HTTP/1.1`,
+    `Host: ${hostHeader}`,
+    'User-Agent: lux-antidetect-fraud/1',
+    'Proxy-Connection: close'
+  ]
+  if (proxy.username && proxy.password) {
+    lines.push(`Proxy-Authorization: ${basicAuthHeader(proxy.username, proxy.password)}`)
+  }
+  return lines.join('\r\n') + '\r\n\r\n'
+}
+
+/**
+ * Perform an HTTPS GET to (targetHost:443)+path tunneled through the given
+ * proxy. Required for fraud providers that don't expose a plain-HTTP endpoint
+ * (e.g. ipapi.is) — without TLS, a hostile upstream proxy can MITM the
+ * verdict. Returns null on any error. Never throws.
+ *
+ * Pipeline:
+ *   1. Open TCP/TLS to proxy.host:proxy.port (openProxySocket)
+ *   2. Establish a tunnel:
+ *        SOCKS4/5 → handshake to targetHost:443
+ *        HTTP/HTTPS → CONNECT targetHost:443 (with Proxy-Authorization)
+ *   3. Wrap the tunnelled socket in TLS (servername = targetHost)
+ *   4. Send HTTP/1.0 GET path + Host header
+ *   5. Read response until close or PROXY_HTTP_GET_MAX_BYTES
+ */
+export async function httpsGetThroughProxy(
+  proxy: Proxy,
+  targetHost: string,
+  path: string,
+  timeoutMs: number
+): Promise<{ status: number; body: string } | null> {
+  const TARGET_PORT = 443
+  let sock: Socket
+  try {
+    sock = await openProxySocket(proxy)
+  } catch {
+    return null
+  }
+
+  let timer: NodeJS.Timeout | null = null
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      sock.destroy()
+      resolve(null)
+    }, timeoutMs)
+  })
+
+  // TLSSocket extends net.Socket, but we declare the slot wide as
+  // `Socket | null` and reassign inside the IIFE. The outer finally needs
+  // a runtime guard plus explicit narrowing for TypeScript.
+  const tlsHolder: { sock: Socket | null } = { sock: null }
+
+  const work = (async (): Promise<{ status: number; body: string } | null> => {
+    try {
+      // ── Tunnel setup ──
+      if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
+        const reader = new SocketReader(sock)
+        if (proxy.protocol === 'socks5') {
+          await performSocks5Handshake(sock, reader, proxy, targetHost, TARGET_PORT)
+        } else {
+          await performSocks4Handshake(sock, reader, proxy, targetHost, TARGET_PORT)
+        }
+        sock.removeAllListeners('data')
+        sock.removeAllListeners('end')
+        sock.removeAllListeners('close')
+        sock.removeAllListeners('error')
+      } else {
+        // HTTP / HTTPS proxy: CONNECT method
+        sock.write(buildConnectRequest(proxy, targetHost, TARGET_PORT))
+        const reader = new SocketReader(sock)
+        const header = await reader.readUntil(findHeaderEndSize)
+        const status = parseHttpStatusCode(header)
+        if (status !== 200) return null
+        sock.removeAllListeners('data')
+        sock.removeAllListeners('end')
+        sock.removeAllListeners('close')
+        sock.removeAllListeners('error')
+      }
+
+      // ── TLS wrap on the tunnelled socket ──
+      const tls = tlsConnect({
+        socket: sock,
+        servername: targetHost,
+        ALPNProtocols: ['http/1.1'],
+        rejectUnauthorized: true
+      })
+      tlsHolder.sock = tls
+      await new Promise<void>((resolve, reject) => {
+        tls.once('secureConnect', () => resolve())
+        tls.once('error', reject)
+      })
+
+      // ── HTTP/1.0 GET over TLS ──
+      const req = [
+        `GET ${path} HTTP/1.0`,
+        `Host: ${targetHost}`,
+        'User-Agent: lux-antidetect-fraud/1',
+        'Accept: */*',
+        'Connection: close'
+      ].join('\r\n') + '\r\n\r\n'
+      tls.write(req)
+
+      const raw = await readUntilCloseOrLimit(tls, PROXY_HTTP_GET_MAX_BYTES)
+      return parseHttpResponse(raw)
+    } catch {
+      return null
+    }
+  })()
+
+  try {
+    return await Promise.race([work, timeoutPromise])
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (tlsHolder.sock) tlsHolder.sock.destroy()
+    sock.destroy()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Direct HTTP / HTTPS GET (no proxy — used by the standalone IP-check tool)
+// ---------------------------------------------------------------------------
+
+/**
+ * Direct HTTPS GET from the Lux host. Used only by the standalone "check
+ * any IP" tool — this leaks Lux's real IP to the provider, which is a
+ * privacy regression vs the tunneled lookups, but the user has explicitly
+ * asked to investigate an arbitrary IP they're not yet routing through.
+ *
+ * Returns null on any error. Never throws.
+ */
+export async function httpsGetDirect(
+  targetHost: string,
+  path: string,
+  timeoutMs: number
+): Promise<{ status: number; body: string } | null> {
+  let sock: Socket | null = null
+  let timer: NodeJS.Timeout | null = null
+  try {
+    sock = tlsConnect({
+      host: targetHost,
+      port: 443,
+      servername: targetHost,
+      ALPNProtocols: ['http/1.1'],
+      rejectUnauthorized: true
+    })
+    const connected = new Promise<void>((resolve, reject) => {
+      sock!.once('secureConnect', () => resolve())
+      sock!.once('error', reject)
+    })
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timeout')), timeoutMs)
+    })
+    await Promise.race([connected, timeoutPromise])
+
+    const req = [
+      `GET ${path} HTTP/1.0`,
+      `Host: ${targetHost}`,
+      'User-Agent: lux-antidetect-fraud/1',
+      'Accept: */*',
+      'Connection: close'
+    ].join('\r\n') + '\r\n\r\n'
+    sock.write(req)
+
+    const raw = await readUntilCloseOrLimit(sock, PROXY_HTTP_GET_MAX_BYTES)
+    return parseHttpResponse(raw)
+  } catch {
+    return null
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (sock) sock.destroy()
+  }
+}
+
+/**
+ * Direct HTTP GET (port 80, no TLS). Used for the ip-api.com side of the
+ * standalone IP-check tool — that provider is HTTP-only on the free tier.
+ */
+export async function httpGetDirect(
+  targetHost: string,
+  targetPort: number,
+  path: string,
+  timeoutMs: number
+): Promise<{ status: number; body: string } | null> {
+  let sock: Socket | null = null
+  let timer: NodeJS.Timeout | null = null
+  try {
+    sock = createConnection({
+      host: targetHost,
+      port: targetPort,
+      timeout: timeoutMs
+    })
+    await new Promise<void>((resolve, reject) => {
+      sock!.once('connect', () => {
+        sock!.setTimeout(0)
+        resolve()
+      })
+      sock!.once('error', reject)
+      sock!.once('timeout', () => reject(new Error('timeout')))
+    })
+
+    const req = [
+      `GET ${path} HTTP/1.0`,
+      `Host: ${targetHost}`,
+      'User-Agent: lux-antidetect-fraud/1',
+      'Accept: */*',
+      'Connection: close'
+    ].join('\r\n') + '\r\n\r\n'
+    sock.write(req)
+
+    const raw = await readUntilCloseOrLimit(sock, PROXY_HTTP_GET_MAX_BYTES)
+    return parseHttpResponse(raw)
+  } catch {
+    return null
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (sock) sock.destroy()
+  }
+}

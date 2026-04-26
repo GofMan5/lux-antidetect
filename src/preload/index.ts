@@ -40,6 +40,7 @@ const api: LuxAPI = {
   lookupProxyCountry: (id: string) => ipcRenderer.invoke('lookup-proxy-country', id),
   lookupProxyGeo: (id: string) => ipcRenderer.invoke('lookup-proxy-geo', id),
   dryRunFraudCheck: (input: unknown) => ipcRenderer.invoke('dry-run-fraud-check', input),
+  lookupFraudByIp: (ip: string) => ipcRenderer.invoke('lookup-fraud-by-ip', ip),
   parseProxyString: (raw: string) => ipcRenderer.invoke('parse-proxy-string', raw),
   bulkTestProxies: (ids: string[]) => ipcRenderer.invoke('bulk-test-proxies', ids),
 
