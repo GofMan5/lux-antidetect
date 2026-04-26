@@ -4,7 +4,7 @@ import {
   ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2,
   Flame, ClipboardCopy, Pencil, Terminal, Camera, MoreHorizontal,
   LayoutGrid, ChevronDown, Check, XCircle, ExternalLink,
-  HardDrive, Sparkles, ChevronRight, Rows2, Rows3, Star
+  HardDrive, Sparkles, ChevronRight, Rows2, Rows3, Star, Eraser
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
@@ -537,6 +537,29 @@ export function ProfilesPage() {
     }
   }, [actions, profiles, addToast])
 
+  const handleWipeData = async (id: string, name: string): Promise<void> => {
+    const ok = await confirm({
+      title: 'Wipe browsing data',
+      message:
+        `Delete every Chromium-side trace for "${name}" — cookies, localStorage, IndexedDB, ` +
+        `cache, history, login data, sessions. The Lux profile (name, group, fingerprint, ` +
+        `proxy assignment) stays intact. The browser must be stopped first; the next launch ` +
+        `boots a fresh user-data-dir.`,
+      confirmLabel: 'Wipe',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await api.wipeProfileData(id)
+      addToast(`"${name}" wiped — fresh state on next launch`, 'success')
+    } catch (err) {
+      addToast(
+        `Wipe failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+        'error'
+      )
+    }
+  }
+
   const handleDelete = async (id: string, name: string): Promise<void> => {
     const ok = await confirm({
       title: 'Delete Profile',
@@ -958,6 +981,13 @@ export function ProfilesPage() {
     )
 
     items.push(
+      {
+        label: isRunning || isTransitioning ? 'Wipe data (stop first)' : 'Wipe browsing data',
+        icon: <Eraser className="h-4 w-4" />,
+        variant: 'danger',
+        disabled: isRunning || isTransitioning,
+        onClick: () => handleWipeData(profileId, profileName)
+      },
       { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, variant: 'danger', onClick: () => handleDelete(profileId, profileName) }
     )
 

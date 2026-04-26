@@ -63,6 +63,7 @@ export interface LuxAPI {
   updateProfile(id: string, input: UpdateProfileInput): Promise<Profile>
   updateFingerprint(id: string, input: UpdateFingerprintInput): Promise<void>
   deleteProfile(id: string): Promise<void>
+  wipeProfileData(id: string): Promise<void>
   duplicateProfile(id: string): Promise<Profile>
   revealProfileDir(id: string): Promise<void>
   getProxyConnectionString(proxyId: string): Promise<string>

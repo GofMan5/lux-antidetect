@@ -18,6 +18,7 @@ const api: LuxAPI = {
   updateFingerprint: (id: string, input: UpdateFingerprintInput) =>
     ipcRenderer.invoke('update-fingerprint', id, input),
   deleteProfile: (id: string) => ipcRenderer.invoke('delete-profile', id),
+  wipeProfileData: (id: string) => ipcRenderer.invoke('wipe-profile-data', id),
   duplicateProfile: (id: string) => ipcRenderer.invoke('duplicate-profile', id),
   revealProfileDir: (id: string) => ipcRenderer.invoke('reveal-profile-dir', id),
   getProxyConnectionString: (proxyId: string) =>

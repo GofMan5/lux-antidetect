@@ -11,6 +11,7 @@ import {
   updateProfile,
   updateFingerprint,
   deleteProfile,
+  wipeProfileBrowserData,
   duplicateProfile
 } from './profile'
 import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, parseProxyLine } from './proxy'
@@ -153,6 +154,14 @@ export function registerIpcHandlers(
   )
   ipcMain.handle('duplicate-profile', (_, profileId: string) =>
     duplicateProfile(db, profileId, profilesDir)
+  )
+  // Wipe every Chromium-side trace (cookies, localStorage, IndexedDB, cache,
+  // history, login data, sessions...) but keep the Lux config row. Profile
+  // must be stopped — wipeProfileBrowserData throws otherwise. The Lux
+  // identity (name, group, fingerprint, proxy) lives in SQLite so it
+  // survives; on the next launch Chrome rebuilds a fresh user-data-dir.
+  ipcMain.handle('wipe-profile-data', (_, profileId: string) =>
+    wipeProfileBrowserData(db, profileId, profilesDir)
   )
 
   // Reveal a profile's on-disk data directory in the OS file manager.

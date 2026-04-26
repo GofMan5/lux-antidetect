@@ -242,6 +242,48 @@ export async function deleteProfile(
   }
 }
 
+/**
+ * Wipe every Chromium-side trace for one profile while keeping the Lux
+ * config row intact. Deletes the whole user-data-dir (cookies, localStorage,
+ * IndexedDB, cache, history, service workers, login data, autofill, sessions,
+ * trust tokens, network state, etc.). On the next launch Chrome rebuilds the
+ * directory from scratch and Lux re-applies our identity (Local State name +
+ * avatar via updateChromeProfileIdentity) and re-loads the proxy-auth
+ * extension, so the profile boots clean without losing its name / group /
+ * fingerprint / proxy assignment (those live in SQLite, not in the dir).
+ *
+ * The profile must be stopped first — Chrome holds file handles while
+ * running and a wipe under it would race the writes back into the dir.
+ */
+export async function wipeProfileBrowserData(
+  db: Database.Database,
+  profileId: string,
+  profilesDir: string
+): Promise<void> {
+  assertUuid(profileId)
+  if (isRunning(profileId)) {
+    throw new Error('Cannot wipe a running profile. Stop the browser first.')
+  }
+  const existing = db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+  if (!existing) throw new Error(`Profile not found: ${profileId}`)
+
+  const dir = join(profilesDir, profileId)
+  // Retry once after a short delay — Windows can hold file handles for a
+  // moment after the Chrome process exits even though our isRunning() guard
+  // already passed. EBUSY / EPERM disappears within ~500ms typically.
+  try {
+    await rm(dir, { recursive: true, force: true })
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'EBUSY' || code === 'EPERM' || code === 'ENOTEMPTY') {
+      await new Promise((resolve) => setTimeout(resolve, 750))
+      await rm(dir, { recursive: true, force: true })
+    } else {
+      throw err
+    }
+  }
+}
+
 export async function duplicateProfile(
   db: Database.Database,
   profileId: string,
