@@ -7,6 +7,7 @@ interface SettingsStore {
   activeThemeId: string
   customThemes: Theme[]
   autoRegenFingerprint: boolean
+  blockWebAuthn: boolean
   initialized: boolean
 
   initSettings: () => Promise<void>
@@ -15,31 +16,35 @@ interface SettingsStore {
   updateCustomTheme: (theme: Theme) => Promise<void>
   deleteCustomTheme: (themeId: string) => Promise<void>
   setAutoRegenFingerprint: (val: boolean) => Promise<void>
+  setBlockWebAuthn: (val: boolean) => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   activeThemeId: 'midnight-blue',
   customThemes: [],
   autoRegenFingerprint: true,
+  blockWebAuthn: true,
   initialized: false,
 
   initSettings: async () => {
     if (get().initialized) return
     try {
-      const [themeId, customs, autoRegen] = await Promise.all([
+      const [themeId, customs, autoRegen, blockWa] = await Promise.all([
         api.getSetting('active_theme_id'),
         api.getSetting('custom_themes'),
-        api.getSetting('auto_regenerate_fingerprint')
+        api.getSetting('auto_regenerate_fingerprint'),
+        api.getSetting('hardware_identity_lockdown')
       ])
 
       const customThemes = Array.isArray(customs) ? (customs as Theme[]) : []
       const activeThemeId = typeof themeId === 'string' ? themeId : 'midnight-blue'
       const autoRegenFingerprint = autoRegen !== false
+      const blockWebAuthn = blockWa !== false
 
       const theme = findTheme(activeThemeId, customThemes) || getDefaultTheme()
       applyTheme(theme)
 
-      set({ activeThemeId, customThemes, autoRegenFingerprint, initialized: true })
+      set({ activeThemeId, customThemes, autoRegenFingerprint, blockWebAuthn, initialized: true })
     } catch {
       const theme = getDefaultTheme()
       applyTheme(theme)
@@ -86,5 +91,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   setAutoRegenFingerprint: async (val: boolean) => {
     set({ autoRegenFingerprint: val })
     await api.setSetting('auto_regenerate_fingerprint', val)
+  },
+
+  setBlockWebAuthn: async (val: boolean) => {
+    set({ blockWebAuthn: val })
+    await api.setSetting('hardware_identity_lockdown', val)
   }
 }))

@@ -1543,6 +1543,17 @@ async function launchBrowserInner(
       ? regenerateFingerprint(db, profileId, profile.browser_type)
       : normalizeFingerprint(fingerprint)
 
+    // Hardware identity lockdown — default ON. Master switch for the JS-side
+    // injection (fingerprint.ts section 19) and the Chromium feature-disable
+    // flag below. Covers WebAuthn passkeys, FedCM, Digital Credentials, DBSC,
+    // PaymentRequest probes, Storage Access, Topics, and console-probe
+    // CDP detection — see the section 19 banner and the --disable-features
+    // comment for the full surface.
+    const lockdownRow = db
+      .prepare("SELECT value FROM settings WHERE key = 'hardware_identity_lockdown'")
+      .get() as { value: string } | undefined
+    const blockWebAuthn = lockdownRow ? JSON.parse(lockdownRow.value) !== false : true
+
     let proxy: Proxy | undefined
     if (profile.proxy_id) {
       const assignedProxy = db.prepare('SELECT * FROM proxies WHERE id = ?').get(profile.proxy_id) as
@@ -1616,6 +1627,51 @@ async function launchBrowserInner(
       // flag" banner for --load-extension on older Chromium builds.
       args.push('--disable-blink-features=AutomationControlled')
       args.push('--no-default-browser-check')
+
+      // Hardware identity lockdown — Chromium-level disables.
+      //
+      // Belt-and-braces alongside the JS-side injection (fingerprint.ts
+      // section 19). The injection rewrites the JS API surface so the
+      // page sees a normal "no platform authenticator / no saved cards /
+      // no Topics profile" user; these flags cut the underlying Chromium
+      // features off at the engine level so even non-JS consumers
+      // (HTTP-header-driven flows like DBSC, Topics' Sec-Browsing-Topics
+      // request header, FedCM's IdP signin-status header) never advertise
+      // the hardware-bound material.
+      //
+      // The list enumerates each sub-feature explicitly because Chromium
+      // gates JS API surfaces on the leaf feature, not the umbrella —
+      // disabling \`BrowsingTopics\` alone leaves \`document.browsingTopics()\`
+      // reachable on some milestones. Same pattern for FedCM (\`FedCmAuthz\`,
+      // \`FedCmUserInfo\`, etc. each guard a distinct surface).
+      if (blockWebAuthn) {
+        const lockdownFeatures = [
+          // Device-Bound Session Credentials (TPM-backed session keys)
+          'DeviceBoundSessionCredentials',
+          // Federated Credential Management
+          'FedCm',
+          'FedCmAuthz',
+          'FedCmAutoSelectedFlag',
+          'FedCmButtonMode',
+          'FedCmIdpSigninStatusEnabled',
+          'FedCmIframeOrigin',
+          'FedCmMultipleIdentityProviders',
+          'FedCmRpContext',
+          'FedCmSelectiveDisclosure',
+          'FedCmUserInfo',
+          'FedCmWithoutWellKnownEnforcement',
+          // Digital Credentials API (mDL / EU eID / wallet tokens)
+          'DigitalCredentials',
+          'WebIdentityDigitalCredentials',
+          // Privacy Sandbox Topics — umbrella + JS API + HTTP surfaces
+          'BrowsingTopics',
+          'BrowsingTopicsDocumentAPI',
+          'BrowsingTopicsParameters',
+          'BrowsingTopicsXHR',
+          'BrowsingTopicsBypassIPIsPubliclyRoutableCheck'
+        ]
+        args.push(`--disable-features=${lockdownFeatures.join(',')}`)
+      }
 
       // DNS strategy:
       //  - With a SOCKS proxy, force remote DNS by mapping every hostname
@@ -1726,7 +1782,7 @@ async function launchBrowserInner(
       // Page.addScriptToEvaluateOnNewDocument). The worker variant runs
       // inside Worker / SharedWorker / ServiceWorker scopes via the
       // Target.setAutoAttach path in startBrowserWsListener.
-      injectionScript = buildInjectionScript(activeFp, geoOverride)
+      injectionScript = buildInjectionScript(activeFp, geoOverride, { blockWebAuthn })
     }
 
     // Caller-provided targetUrl (e.g. "open test site in this profile") wins

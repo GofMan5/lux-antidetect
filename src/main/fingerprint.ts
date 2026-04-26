@@ -781,8 +781,8 @@ function defaultFontListFor(platform: string): readonly string[] {
 
 /**
  * Build the spoof script applied inside a Worker / SharedWorker / ServiceWorker
- * scope. Subset of the main-world script: only `navigator.*`, `Intl.*`, and
- * `Date.prototype.toLocale*` exist in WorkerGlobalScope.
+ * scope. Subset of the main-world script: only `navigator.*`, `Intl.*`,
+ * `Date.prototype.toLocale*`, and `console.*` exist in WorkerGlobalScope.
  *
  * The script is self-contained — no closures from the caller, no DOM refs —
  * so it can be sent verbatim to a worker target via CDP `Runtime.evaluate`
@@ -793,13 +793,29 @@ function defaultFontListFor(platform: string): readonly string[] {
  * `buildInjectionScript` uses the unexported `buildWorkerInjectionFromNormalized`
  * with the already-normalized fingerprint.
  */
-export function buildWorkerInjectionScript(inputFp: Fingerprint): string {
-  return buildWorkerInjectionFromNormalized(normalizeFingerprint(inputFp))
+export function buildWorkerInjectionScript(
+  inputFp: Fingerprint,
+  options: InjectionOptions = {}
+): string {
+  return buildWorkerInjectionFromNormalized(normalizeFingerprint(inputFp), options)
 }
 
-function buildWorkerInjectionFromNormalized(fp: Fingerprint): string {
+function buildWorkerInjectionFromNormalized(
+  fp: Fingerprint,
+  options: InjectionOptions = {}
+): string {
   const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
   const languagesJson = JSON.stringify(languages)
+  const blockWebAuthn = options.blockWebAuthn !== false
+  // The worker-scope CDP probe vector (anti-bot scripts pass an object with
+  // a `toString`/property getter to console.debug to detect that DevTools
+  // or a CDP listener formatted it). Workers have console.* and inherit the
+  // same probe surface as the main world. Each method gets a distinct fresh
+  // closure so identity comparisons (`console.debug !== console.dir`) match
+  // real Chrome.
+  const consoleProbe = blockWebAuthn
+    ? `try{if(typeof console!=='undefined'){var _pm=['debug','dir','dirxml','table','trace','profile','profileEnd','timeStamp'];for(var _ci=0;_ci<_pm.length;_ci++){var _n=_pm[_ci];if(typeof console[_n]==='function'){console[_n]=(function(){return function(){};})();}}}}catch(e){}`
+    : ''
   return (
     `(function(){try{var n=navigator;var d=Object.defineProperty;var langs=${languagesJson};var tz=${JSON.stringify(fp.timezone)};` +
     `d(n,"language",{get:function(){return ${JSON.stringify(languages[0] || 'en-US')}},configurable:true});` +
@@ -814,7 +830,9 @@ function buildWorkerInjectionFromNormalized(fp: Fingerprint): string {
     `var ODTF=Intl.DateTimeFormat;Intl.DateTimeFormat=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();if(options&&typeof options==="object"){if(!options.timeZone)options.timeZone=tz;}else if(!options){options={timeZone:tz};}return new ODTF(locales,options);};` +
     `Intl.DateTimeFormat.prototype=ODTF.prototype;Intl.DateTimeFormat.supportedLocalesOf=ODTF.supportedLocalesOf.bind(ODTF);` +
     `["toLocaleString","toLocaleDateString","toLocaleTimeString"].forEach(function(name){var orig=Date.prototype[name];Date.prototype[name]=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();options=options&&typeof options==="object"?options:{};if(!options.timeZone)options.timeZone=tz;return orig.call(this,locales,options);};});` +
-    `}catch(e){}})();\n`
+    `}catch(e){}` +
+    consoleProbe +
+    `})();\n`
   )
 }
 
@@ -824,11 +842,20 @@ export interface GeoOverride {
   accuracy: number // meters
 }
 
-export function buildInjectionScript(inputFp: Fingerprint, geoOverride?: GeoOverride): string {
+export interface InjectionOptions {
+  blockWebAuthn?: boolean
+}
+
+export function buildInjectionScript(
+  inputFp: Fingerprint,
+  geoOverride?: GeoOverride,
+  options: InjectionOptions = {}
+): string {
   const fp = normalizeFingerprint(inputFp)
   const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
   const languagesJson = JSON.stringify(languages)
   const geoOverrideJson = geoOverride ? JSON.stringify(geoOverride) : 'null'
+  const blockWebAuthn = options.blockWebAuthn !== false
 
   let fontsJson = fp.fonts_list
   try {
@@ -844,8 +871,11 @@ export function buildInjectionScript(inputFp: Fingerprint, geoOverride?: GeoOver
 
   // Pre-build worker spoofing code (injected into Worker/SharedWorker constructors).
   // Uses the same normalized `fp` so main-world spoof and worker-world spoof
-  // never diverge on Math.random() fallbacks during normalization.
-  const workerSpoofCode = JSON.stringify(buildWorkerInjectionFromNormalized(fp))
+  // never diverge on Math.random() fallbacks during normalization. Forward
+  // the lockdown flag so the worker scope gets the same console-probe
+  // neutralization as the main world (workers have `console.*` and the
+  // CDP getter-probe vector applies identically there).
+  const workerSpoofCode = JSON.stringify(buildWorkerInjectionFromNormalized(fp, { blockWebAuthn }))
 
   return `(function(){
 'use strict';
@@ -2186,6 +2216,199 @@ try{
     window.SharedWorker=_HookedSW;
   }
 }catch(e){}
+
+// ═══════════════════════════════════════════
+// 19. Hardware identity lockdown
+// ═══════════════════════════════════════════
+// One flag governs every API that exposes a stable per-device or
+// per-user-account identifier without an explicit user gesture. Sub-blocks
+// 19.a–19.g share a threat model — hardware-/account-level linkage between
+// separate profiles run on the same machine. Each sub-block fails open
+// (try/catch) so one missing API never disables the rest.
+//
+// _cloak (defined earlier in the IIFE) installs the patch via
+// \`obj[name] = fn\`. All hooks below target data properties on real-Chrome
+// prototypes / instances, so the strict-mode assignment creates an own
+// data property that shadows the prototype method. If a future Chrome
+// milestone moves any of these to accessor properties without setters,
+// the assignment will throw and the surrounding try/catch will fail open
+// for that sub-block — verify against the shipping Chromium milestone
+// when adding new hook targets.
+//
+// Each \`_cloak\` call below intentionally receives a freshly-allocated
+// closure rather than a shared one — Chrome's native console / credential
+// methods are distinct function references (\`console.debug !== console.dir\`)
+// and the stale-shared pattern was a one-bit "this is spoofed" tell.
+${blockWebAuthn ? `
+// 19.a — WebAuthn / FIDO2
+try{
+  if(typeof PublicKeyCredential!=='undefined'){
+    if(typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable==='function'){
+      _cloak(PublicKeyCredential,'isUserVerifyingPlatformAuthenticatorAvailable',function(){return Promise.resolve(false);});
+    }
+    if(typeof PublicKeyCredential.isConditionalMediationAvailable==='function'){
+      _cloak(PublicKeyCredential,'isConditionalMediationAvailable',function(){return Promise.resolve(false);});
+    }
+    if(typeof PublicKeyCredential.getClientCapabilities==='function'){
+      _cloak(PublicKeyCredential,'getClientCapabilities',function(){
+        return Promise.resolve({
+          conditionalCreate:false,
+          conditionalGet:false,
+          hybridTransport:false,
+          passkeyPlatformAuthenticator:false,
+          userVerifyingPlatformAuthenticator:false,
+          relatedOrigins:false,
+          signalAllAcceptedCredentials:false,
+          signalCurrentUserDetails:false,
+          signalUnknownCredential:false
+        });
+      });
+    }
+  }
+}catch(e){}
+
+// 19.b — Credential Management surface (WebAuthn / FedCM / WebOTP / Digital Credentials)
+// Reject every ceremony that asks for hardware-bound or federated identity
+// material. publicKey=WebAuthn, identity=FedCM, otp=WebOTP, digital=Digital
+// Credentials API (mDL / EU eID wallets). Password and legacy
+// FederatedCredential pass through so the browser password manager keeps
+// working. Empty-string DOMException matches Chrome's actual user-cancel
+// shape (the long URL-bearing message text varies by milestone and is
+// itself a tell).
+try{
+  if(navigator.credentials){
+    var _credCreate=navigator.credentials.create;
+    var _credGet=navigator.credentials.get;
+    if(typeof _credCreate==='function'){
+      _cloak(navigator.credentials,'create',function(opts){
+        if(opts&&(opts.publicKey||opts.identity||opts.digital)){
+          return Promise.reject(new DOMException('','NotAllowedError'));
+        }
+        return _credCreate.apply(this,arguments);
+      });
+    }
+    if(typeof _credGet==='function'){
+      _cloak(navigator.credentials,'get',function(opts){
+        if(opts&&(opts.publicKey||opts.identity||opts.otp||opts.digital)){
+          return Promise.reject(new DOMException('','NotAllowedError'));
+        }
+        return _credGet.apply(this,arguments);
+      });
+    }
+  }
+  // Digital Credentials API ships a parallel surface as navigator.identity.
+  if(navigator.identity){
+    if(typeof navigator.identity.get==='function'){
+      _cloak(navigator.identity,'get',function(){
+        return Promise.reject(new DOMException('','NotAllowedError'));
+      });
+    }
+  }
+  // FedCM / Digital Credentials IdP surface
+  if(typeof IdentityProvider!=='undefined'){
+    if(typeof IdentityProvider.getUserInfo==='function'){
+      _cloak(IdentityProvider,'getUserInfo',function(){
+        return Promise.reject(new DOMException('','NotAllowedError'));
+      });
+    }
+    if(typeof IdentityProvider.close==='function'){
+      _cloak(IdentityProvider,'close',function(){});
+    }
+  }
+}catch(e){}
+
+// 19.c — PaymentRequest stored-card / show() probes
+// canMakePayment + hasEnrolledInstrument are the boolean probes;
+// show() is reachable in some flows via .catch() probing — reject with
+// AbortError to match the user-dismissed shape.
+try{
+  if(typeof PaymentRequest!=='undefined'&&PaymentRequest.prototype){
+    if(typeof PaymentRequest.prototype.canMakePayment==='function'){
+      _cloak(PaymentRequest.prototype,'canMakePayment',function(){return Promise.resolve(false);});
+    }
+    if(typeof PaymentRequest.prototype.hasEnrolledInstrument==='function'){
+      _cloak(PaymentRequest.prototype,'hasEnrolledInstrument',function(){return Promise.resolve(false);});
+    }
+    if(typeof PaymentRequest.prototype.show==='function'){
+      _cloak(PaymentRequest.prototype,'show',function(){
+        return Promise.reject(new DOMException('','AbortError'));
+      });
+    }
+  }
+}catch(e){}
+
+// 19.d — Storage Access API
+// In real Chrome \`hasStorageAccess()\` resolves true on top-level documents
+// (no third-party partition exists) and varies for nested contexts. Forcing
+// \`false\` unconditionally is itself a top-frame tell, so mirror Chrome's
+// shape: top-level → true, third-party iframe → false.
+try{
+  if(typeof Document!=='undefined'&&Document.prototype){
+    var _isTopFrame=function(){
+      try{return window.top===window;}catch(e){return false;}
+    };
+    if(typeof Document.prototype.hasStorageAccess==='function'){
+      _cloak(Document.prototype,'hasStorageAccess',function(){
+        return Promise.resolve(_isTopFrame());
+      });
+    }
+    if(typeof Document.prototype.requestStorageAccess==='function'){
+      _cloak(Document.prototype,'requestStorageAccess',function(){
+        return Promise.reject(new DOMException('','NotAllowedError'));
+      });
+    }
+    // hasStorageAccessFor / requestStorageAccessFor (Chrome 119+):
+    // first-party-set lookup. Same posture as the un-suffixed pair.
+    if(typeof Document.prototype.hasStorageAccessFor==='function'){
+      _cloak(Document.prototype,'hasStorageAccessFor',function(){
+        return Promise.resolve(_isTopFrame());
+      });
+    }
+    if(typeof Document.prototype.requestStorageAccessFor==='function'){
+      _cloak(Document.prototype,'requestStorageAccessFor',function(){
+        return Promise.reject(new DOMException('','NotAllowedError'));
+      });
+    }
+  }
+}catch(e){}
+
+// 19.e — DevTools / CDP probe neutralization
+// Anti-bot probe: \`console.debug({get id(){detected=true;return 1;}})\` —
+// DevTools / Runtime.consoleAPICalled formatters touch the getter. No-op
+// each method with a fresh closure (shared closures collapse identity:
+// real Chrome has \`console.debug !== console.dir\`).
+try{
+  if(typeof console!=='undefined'){
+    var _probeMethods=['debug','dir','dirxml','table','trace','profile','profileEnd','timeStamp'];
+    for(var _ci=0;_ci<_probeMethods.length;_ci++){
+      var _pm=_probeMethods[_ci];
+      if(typeof console[_pm]==='function'){
+        _cloak(console,_pm,function(){});
+      }
+    }
+  }
+}catch(e){}
+
+// 19.f — DBSC future-proof
+// DBSC is HTTP-header driven (Sec-Session-*) — primary defense is the
+// --disable-features=DeviceBoundSessionCredentials flag in browser.ts.
+// This block reserves any imperative JS entrypoint Chrome may add later.
+try{
+  if('deviceBoundSession' in navigator){
+    Object.defineProperty(navigator,'deviceBoundSession',{
+      get:function(){return undefined;},
+      configurable:true
+    });
+  }
+}catch(e){}
+
+// 19.g — Topics API (Privacy Sandbox)
+try{
+  if(typeof Document!=='undefined'&&Document.prototype&&typeof Document.prototype.browsingTopics==='function'){
+    _cloak(Document.prototype,'browsingTopics',function(){return Promise.resolve([]);});
+  }
+}catch(e){}
+` : ''}
 
 })();`
 }

@@ -1,9 +1,10 @@
+import type { ReactNode } from 'react'
 import { cn } from '@renderer/lib/utils'
 
 export interface ToggleProps {
   checked: boolean
   onChange: (checked: boolean) => void
-  label?: string
+  label?: ReactNode
   description?: string
   disabled?: boolean
   'aria-label'?: string

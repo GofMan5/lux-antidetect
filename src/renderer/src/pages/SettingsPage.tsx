@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback, useRef, lazy, Suspense } fro
 import {
   CheckCircle2, Plus, Trash2, Check, Palette, History, FileText,
   Download, Upload, HardDrive, Loader2, Settings2, Fingerprint, RefreshCw,
-  Pencil, Bug, Monitor, Database, Power, Info
+  Pencil, Bug, Monitor, Database, Power, Info, ShieldCheck
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
@@ -58,6 +58,8 @@ export function SettingsPage(): React.JSX.Element {
   const deleteCustomTheme = useSettingsStore((s) => s.deleteCustomTheme)
   const autoRegenFingerprint = useSettingsStore((s) => s.autoRegenFingerprint)
   const setAutoRegenFingerprint = useSettingsStore((s) => s.setAutoRegenFingerprint)
+  const blockWebAuthn = useSettingsStore((s) => s.blockWebAuthn)
+  const setBlockWebAuthn = useSettingsStore((s) => s.setBlockWebAuthn)
 
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(true)
 
@@ -271,6 +273,8 @@ export function SettingsPage(): React.JSX.Element {
             <FingerprintTab
               autoRegenFingerprint={autoRegenFingerprint}
               setAutoRegenFingerprint={setAutoRegenFingerprint}
+              blockWebAuthn={blockWebAuthn}
+              setBlockWebAuthn={setBlockWebAuthn}
             />
           )}
 
@@ -673,10 +677,13 @@ function GeneralTab({
 /* ------------------------------------------------------------------ */
 
 function FingerprintTab({
-  autoRegenFingerprint, setAutoRegenFingerprint
+  autoRegenFingerprint, setAutoRegenFingerprint,
+  blockWebAuthn, setBlockWebAuthn
 }: {
   autoRegenFingerprint: boolean
   setAutoRegenFingerprint: (val: boolean) => Promise<void>
+  blockWebAuthn: boolean
+  setBlockWebAuthn: (val: boolean) => Promise<void>
 }): React.JSX.Element {
   return (
     <div className="space-y-5">
@@ -691,6 +698,26 @@ function FingerprintTab({
             onChange={(val) => setAutoRegenFingerprint(val)}
             label="Auto-regenerate fingerprint on each launch"
             description="Creates a unique fingerprint for every browser session."
+          />
+        </div>
+      </Card>
+
+      <Card
+        title="Hardware Identity Lockdown"
+        description="Block API surfaces that expose stable device- or account-bound identifiers."
+        actions={<ShieldCheck className="h-4 w-4 text-accent" />}
+      >
+        <div className="space-y-4">
+          <Toggle
+            checked={blockWebAuthn}
+            onChange={(val) => setBlockWebAuthn(val)}
+            label={
+              <span className="inline-flex items-center gap-2">
+                Block tracking probes &amp; identity APIs
+                <Badge variant="success" dot>Recommended</Badge>
+              </span>
+            }
+            description="Blocks passkeys, FedCM, Digital Credentials, DBSC, payment-instrument probes, Storage Access, Privacy Sandbox Topics, and DevTools / CDP detection. Password autofill and standard federated logins are unaffected."
           />
         </div>
       </Card>
