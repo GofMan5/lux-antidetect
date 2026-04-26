@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { BrowserType, Fingerprint } from './models'
+import type { BrowserType, Fingerprint, Proxy } from './models'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -623,6 +623,49 @@ export function normalizeFingerprint(fingerprint: Fingerprint): Fingerprint {
   return {
     ...fingerprint,
     ...normalizeFingerprintDraft(fingerprint)
+  }
+}
+
+/**
+ * Overlay a proxy's geo data onto a fingerprint without mutating either.
+ *
+ * Anti-bot vendors cross-check `Intl.DateTimeFormat().resolvedOptions().timeZone`
+ * (and `navigator.languages[0]`) against the IP's expected region, so the
+ * fingerprint's timezone + primary language must match the proxy IP. This
+ * helper produces the merged shape used both at browser launch (so the
+ * spoof script runs with the proxy's region) and at profile-edit time (so
+ * the persisted fingerprint reflects what'll actually be sent on launch —
+ * the editor stops lying to the user about what's stored).
+ *
+ * Falls back to the fingerprint's own values when the proxy has no geo
+ * (e.g., user just added the proxy and geoip lookup hasn't run yet).
+ */
+export function applyProxyGeoToFingerprint(
+  fp: Fingerprint,
+  proxy: Proxy | null | undefined
+): Fingerprint {
+  if (!proxy) return fp
+  const tz = proxy.timezone
+  const locale = proxy.locale
+  if (!tz && !locale) return fp
+
+  let languages = fp.languages
+  if (locale) {
+    try {
+      const existing = JSON.parse(fp.languages) as unknown
+      if (Array.isArray(existing)) {
+        const list = existing.filter((v): v is string => typeof v === 'string')
+        const filtered = list.filter((l) => l !== locale)
+        languages = JSON.stringify([locale, ...filtered])
+      }
+      // Else: keep fp.languages unchanged — corrupt JSON is preserved
+      // rather than overwritten so we don't silently drop user data.
+    } catch { /* keep fp.languages unchanged */ }
+  }
+  return {
+    ...fp,
+    timezone: tz ?? fp.timezone,
+    languages
   }
 }
 

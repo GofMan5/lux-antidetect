@@ -12,7 +12,8 @@ import {
   updateFingerprint,
   deleteProfile,
   wipeProfileBrowserData,
-  duplicateProfile
+  duplicateProfile,
+  syncFingerprintsForProxy
 } from './profile'
 import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, parseProxyLine } from './proxy'
 import { lookupProxyGeo, dryRunProxyMetadata, lookupFraudByIp } from './geoip'
@@ -218,7 +219,13 @@ export function registerIpcHandlers(
       win.webContents.send('proxy:metadata-checking', { proxy_id: created.id })
     }
     lookupProxyGeo(db, created.id)
-      .then(() => {
+      .then((bundle) => {
+        // Propagate freshly-discovered geo to any profile already pinned to
+        // this proxy. Rare on createProxy (proxy is brand new — usually
+        // attached by the user later), but harmless when no profile is
+        // dependent yet, and correct when the user races the auto-check by
+        // attaching the proxy before it completes.
+        if (bundle) syncFingerprintsForProxy(db, created.id)
         const w = getMainWindow()
         if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
           w.webContents.send('proxy:metadata-updated', { proxy_id: created.id })
@@ -295,7 +302,12 @@ export function registerIpcHandlers(
 
   ipcMain.handle('lookup-proxy-geo', async (_, proxyId: string) => {
     assertUuid(proxyId)
-    return lookupProxyGeo(db, proxyId)
+    const bundle = await lookupProxyGeo(db, proxyId)
+    // Propagate the refreshed geo to every profile pinned to this proxy so
+    // their fingerprints' timezone / primary language stay in sync without
+    // the user re-saving each profile manually.
+    if (bundle) syncFingerprintsForProxy(db, proxyId)
+    return bundle
   })
 
   // Dry-run reputation check — used by the bulk-import flow to filter out

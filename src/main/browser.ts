@@ -7,6 +7,7 @@ import { randomBytes } from 'crypto'
 import type Database from 'better-sqlite3'
 import type { BrowserType, Fingerprint, Profile, Proxy } from './models'
 import {
+  applyProxyGeoToFingerprint as applyProxyGeoToFingerprintImpl,
   buildInjectionScript,
   buildWorkerInjectionScript,
   normalizeFingerprint,
@@ -1000,30 +1001,11 @@ const pendingLaunches = new Set<string>()
  * Falls back to the fingerprint's own values when the proxy has no geo
  * (e.g., user just added the proxy and geoip lookup hasn't run yet).
  */
+// Re-export shim — the implementation moved to fingerprint.ts so both
+// browser launch (this module) and profile updates (profile.ts) can apply
+// proxy-derived geo without crossing the browser→profile import line.
 function applyProxyGeoToFingerprint(fp: Fingerprint, proxy: Proxy | undefined): Fingerprint {
-  if (!proxy) return fp
-  const tz = proxy.timezone
-  const locale = proxy.locale
-  if (!tz && !locale) return fp
-
-  let languages = fp.languages
-  if (locale) {
-    try {
-      const existing = JSON.parse(fp.languages) as unknown
-      if (Array.isArray(existing)) {
-        const list = existing.filter((v): v is string => typeof v === 'string')
-        const filtered = list.filter((l) => l !== locale)
-        languages = JSON.stringify([locale, ...filtered])
-      }
-      // Else: keep fp.languages unchanged — corrupt JSON is preserved
-      // rather than overwritten so we don't silently drop user data.
-    } catch { /* keep fp.languages unchanged */ }
-  }
-  return {
-    ...fp,
-    timezone: tz ?? fp.timezone,
-    languages
-  }
+  return applyProxyGeoToFingerprintImpl(fp, proxy)
 }
 
 function stopSocksRelay(profileId: string): void {

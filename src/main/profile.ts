@@ -13,7 +13,7 @@ import type {
   UpdateFingerprintInput
 } from './models'
 import { toProxyResponse } from './models'
-import { generateDefaultFingerprint, normalizeFingerprint } from './fingerprint'
+import { applyProxyGeoToFingerprint, generateDefaultFingerprint, normalizeFingerprint } from './fingerprint'
 import { isRunning } from './sessions'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -110,6 +110,11 @@ export async function createProfile(
   })
   transaction()
 
+  // Auto-sync the freshly-generated fingerprint to the proxy's geo (if any).
+  // Mirrors the updateProfile path so a freshly created profile + proxy pair
+  // already has matching timezone / language without a second save.
+  if (input.proxy_id) syncFingerprintToProxy(db, profileId, input.proxy_id)
+
   await mkdir(join(profilesDir, profileId), { recursive: true })
 
   return db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as Profile
@@ -140,7 +145,55 @@ export function updateProfile(
     `UPDATE profiles SET name = ?, browser_type = ?, group_name = ?, group_color = ?, tags = ?, notes = ?, proxy_id = ?, start_url = ?, updated_at = ? WHERE id = ?`
   ).run(name, browserType, groupName, groupColor, tags, notes, proxyId, startUrl, now, profileId)
 
+  // Auto-sync the fingerprint to the (new) proxy's geo whenever the proxy
+  // assignment changes. This keeps the editor honest: timezone + primary
+  // language displayed in the editor match what'll actually be injected
+  // at launch via applyProxyGeoToFingerprint.
+  const proxyChanged = input.proxy_id !== undefined && input.proxy_id !== existing.proxy_id
+  if (proxyChanged) syncFingerprintToProxy(db, profileId, proxyId)
+
   return db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId) as Profile
+}
+
+/**
+ * Overlay the proxy's geo data onto the profile's fingerprint and persist.
+ * No-op when the profile has no fingerprint yet (createProfile path), or
+ * when the proxy has no resolved geo (lookupProxyGeo hasn't run, or the
+ * provider didn't return data).
+ */
+function syncFingerprintToProxy(
+  db: Database.Database,
+  profileId: string,
+  proxyId: string | null
+): void {
+  const fp = db.prepare('SELECT * FROM fingerprints WHERE profile_id = ?').get(profileId) as
+    | Fingerprint
+    | undefined
+  if (!fp) return
+  const proxy = proxyId
+    ? (db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as Proxy | undefined)
+    : null
+  const merged = applyProxyGeoToFingerprint(fp, proxy ?? null)
+  if (merged.timezone === fp.timezone && merged.languages === fp.languages) return
+  db.prepare(
+    `UPDATE fingerprints SET timezone = ?, languages = ? WHERE profile_id = ?`
+  ).run(merged.timezone, merged.languages, profileId)
+}
+
+/**
+ * Public re-sync entry point — used after a proxy's geo data refreshes
+ * (e.g. lookupProxyGeo populated proxy.timezone for the first time) so
+ * every profile pinned to that proxy picks up the new region without
+ * the user having to reopen and re-save the profile.
+ */
+export function syncFingerprintsForProxy(
+  db: Database.Database,
+  proxyId: string
+): void {
+  const profiles = db
+    .prepare('SELECT id FROM profiles WHERE proxy_id = ?')
+    .all(proxyId) as { id: string }[]
+  for (const p of profiles) syncFingerprintToProxy(db, p.id, proxyId)
 }
 
 export function updateFingerprint(
