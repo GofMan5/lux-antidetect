@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import type { BrowserType, Fingerprint, Proxy } from './models'
 
@@ -859,6 +860,67 @@ function buildWorkerInjectionFromNormalized(
   const consoleProbe = blockWebAuthn
     ? `try{if(typeof console!=='undefined'){var _pm=['debug','dir','dirxml','table','trace','profile','profileEnd','timeStamp'];for(var _ci=0;_ci<_pm.length;_ci++){var _n=_pm[_ci];if(typeof console[_n]==='function'){console[_n]=(function(){return function(){};})();}}}}catch(e){}`
     : ''
+  // Canvas/WebGL/Audio cloak block. Workers cannot touch document or
+  // HTMLCanvasElement, but they can render via OffscreenCanvas (2D + WebGL)
+  // and synthesise audio via OfflineAudioContext / AudioBuffer. CreepJS and
+  // FingerprintJS run their canvas/WebGL probes inside a Worker exactly so
+  // the main-world spoof is bypassed — the worker scope MUST mirror the
+  // main-world canvas/WebGL/audio cloaks or the profile fingerprint diverges
+  // between page and worker (which is itself a strong automation signal).
+  const seed = fp.canvas_noise_seed
+  const audioNoise = fp.audio_context_noise
+  const wglVendorJson = JSON.stringify(fp.webgl_vendor)
+  const wglRendererJson = JSON.stringify(fp.webgl_renderer)
+  const canvasWebglAudioBlock =
+    `try{` +
+    `var _seed=${seed};` +
+    `function _m32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}}` +
+    // toString cloak — without this, every replaced prototype method exposes
+    // its source via \`Proto.method.toString()\`. CreepJS reads exactly that to
+    // detect spoofed APIs from inside workers.
+    `var _origFTS=Function.prototype.toString;var _origFTSStr=_origFTS.call(_origFTS);var _tsMap=new WeakMap();` +
+    `Function.prototype.toString=function(){var v=_tsMap.get(this);return (v!==undefined)?v:_origFTS.call(this);};` +
+    `_tsMap.set(Function.prototype.toString,_origFTSStr);` +
+    `var _wrap=function(orig,fn){try{_tsMap.set(fn,_origFTS.call(orig));}catch(e){_tsMap.set(fn,'function () { [native code] }');}return fn;};` +
+    // Per-call seeding mirrors the main-world canvas hook, so a probe that
+    // hashes getImageData(0,0,w,h) twice on the same canvas gets the same
+    // bytes both times — a shared module-level _rng would advance state
+    // between calls and produce divergent hashes (a tell in itself).
+    `var _addNoise=function(data,sw,sh){var rng=_m32((_seed^((sw*sh)&0x7FFFFFFF))>>>0);var len=data.length;for(var i=0;i<len;i+=4){if(rng()<0.05){data[i]=(data[i]+((rng()*5)|0)-2)&0xFF;data[i+1]=(data[i+1]+((rng()*5)|0)-2)&0xFF;data[i+2]=(data[i+2]+((rng()*5)|0)-2)&0xFF;}}};` +
+    // OffscreenCanvas 2D getImageData — primary canvas hash vector in workers
+    `var _ogid=null;` +
+    `if(typeof OffscreenCanvasRenderingContext2D!=='undefined'&&OffscreenCanvasRenderingContext2D.prototype.getImageData){` +
+    `_ogid=OffscreenCanvasRenderingContext2D.prototype.getImageData;` +
+    `OffscreenCanvasRenderingContext2D.prototype.getImageData=_wrap(_ogid,function(sx,sy,sw,sh){var id=_ogid.call(this,sx,sy,sw,sh);try{_addNoise(id.data,sw,sh);}catch(e){}return id;});` +
+    `}` +
+    // OffscreenCanvas.convertToBlob — copy to a scratch canvas, noise the
+    // copy, encode the copy. NEVER mutate the source canvas: a destructive
+    // putImageData on \`this\` permanently shifts subsequent reads, makes
+    // sequential convertToBlob calls non-deterministic (real Chrome IS
+    // deterministic), and lazy-creating getContext('2d') on a webgl-only
+    // canvas would block subsequent getContext('webgl') from succeeding.
+    // Cap area to 256×256 — fingerprint probes are well under this; large
+    // renders (PDF.js, video frames) bypass entirely to avoid the
+    // 4·w·h pixel allocation per encode.
+    `if(typeof OffscreenCanvas!=='undefined'&&OffscreenCanvas.prototype.convertToBlob&&_ogid){` +
+    `var _ocvb=OffscreenCanvas.prototype.convertToBlob;` +
+    `OffscreenCanvas.prototype.convertToBlob=_wrap(_ocvb,function(opts){try{var w=this.width,h=this.height;if(w>0&&h>0&&w*h<=65536){var scratch=new OffscreenCanvas(w,h);var sctx=scratch.getContext('2d');if(sctx){sctx.drawImage(this,0,0);var raw=_ogid.call(sctx,0,0,w,h);_addNoise(raw.data,w,h);sctx.putImageData(raw,0,0);return _ocvb.call(scratch,opts);}}}catch(e){}return _ocvb.call(this,opts);});` +
+    `}` +
+    // WebGL UNMASKED_VENDOR (0x9245) / UNMASKED_RENDERER (0x9246) / VENDOR (0x1F00) / RENDERER (0x1F01)
+    `var _wglV=${wglVendorJson};var _wglR=${wglRendererJson};` +
+    `var _hookWGL=function(proto){if(!proto||!proto.getParameter)return;var _ogp=proto.getParameter;proto.getParameter=_wrap(_ogp,function(p){if(p===0x9245||p===0x1F00)return _wglV;if(p===0x9246||p===0x1F01)return _wglR;return _ogp.call(this,p);});};` +
+    `if(typeof WebGLRenderingContext!=='undefined')_hookWGL(WebGLRenderingContext.prototype);` +
+    `if(typeof WebGL2RenderingContext!=='undefined')_hookWGL(WebGL2RenderingContext.prototype);` +
+    // AudioBuffer.getChannelData — workers using OfflineAudioContext for
+    // audio fingerprinting. Clamp post-noise to [-1, 1]: real audio buffers
+    // are bounded; values outside this range are an "audio is being noised"
+    // signal that fingerprint scripts probe via Math.max(...buf).
+    `var _audN=${audioNoise};` +
+    `if(typeof AudioBuffer!=='undefined'&&AudioBuffer.prototype.getChannelData){` +
+    `var _ogcd=AudioBuffer.prototype.getChannelData;var _noised=new WeakSet();` +
+    `AudioBuffer.prototype.getChannelData=_wrap(_ogcd,function(ch){var data=_ogcd.call(this,ch);if(!_noised.has(this)){_noised.add(this);try{var rng=_m32(_seed^(this.length&0x7FFFFFFF));for(var c=0;c<this.numberOfChannels;c++){var dd=_ogcd.call(this,c);for(var i=0;i<dd.length;i+=100){var v=dd[i]+_audN*(rng()-0.5);dd[i]=v>1?1:(v<-1?-1:v);}}}catch(e){}}return data;});` +
+    `}` +
+    `}catch(e){}`
   return (
     `(function(){try{var n=navigator;var d=Object.defineProperty;var langs=${languagesJson};var tz=${JSON.stringify(fp.timezone)};` +
     `d(n,"language",{get:function(){return ${JSON.stringify(languages[0] || 'en-US')}},configurable:true});` +
@@ -875,6 +937,7 @@ function buildWorkerInjectionFromNormalized(
     `["toLocaleString","toLocaleDateString","toLocaleTimeString"].forEach(function(name){var orig=Date.prototype[name];Date.prototype[name]=function(locales,options){if(locales===undefined||locales===null)locales=langs.slice();options=options&&typeof options==="object"?options:{};if(!options.timeZone)options.timeZone=tz;return orig.call(this,locales,options);};});` +
     `}catch(e){}` +
     consoleProbe +
+    canvasWebglAudioBlock +
     `})();\n`
   )
 }
@@ -911,6 +974,49 @@ export function buildInjectionScript(
   }
 
   const isChrome = fp.user_agent.includes('Chrome/')
+  const isMobile = fp.device_type === 'mobile'
+
+  // ─── Battery + Connection: deterministically derived from canvas_noise_seed ───
+  // Both values used to be hard-coded constants ({level:1.0,charging:true,...}
+  // and {effectiveType:'4g',downlink:10,rtt:50}), making every profile report
+  // an identical battery/connection state. CreepJS-class detectors cluster
+  // identical fingerprints across sites, so any constant value is a free
+  // cross-profile correlation bucket. Deriving from canvas_noise_seed gives
+  // us a stable-per-profile, distinct-across-profiles value with zero extra
+  // schema cost (the seed already exists). Bit-shift offsets pick disjoint
+  // ranges of seed bits so derived fields are pairwise independent.
+  const seedBits = fp.canvas_noise_seed >>> 0
+  // Battery — 70% charging (desktop default), 30% unplugged (laptop). Level
+  // pinned to a realistic 0.50-1.00 range; users rarely run their machine
+  // below half charge for long.
+  const batteryCharging = (seedBits & 0x7) < 5 // 5/8 ≈ 62%
+  const batteryLevelStep = (seedBits >>> 4) % 51 // 0..50
+  const batteryLevel = Math.round((0.5 + batteryLevelStep / 100) * 100) / 100
+  const batteryChargingTimeJs = batteryCharging
+    ? batteryLevel >= 1.0 ? '0' : String(600 + ((seedBits >>> 10) % 6601)) // 10min - 2h
+    : 'Infinity'
+  const batteryDischargingTimeJs = batteryCharging
+    ? 'Infinity'
+    : String(3600 + ((seedBits >>> 14) % 25201)) // 1h - 8h
+  // Connection — 4g dominant. downlink/rtt rounded to bucket sizes Chrome
+  // uses for privacy (downlink: 0.025 mbps multiples; rtt: 25ms multiples).
+  const connEffectiveType = (seedBits & 0x1F) === 0 ? '3g' : '4g' // ~3% chance of 3g
+  const connDownlink = connEffectiveType === '3g'
+    ? 1 + ((seedBits >>> 18) % 4) // 1..4 mbps
+    : 5 + (((seedBits >>> 18) % 51) / 2) // 5..30 mbps in 0.5 steps
+  const connRtt = 25 * (1 + ((seedBits >>> 22) % 4)) // 25/50/75/100 ms
+
+  // Screen-aware outerWidth/outerHeight / availHeight calibration. The old
+  // override pinned outerWidth/outerHeight to screen.width/height, which
+  // implies a perfectly-maximized window with no chrome decoration — real
+  // Chrome reports outerHeight ≈ innerHeight + 88 (tab + omnibox + bookmarks).
+  // availHeight offset varies per OS: Windows taskbar ~40, macOS menu bar ~25,
+  // Linux/GNOME ~27, mobile 0.
+  let availOffset: number
+  if (isMobile) availOffset = 0
+  else if (fp.platform === 'MacIntel') availOffset = 25
+  else if (fp.platform.startsWith('Linux')) availOffset = 27
+  else availOffset = 40
 
   // Pre-build worker spoofing code (injected into Worker/SharedWorker constructors).
   // Uses the same normalized `fp` so main-world spoof and worker-world spoof
@@ -920,8 +1026,33 @@ export function buildInjectionScript(
   // CDP getter-probe vector applies identically there).
   const workerSpoofCode = JSON.stringify(buildWorkerInjectionFromNormalized(fp, { blockWebAuthn }))
 
+  // Per-build sentinel name — randomized so detection scripts can't probe
+  // a fixed brand string (e.g. \`'__lux_injected__' in window\`) to identify
+  // the spoof tool. Bytes from a CSPRNG, fresh per generated script.
+  const guardKeyJs = JSON.stringify('_' + randomBytes(8).toString('hex'))
   return `(function(){
 'use strict';
+
+// ── Idempotency guard ──
+// The same script can be delivered to a single realm twice: once via
+// CDP Page.addScriptToEvaluateOnNewDocument({runImmediately:true}) and
+// once via Runtime.evaluate, or by future code paths that re-attach.
+// On the second run, prototype originals captured by \`var _origX = Proto.method;\`
+// would point to our already-installed wrapper, and the new wrapper would
+// chain on top of it — doubling canvas noise, double-cloaking toString,
+// and orphaning the first run's _toStringMap entries (the second run
+// allocates a fresh WeakMap). One-bit signals that detection scripts
+// trivially cluster on. Sentinel on the realm's global so any future
+// re-evaluate is a no-op. Property name is randomized per build to avoid
+// being itself a brand-identifying tell.
+var _guardKey=${guardKeyJs};
+try{
+  var _g=(typeof globalThis!=='undefined')?globalThis:(typeof self!=='undefined'?self:(typeof window!=='undefined'?window:null));
+  if(_g){
+    if(_g[_guardKey]===true)return;
+    Object.defineProperty(_g,_guardKey,{value:true,configurable:false,writable:false,enumerable:false});
+  }
+}catch(e){}
 
 // ── Seeded PRNG (Mulberry32) ──
 var _seed=${fp.canvas_noise_seed};
@@ -991,15 +1122,32 @@ for(var _nk in _navProps){
 // ═══════════════════════════════════════════
 var _scrProps={
   width:${fp.screen_width},height:${fp.screen_height},
-  availWidth:${fp.screen_width},availHeight:${fp.screen_height - 40},
+  availWidth:${fp.screen_width},availHeight:${fp.screen_height - availOffset},
   colorDepth:${fp.color_depth},pixelDepth:${fp.color_depth}
 };
 for(var _sk in _scrProps){
   (function(k,v){_defProp(Screen.prototype,k,function(){return v;});}(_sk,_scrProps[_sk]));
 }
 _defProp(window,'devicePixelRatio',function(){return ${fp.pixel_ratio};});
-_defProp(window,'outerWidth',function(){return ${fp.screen_width};});
-_defProp(window,'outerHeight',function(){return ${fp.screen_height};});
+// outerWidth/outerHeight: real Chrome reports the OS-window outer size,
+// which is innerWidth + minor borders and innerHeight + ~88px chrome
+// (tab strip + omnibox + bookmarks bar). Pinning these to screen.width/height
+// implied a maximized borderless window — incorrect for any non-maximized
+// session and a one-bit "spoofed" tell when the host's actual display is
+// larger than the spoofed screen.
+//
+// Skip the override in cross-origin iframes (OOPIFs): real Chrome reports
+// the TOP window's outer dimensions inside iframes regardless of the iframe's
+// own viewport — overriding with iframe.innerWidth + 88 would emit a
+// per-iframe outer value that no real browser produces, creating a new tell
+// that didn't exist before. Top-frame detection: window.top access throws
+// SecurityError in cross-origin frames; that's the iframe path.
+var _isTopFrame=true;
+try{_isTopFrame=(window===window.top);}catch(e){_isTopFrame=false;}
+if(_isTopFrame){
+  _defProp(window,'outerWidth',function(){var w=window.innerWidth;return (typeof w==='number'&&w>0)?w:${fp.screen_width};});
+  _defProp(window,'outerHeight',function(){var h=window.innerHeight;return (typeof h==='number'&&h>0)?(h+88):${fp.screen_height - availOffset};});
+}
 
 // ═══════════════════════════════════════════
 // 3. Canvas fingerprint spoofing (Enhanced)
@@ -1819,7 +1967,10 @@ if(_rtcPolicy==='disable_non_proxied_udp'){
 // 11. navigator.connection spoofing
 // ═══════════════════════════════════════════
 try{
-  var _connProps={effectiveType:'4g',downlink:10,rtt:50,saveData:false,type:'wifi'};
+  // Per-profile seed-derived values (computed at injection-build time) so
+  // every profile reports a distinct effectiveType/downlink/rtt instead of
+  // the previous global constants which made all profiles cross-correlate.
+  var _connProps={effectiveType:${JSON.stringify(connEffectiveType)},downlink:${connDownlink},rtt:${connRtt},saveData:false,type:'wifi'};
   if('connection' in Navigator.prototype||navigator.connection){
     var _connTarget=navigator.connection||{};
     for(var _ck in _connProps){
@@ -2090,15 +2241,19 @@ try{Object.defineProperty(navigator,'webdriver',{get:function(){return false;},c
 // Consistent doNotTrack (null = Chrome default, DNT setting removed in Chrome 120+)
 _defProp(Navigator.prototype,'doNotTrack',function(){return null;});
 
-// Battery API — return consistent object
+// Battery API — per-profile seed-derived values. The previous block returned
+// a constant {charging:true, level:1.0, ...} on every profile, which gave
+// detectors a free cross-profile correlation bucket: any user running 50
+// profiles all reporting level=1.0/charging=true clusters trivially. Values
+// are computed at injection-build time from canvas_noise_seed so they're
+// stable across launches of the same profile but distinct across profiles.
 try{
   if(navigator.getBattery){
     var _origGetBattery=Navigator.prototype.getBattery;
     _cloak(Navigator.prototype,'getBattery',function(){
       return _origGetBattery.call(this).then(function(bm){
-        // Override values on the real BatteryManager instance to preserve prototype chain
         try{
-          var _bmGetters={charging:true,chargingTime:0,dischargingTime:Infinity,level:1.0};
+          var _bmGetters={charging:${batteryCharging},chargingTime:${batteryChargingTimeJs},dischargingTime:${batteryDischargingTimeJs},level:${batteryLevel}};
           for(var _bk in _bmGetters){
             (function(k,v){
               var origDesc=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(bm),k);
@@ -2115,6 +2270,16 @@ try{
         return bm;
       });
     });
+  }
+}catch(e){}
+
+// navigator.getGamepads — Chrome with no gamepads connected returns an array
+// of 4 nulls. Leaving this native exposes the fact that the spoofed UA claims
+// "Chrome on Windows" but the actual binding may differ (e.g., headless Chrome
+// returns an empty array on some builds). Detection scripts probe length and entry types.
+try{
+  if(typeof navigator.getGamepads==='function'){
+    _cloak(Navigator.prototype,'getGamepads',function(){return [null,null,null,null];});
   }
 }catch(e){}
 

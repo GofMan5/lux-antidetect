@@ -719,7 +719,7 @@ function startCDPInjection(
       if (wsUrl) {
         // Extract path from ws://127.0.0.1:PORT/devtools/browser/UUID
         const wsPath = new URL(wsUrl).pathname
-        startBrowserWsListener(port, wsPath, workerScript, injectedTargets, injectTarget, () => stopped)
+        startBrowserWsListener(port, wsPath, script, workerScript, injectedTargets, injectTarget, () => stopped)
       }
     } catch { /* fall back to polling */ }
 
@@ -771,6 +771,7 @@ function startCDPInjection(
 function startBrowserWsListener(
   port: number,
   wsPath: string,
+  mainScript: string,
   workerScript: string,
   injectedTargets: Set<string>,
   injectTarget: (targetId: string) => Promise<void>,
@@ -893,6 +894,32 @@ function startBrowserWsListener(
                   autoAttach: true,
                   waitForDebuggerOnStart: true,
                   flatten: true
+                }, sessionId)
+              }
+              // Cross-origin iframes are out-of-process (OOPIF) — they own a
+              // separate V8 context that does NOT inherit the parent page's
+              // `Page.addScriptToEvaluateOnNewDocument`. CreepJS / FingerprintJS
+              // embed cross-origin iframes specifically to read native canvas /
+              // WebGL / AudioContext from a clean realm. Inject the main-world
+              // spoof on the iframe session so canvas / WebGL / audio hooks run
+              // inside the OOPIF too.
+              //
+              // We rely on `runImmediately:true` alone (no `Runtime.evaluate`
+              // follow-up): if both fired, the IIFE would run twice in the
+              // iframe — the second pass captures the wrapped getImageData /
+              // getParameter / getBattery as "originals" and wraps them again,
+              // double-noising canvas pixels and freshly allocating
+              // `_toStringMap`, which would orphan first-pass cloak entries.
+              // The script also self-guards via a `__lux_injected__` sentinel
+              // so any future double-evaluate is a no-op.
+              //
+              // Pages keep per-target WS injection (`injectTarget`) — they're
+              // skipped here for the same reason.
+              if (type === 'iframe') {
+                sendWsMsg('Page.enable', {}, sessionId)
+                sendWsMsg('Page.addScriptToEvaluateOnNewDocument', {
+                  source: mainScript,
+                  runImmediately: true
                 }, sessionId)
               }
               sendWsMsg('Runtime.runIfWaitingForDebugger', {}, sessionId)
