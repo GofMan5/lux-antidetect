@@ -84,6 +84,9 @@ export interface LuxAPI {
   getProxyGroups(): Promise<string[]>
   lookupProxyCountry(id: string): Promise<string | null>
   lookupProxyGeo(id: string): Promise<ProxyGeoBundle | null>
+  // Dry-run reputation check — same bundle as lookupProxyGeo but for an
+  // un-persisted ProxyInput. Used by the bulk-import filter.
+  dryRunFraudCheck(input: ProxyInput): Promise<ProxyGeoBundle | null>
   parseProxyString(raw: string): Promise<{ ok: boolean; data?: ProxyInput; error?: string; line: string }[]>
   bulkTestProxies(ids: string[]): Promise<{ id: string; ok: boolean }[]>
 
@@ -162,6 +165,8 @@ export interface LuxAPI {
   onBrowserDownloadProgress(callback: (data: { browser: string; buildId: string; downloadedBytes: number; totalBytes: number; percent: number }) => void): () => void
   onBrowserDownloadComplete(callback: (data: ManagedBrowserResponse) => void): () => void
   onBrowserDownloadError(callback: (data: { browser: string; buildId: string; message: string }) => void): () => void
+  onProxyMetadataUpdated(callback: (data: { proxy_id: string }) => void): () => void
+  onProxyMetadataChecking(callback: (data: { proxy_id: string }) => void): () => void
 
   // System settings
   getAutostart(): Promise<boolean>

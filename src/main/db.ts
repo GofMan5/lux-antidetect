@@ -183,6 +183,19 @@ export function initDatabase(userDataPath: string): Database.Database {
   addColumnIfMissing(db, 'proxies', 'accuracy_radius', 'accuracy_radius INTEGER')
   addColumnIfMissing(db, 'proxies', 'locale', 'locale TEXT')
 
+  // Migration: fraud-reputation columns. Populated by lookupProxyMetadata
+  // (ip-api.com response fields proxy / hosting / mobile + ISP / ASN data).
+  // fraud_risk is the computed bucket: 'low' | 'high' | 'unknown' — used by
+  // the Proxies UI to flag datacenter / known-proxy IPs that Google blacklists.
+  addColumnIfMissing(db, 'proxies', 'isp', 'isp TEXT')
+  addColumnIfMissing(db, 'proxies', 'org', 'org TEXT')
+  addColumnIfMissing(db, 'proxies', 'asn', 'asn TEXT')
+  addColumnIfMissing(db, 'proxies', 'is_proxy_detected', 'is_proxy_detected INTEGER')
+  addColumnIfMissing(db, 'proxies', 'is_hosting', 'is_hosting INTEGER')
+  addColumnIfMissing(db, 'proxies', 'is_mobile', 'is_mobile INTEGER')
+  addColumnIfMissing(db, 'proxies', 'fraud_risk', 'fraud_risk TEXT')
+  addColumnIfMissing(db, 'proxies', 'last_fraud_check', 'last_fraud_check TEXT')
+
   // Migration: add rotation_group column to profiles (for proxy rotation)
   addColumnIfMissing(db, 'profiles', 'rotation_group', 'rotation_group TEXT')
 

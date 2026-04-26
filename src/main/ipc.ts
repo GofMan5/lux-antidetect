@@ -14,7 +14,7 @@ import {
   duplicateProfile
 } from './profile'
 import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, parseProxyLine } from './proxy'
-import { lookupProxyGeo } from './geoip'
+import { lookupProxyGeo, dryRunProxyMetadata } from './geoip'
 import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot, openUrlInProfile } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
 import { generateDefaultFingerprint } from './fingerprint'
@@ -196,7 +196,33 @@ export function registerIpcHandlers(
 
   // Proxies
   ipcMain.handle('list-proxies', () => listProxies(db))
-  ipcMain.handle('create-proxy', (_, input: ProxyInput) => createProxy(db, input))
+  ipcMain.handle('create-proxy', async (_, input: ProxyInput) => {
+    const created = createProxy(db, input)
+    // Fire-and-forget reputation lookup — persisted to DB by lookupProxyGeo.
+    // We notify the renderer twice: first ('checking') so the row can show
+    // an in-flight spinner alongside the freshly-added proxy, and again
+    // ('updated') after the lookup persists. Failures are silent so that
+    // a flaky proxy can still be added; the user can re-trigger via the
+    // "Recheck reputation" row action.
+    const win = getMainWindow()
+    if (!win.isDestroyed()) {
+      win.webContents.send('proxy:metadata-checking', { proxy_id: created.id })
+    }
+    lookupProxyGeo(db, created.id)
+      .then(() => {
+        const w = getMainWindow()
+        if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
+          w.webContents.send('proxy:metadata-updated', { proxy_id: created.id })
+        }
+      })
+      .catch(() => {
+        const w = getMainWindow()
+        if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
+          w.webContents.send('proxy:metadata-updated', { proxy_id: created.id })
+        }
+      })
+    return created
+  })
 
   // Build a shareable connection string for a single proxy. We include the
   // credentials here because the caller explicitly asked for them — the
@@ -261,6 +287,25 @@ export function registerIpcHandlers(
   ipcMain.handle('lookup-proxy-geo', async (_, proxyId: string) => {
     assertUuid(proxyId)
     return lookupProxyGeo(db, proxyId)
+  })
+
+  // Dry-run reputation check — used by the bulk-import flow to filter out
+  // datacenter / known-proxy IPs before persisting them. The input is a
+  // ProxyInput shape; nothing is written to the DB. Returns the same bundle
+  // shape as lookup-proxy-geo or null on any failure.
+  ipcMain.handle('dry-run-fraud-check', async (_, input: ProxyInput) => {
+    if (!input || typeof input !== 'object') throw new Error('Invalid input')
+    if (typeof input.host !== 'string' || !input.host.trim()) throw new Error('Missing host')
+    if (typeof input.port !== 'number' || input.port < 1 || input.port > 65535) {
+      throw new Error('Invalid port')
+    }
+    return dryRunProxyMetadata({
+      protocol: input.protocol,
+      host: input.host,
+      port: input.port,
+      username: input.username ?? null,
+      password: input.password ?? null
+    })
   })
 
   // Bulk proxy test — bounded concurrency pool with per-id UUID validation.

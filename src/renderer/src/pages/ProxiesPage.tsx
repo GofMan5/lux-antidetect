@@ -16,7 +16,11 @@ import {
   FileUp,
   CheckSquare,
   ClipboardPaste,
-  Check
+  Check,
+  ShieldCheck,
+  ShieldAlert,
+  Shield,
+  RefreshCw
 } from 'lucide-react'
 import { useProxiesStore } from '../stores/proxies'
 import { useConfirmStore } from '../components/ConfirmDialog'
@@ -128,6 +132,63 @@ function countryFlag(code: string): string {
   return String.fromCodePoint(...[...upper].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
 }
 
+// Reputation = ip-api.com classification of the proxy's external IP.
+//   'high'    → datacenter / hosting / known-proxy ASN. Google & most
+//               anti-bot vendors blocklist these on sight.
+//   'low'     → residential or mobile carrier pool.
+//   'unknown' → ip-api responded but returned no signal flags, OR the
+//               lookup never ran.
+// The tooltip body is a ReactNode — Tooltip's string branch renders
+// whitespace-nowrap which would collapse multi-line metadata onto a
+// single overflowing row.
+function reputationBadge(proxy: ProxyResponse): {
+  variant: 'success' | 'error' | 'default'
+  label: string
+  icon: React.ReactNode
+  tooltip: React.ReactNode
+  ariaLabel: string
+} {
+  if (proxy.fraud_risk === null || proxy.last_fraud_check === null) {
+    const note = 'Reputation not checked yet — click to refresh or wait for the auto-lookup to finish.'
+    return {
+      variant: 'default',
+      label: 'Unknown',
+      icon: <Shield className="h-3 w-3" />,
+      tooltip: <div>{note}</div>,
+      ariaLabel: `Reputation: unknown. ${note}`
+    }
+  }
+  const flags: string[] = []
+  if (proxy.is_hosting) flags.push('datacenter / hosting ASN')
+  if (proxy.is_proxy_detected) flags.push('listed in known-proxy databases')
+  if (proxy.is_mobile) flags.push('mobile carrier IP')
+  const ispText = proxy.isp ? `ISP: ${proxy.isp}` : null
+  const asnText = proxy.asn ? `ASN: ${proxy.asn}` : null
+  const flagsText = flags.length > 0 ? `Flags: ${flags.join(', ')}` : 'Flags: none — residential / business ISP'
+  const tooltip = (
+    <div className="space-y-0.5 leading-snug">
+      {ispText && <div>{ispText}</div>}
+      {asnText && <div>{asnText}</div>}
+      <div>{flagsText}</div>
+    </div>
+  )
+  const ariaLabel = `Reputation: ${proxy.fraud_risk === 'high' ? 'risky' : 'clean'}. ${[ispText, asnText, flagsText].filter(Boolean).join('. ')}`
+
+  if (proxy.fraud_risk === 'high') {
+    return { variant: 'error', label: 'Risky', icon: <ShieldAlert className="h-3 w-3" />, tooltip, ariaLabel }
+  }
+  if (proxy.fraud_risk === 'unknown') {
+    return {
+      variant: 'default',
+      label: 'Unknown',
+      icon: <Shield className="h-3 w-3" />,
+      tooltip: <div>Lookup completed but ip-api returned no risk signals for this IP.</div>,
+      ariaLabel: 'Reputation: unknown — lookup completed but no risk signals returned'
+    }
+  }
+  return { variant: 'success', label: 'Clean', icon: <ShieldCheck className="h-3 w-3" />, tooltip, ariaLabel }
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -149,9 +210,12 @@ export function ProxiesPage(): React.JSX.Element {
   const [modalSaving, setModalSaving] = useState(false)
   const [modalTesting, setModalTesting] = useState(false)
   const [testingIds, setTestingIds] = useState<Set<string>>(new Set())
+  const [checkingFraudIds, setCheckingFraudIds] = useState<Set<string>>(new Set())
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importLoading, setImportLoading] = useState(false)
+  const [importFilterFraud, setImportFilterFraud] = useState(true)
+  const [importProgress, setImportProgress] = useState<{ checked: number; total: number; risky: number } | null>(null)
   const [importParsed, setImportParsed] = useState<
     { ok: boolean; data?: { name: string; host: string; port: number; protocol: string } }[] | null
   >(null)
@@ -186,6 +250,28 @@ export function ProxiesPage(): React.JSX.Element {
 
   useEffect(() => {
     fetchProxies()
+  }, [fetchProxies])
+
+  // Auto-fraud-check fires after createProxy in the main process. Two events:
+  //   - 'metadata-checking' — lookup started; toggle the row's Checking spinner
+  //   - 'metadata-updated'  — lookup finished; refresh the list so the
+  //                           Reputation badge populates and clear the spinner.
+  useEffect(() => {
+    const offChecking = api.onProxyMetadataChecking((data) => {
+      setCheckingFraudIds((prev) => new Set(prev).add(data.proxy_id))
+    })
+    const offUpdated = api.onProxyMetadataUpdated((data) => {
+      setCheckingFraudIds((prev) => {
+        const next = new Set(prev)
+        next.delete(data.proxy_id)
+        return next
+      })
+      fetchProxies()
+    })
+    return () => {
+      offChecking()
+      offUpdated()
+    }
   }, [fetchProxies])
 
   // Filtered list
@@ -488,6 +574,46 @@ export function ProxiesPage(): React.JSX.Element {
     })
   }
 
+  const handleRecheckFraud = async (id: string): Promise<void> => {
+    // Functional set update so a double-click within one render tick can't
+    // fire a duplicate ip-api request — second call sees `prev.has(id)` and
+    // bails before the network hit.
+    let alreadyChecking = false
+    setCheckingFraudIds((prev) => {
+      if (prev.has(id)) {
+        alreadyChecking = true
+        return prev
+      }
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+    if (alreadyChecking) return
+
+    try {
+      const result = await api.lookupProxyGeo(id)
+      await fetchProxies()
+      if (result === null) {
+        addToast('Reputation check failed — proxy may be down or rate-limited', 'error')
+      } else if (result.fraud_risk === 'high') {
+        // The result IS the recheck succeeding — Risky is a verdict, not an
+        // error. Use 'warning' so the toast colour matches the badge meaning.
+        addToast('Proxy IP flagged as risky (datacenter / known proxy)', 'warning')
+      } else if (result.fraud_risk === 'unknown') {
+        addToast('Reputation: unknown — ip-api returned no risk signals', 'info')
+      } else {
+        addToast('Reputation: clean', 'success')
+      }
+    } catch {
+      addToast('Reputation check failed', 'error')
+    }
+    setCheckingFraudIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
   const handleTestInModal = async (): Promise<void> => {
     if (!editingId) return
     setModalTesting(true)
@@ -611,19 +737,60 @@ export function ProxiesPage(): React.JSX.Element {
   const executeImport = async (): Promise<void> => {
     if (!importParsed) return
     setImportLoading(true)
+
+    const validRows = importParsed.filter((r) => r.ok && r.data)
     let created = 0
-    for (const r of importParsed) {
-      if (r.ok && r.data) {
+    let skippedRisky = 0
+    let skippedError = 0
+
+    if (importFilterFraud) {
+      // Reputation-filtered path: dry-run each candidate first, only persist
+      // proxies whose IP isn't on a hosting / known-proxy ASN. Sequential to
+      // stay under ip-api's 45 req/min free-tier ceiling and to keep the
+      // progress counter monotonic for the user.
+      setImportProgress({ checked: 0, total: validRows.length, risky: 0 })
+      for (let i = 0; i < validRows.length; i++) {
+        const row = validRows[i]
+        if (!row.data) continue
+        try {
+          const probe = await api.dryRunFraudCheck(
+            row.data as Parameters<typeof api.dryRunFraudCheck>[0]
+          )
+          if (probe === null || probe.fraud_risk === 'high') {
+            skippedRisky++
+          } else {
+            await api.createProxy(row.data as Parameters<typeof api.createProxy>[0])
+            created++
+          }
+        } catch {
+          skippedError++
+        }
+        setImportProgress({ checked: i + 1, total: validRows.length, risky: skippedRisky })
+      }
+    } else {
+      // Unfiltered path: keep the original behavior — persist every parsed
+      // line; the auto-fraud-check still fires per row but doesn't gate creation.
+      for (const r of validRows) {
+        if (!r.data) continue
         try {
           await api.createProxy(r.data as Parameters<typeof api.createProxy>[0])
           created++
         } catch {
-          /* skip */
+          skippedError++
         }
       }
     }
+
     await fetchProxies()
-    addToast(`Imported ${created} proxy/proxies`, 'success')
+    if (skippedRisky > 0 || skippedError > 0) {
+      const parts = [`Imported ${created}`]
+      if (skippedRisky > 0) parts.push(`${skippedRisky} risky skipped`)
+      if (skippedError > 0) parts.push(`${skippedError} errors`)
+      addToast(parts.join(' • '), skippedRisky > 0 ? 'warning' : 'success')
+    } else {
+      addToast(`Imported ${created} proxy/proxies`, 'success')
+    }
+    setImportProgress(null)
     closeImport()
     setImportLoading(false)
   }
@@ -770,12 +937,13 @@ export function ProxiesPage(): React.JSX.Element {
             <table className="w-full text-sm">
               <colgroup>
                 <col className="w-10" />
-                <col className="w-[22%]" />
-                <col className="w-[10%]" />
+                <col className="w-[20%]" />
                 <col className="w-[8%]" />
-                <col className="w-[10%]" />
+                <col className="w-[7%]" />
+                <col className="w-[8%]" />
+                <col className="w-[11%]" />
                 <col className="w-[12%]" />
-                <col className="w-[10%]" />
+                <col className="w-[9%]" />
                 <col className="w-12" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-surface-alt/80 backdrop-blur-sm">
@@ -802,6 +970,9 @@ export function ProxiesPage(): React.JSX.Element {
                     Country
                   </th>
                   <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
+                    Reputation
+                  </th>
+                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
                     Status
                   </th>
                   <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
@@ -813,14 +984,16 @@ export function ProxiesPage(): React.JSX.Element {
               <tbody>
                 {filteredProxies.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted">
+                    <td colSpan={9} className="px-4 py-12 text-center text-sm text-muted">
                       No matching proxies
                     </td>
                   </tr>
                 ) : (
                   filteredProxies.map((proxy) => {
                     const isTesting = testingIds.has(proxy.id)
+                    const isCheckingFraud = checkingFraudIds.has(proxy.id)
                     const status = statusBadge(proxy)
+                    const reputation = reputationBadge(proxy)
                     return (
                       <tr
                         key={proxy.id}
@@ -871,6 +1044,31 @@ export function ProxiesPage(): React.JSX.Element {
                             </span>
                           ) : (
                             <span className="text-muted/40">—</span>
+                          )}
+                        </td>
+
+                        {/* Reputation */}
+                        <td className="px-3 py-2.5">
+                          {isCheckingFraud ? (
+                            <Badge variant="default" dot>
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Checking
+                            </Badge>
+                          ) : (
+                            <Tooltip content={reputation.tooltip}>
+                              <button
+                                type="button"
+                                onClick={() => handleRecheckFraud(proxy.id)}
+                                disabled={isCheckingFraud}
+                                aria-label={reputation.ariaLabel}
+                                className="rounded-[--radius-sm] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                              >
+                                <Badge variant={reputation.variant} className="cursor-pointer inline-flex items-center gap-1 hover:opacity-80 transition-opacity">
+                                  {reputation.icon}
+                                  {reputation.label}
+                                </Badge>
+                              </button>
+                            </Tooltip>
                           )}
                         </td>
 
@@ -925,6 +1123,12 @@ export function ProxiesPage(): React.JSX.Element {
                                 icon: <FlaskConical className="h-4 w-4" />,
                                 onClick: () => handleTest(proxy.id),
                                 disabled: isTesting
+                              },
+                              {
+                                label: 'Recheck reputation',
+                                icon: <RefreshCw className="h-4 w-4" />,
+                                onClick: () => handleRecheckFraud(proxy.id),
+                                disabled: isCheckingFraud
                               },
                               {
                                 label: 'Edit',
@@ -1344,6 +1548,38 @@ export function ProxiesPage(): React.JSX.Element {
               {importParsed.filter((r) => r.ok).length} of {importParsed.length} proxies will be
               imported
             </p>
+            <label className="flex items-start gap-2.5 mt-3 px-3 py-2.5 rounded-[--radius-md] bg-elevated/30 border border-edge/40 cursor-pointer hover:bg-elevated/50 transition-colors">
+              <input
+                type="checkbox"
+                checked={importFilterFraud}
+                onChange={(e) => setImportFilterFraud(e.target.checked)}
+                className={cn(CHECKBOX, 'mt-0.5')}
+              />
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium text-content">
+                  Filter by reputation
+                </p>
+                <p className="text-xs text-muted leading-relaxed mt-0.5">
+                  Skip proxies whose IP is on a datacenter / known-proxy ASN. Each candidate is
+                  probed via ip-api.com through the proxy itself before being persisted; risky IPs
+                  are dropped silently. Sequential lookup (~1s per proxy).
+                </p>
+              </div>
+            </label>
+            {importLoading && importProgress && (
+              <div className="flex items-center gap-2 mt-2 px-3 py-2 rounded-[--radius-md] bg-accent/5 border border-accent/15 text-xs text-content">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-accent shrink-0" />
+                <span className="font-mono tabular-nums">
+                  {importProgress.checked}/{importProgress.total}
+                </span>
+                <span className="text-muted">checked</span>
+                {importProgress.risky > 0 && (
+                  <span className="ml-auto text-warn font-medium">
+                    {importProgress.risky} risky skipped
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Modal>

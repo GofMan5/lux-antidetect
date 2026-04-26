@@ -43,6 +43,8 @@ export interface Fingerprint {
   device_type: string
 }
 
+export type FraudRisk = 'low' | 'high' | 'unknown'
+
 export interface ProxyResponse {
   id: string
   name: string
@@ -63,6 +65,14 @@ export interface ProxyResponse {
   longitude: number | null
   accuracy_radius: number | null
   locale: string | null
+  isp: string | null
+  org: string | null
+  asn: string | null
+  is_proxy_detected: boolean | null
+  is_hosting: boolean | null
+  is_mobile: boolean | null
+  fraud_risk: FraudRisk | null
+  last_fraud_check: string | null
   created_at: string
 }
 

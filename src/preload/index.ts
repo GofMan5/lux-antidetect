@@ -39,6 +39,7 @@ const api: LuxAPI = {
   getProxyGroups: () => ipcRenderer.invoke('proxy-groups'),
   lookupProxyCountry: (id: string) => ipcRenderer.invoke('lookup-proxy-country', id),
   lookupProxyGeo: (id: string) => ipcRenderer.invoke('lookup-proxy-geo', id),
+  dryRunFraudCheck: (input: unknown) => ipcRenderer.invoke('dry-run-fraud-check', input),
   parseProxyString: (raw: string) => ipcRenderer.invoke('parse-proxy-string', raw),
   bulkTestProxies: (ids: string[]) => ipcRenderer.invoke('bulk-test-proxies', ids),
 
@@ -179,6 +180,22 @@ const api: LuxAPI = {
     const handler = (_: unknown, data: { browser: string; buildId: string; message: string }): void => callback(data)
     ipcRenderer.on('browser-download:error', handler)
     return () => { ipcRenderer.removeListener('browser-download:error', handler) }
+  },
+
+  // Fired after the auto-fraud-check (lookupProxyGeo) finishes for a newly
+  // created proxy. ProxiesPage listens to refresh the row so the user sees
+  // the Reputation badge populate without a manual reload.
+  onProxyMetadataUpdated: (callback: (data: { proxy_id: string }) => void) => {
+    const handler = (_: unknown, data: { proxy_id: string }): void => callback(data)
+    ipcRenderer.on('proxy:metadata-updated', handler)
+    return () => { ipcRenderer.removeListener('proxy:metadata-updated', handler) }
+  },
+  // Fired right before the auto-fraud-check starts so the row can show a
+  // "Checking" spinner instead of jumping silently from "Unknown" to a verdict.
+  onProxyMetadataChecking: (callback: (data: { proxy_id: string }) => void) => {
+    const handler = (_: unknown, data: { proxy_id: string }): void => callback(data)
+    ipcRenderer.on('proxy:metadata-checking', handler)
+    return () => { ipcRenderer.removeListener('proxy:metadata-checking', handler) }
   },
 
   // System settings
