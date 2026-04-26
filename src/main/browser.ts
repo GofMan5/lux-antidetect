@@ -1628,27 +1628,100 @@ async function launchBrowserInner(
       args.push('--disable-blink-features=AutomationControlled')
       args.push('--no-default-browser-check')
 
-      // Hardware identity lockdown — Chromium-level disables.
+      // ─── DNS hardening ──────────────────────────────────────────────
       //
-      // Belt-and-braces alongside the JS-side injection (fingerprint.ts
-      // section 19). The injection rewrites the JS API surface so the
-      // page sees a normal "no platform authenticator / no saved cards /
-      // no Topics profile" user; these flags cut the underlying Chromium
-      // features off at the engine level so even non-JS consumers
-      // (HTTP-header-driven flows like DBSC, Topics' Sec-Browsing-Topics
-      // request header, FedCM's IdP signin-status header) never advertise
-      // the hardware-bound material.
+      // With ANY proxy (HTTP/HTTPS/SOCKS), force the local resolver to
+      // return NOTFOUND for every hostname. Chrome then has no choice
+      // but to resolve through the proxy:
+      //   - HTTPS via HTTP proxy: CONNECT host:port (proxy resolves)
+      //   - HTTP via HTTP proxy:  absolute-form GET (proxy resolves)
+      //   - SOCKS5: ATYP=domain (proxy resolves)
       //
-      // The list enumerates each sub-feature explicitly because Chromium
-      // gates JS API surfaces on the leaf feature, not the umbrella —
-      // disabling \`BrowsingTopics\` alone leaves \`document.browsingTopics()\`
-      // reachable on some milestones. Same pattern for FedCM (\`FedCmAuthz\`,
-      // \`FedCmUserInfo\`, etc. each guard a distinct surface).
+      // The previous \`--dns-over-https-mode=off\`-only path for HTTP
+      // proxies was insufficient: even with DoH off, Chrome still ran
+      // \`prefetchDNS\` / \`HostResolver\` lookups against the system
+      // resolver for hover hints, navigation prediction, and
+      // \`<link rel=dns-prefetch>\` tags. Each lookup leaked the real
+      // client IP to the ISP DNS server with the queried hostname,
+      // and ISPs that forward to (or are operated by) Google then
+      // gave Google a separate signal — real-IP wanted google.com a
+      // moment before the proxy IP fetched it. Result: two distinct
+      // IPs visible to Google in the same session.
+      //
+      // EXCLUDE 127.0.0.1 keeps localhost reachable so the SOCKS5 relay
+      // and dev-server use cases still work. Without proxy, leave DoH
+      // on automatic for ISP privacy.
+      if (proxy) {
+        args.push('--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1')
+      } else {
+        args.push('--dns-over-https-mode=automatic')
+      }
+
+      // ─── Anti-correlation kill-switch ───────────────────────────────
+      //
+      // Chromium ships several services that may issue requests outside
+      // \`--proxy-server\`'s scope or carry information that Google's
+      // backend can join with a proxied web session by cookie / device
+      // fingerprint. Each of these flags shuts one channel:
+      //
+      //   --disable-component-update           Component updater (Widevine,
+      //                                        Subresource Filter rules, etc.)
+      //                                        polls clients2.google.com.
+      //   --disable-domain-reliability         Domain Reliability beacons
+      //                                        report network failures back
+      //                                        to Google with the real IP.
+      //   --no-pings                           <a ping="..."> beacons.
+      //   --disable-client-side-phishing-detection  Sends visited URLs to
+      //                                        Google's classifier.
+      //   --safebrowsing-disable-auto-update   Prevents SafeBrowsing model
+      //                                        / list refresh which goes
+      //                                        through proxy but generates
+      //                                        a known-Chrome traffic shape.
+      //
+      // These are unconditional (not gated by hardware-identity lockdown)
+      // because they are core IP-leak prevention, not optional identity
+      // hardening. \`--disable-background-networking\` (set above) covers
+      // some overlap but doesn't shut all of these.
+      args.push('--disable-component-update')
+      args.push('--disable-domain-reliability')
+      args.push('--no-pings')
+      args.push('--disable-client-side-phishing-detection')
+      args.push('--safebrowsing-disable-auto-update')
+
+      // ─── Consolidated --disable-features ─────────────────────────────
+      //
+      // Chrome only honors the LAST --disable-features flag, so every
+      // disable goes through this single array. Two tiers:
+      //   1. Always-on: anti-telemetry / anti-correlation features that
+      //      could carry the real IP outside the proxy or generate a
+      //      stable Chrome-only traffic signature.
+      //   2. Hardware-identity lockdown: gated by the user toggle. JS
+      //      API surfaces in fingerprint.ts section 19 are belt-and-
+      //      braces alongside these engine-level disables; some surfaces
+      //      (DBSC headers, Topics HTTP requests, FedCM IdP signin
+      //      status header) are reachable only at the engine level.
+      const disableFeatures: string[] = [
+        // Tier 1 — always on
+        'Reporting',                          // Reporting API beacons
+        'NetworkErrorLogging',                // NEL crash/error beacons
+        'OptimizationHints',                  // OptimizationGuide model fetch
+        'OptimizationHintsFetching',
+        'Translate',                          // Google Translate ranker fetch
+        'AutofillServerCommunication',        // Autofill server upload
+        'AutofillEnableAccountWalletStorage', // Google Pay autofill sync
+        'CertificateTransparencyComponentUpdater',
+        'InterestFeedContentSuggestions',     // NTP feed
+        'CalculateNativeWinOcclusion',        // can hit network in some flows
+        'MediaRouter',                        // Cast / DIAL discovery
+        'DialMediaRouteProvider'
+      ]
       if (blockWebAuthn) {
-        const lockdownFeatures = [
+        disableFeatures.push(
+          // Tier 2 — Hardware identity lockdown (matches fingerprint.ts §19)
           // Device-Bound Session Credentials (TPM-backed session keys)
           'DeviceBoundSessionCredentials',
-          // Federated Credential Management
+          // Federated Credential Management — every sub-feature gates a
+          // distinct surface; the umbrella alone is insufficient.
           'FedCm',
           'FedCmAuthz',
           'FedCmAutoSelectedFlag',
@@ -1663,37 +1736,29 @@ async function launchBrowserInner(
           // Digital Credentials API (mDL / EU eID / wallet tokens)
           'DigitalCredentials',
           'WebIdentityDigitalCredentials',
-          // Privacy Sandbox Topics — umbrella + JS API + HTTP surfaces
+          // Privacy Sandbox Topics — umbrella + JS API + HTTP surfaces.
+          // BrowsingTopicsDocumentAPI is the actual JS-API gate; the
+          // umbrella alone leaves document.browsingTopics() reachable
+          // on some Chromium milestones.
           'BrowsingTopics',
           'BrowsingTopicsDocumentAPI',
           'BrowsingTopicsParameters',
           'BrowsingTopicsXHR',
-          'BrowsingTopicsBypassIPIsPubliclyRoutableCheck'
-        ]
-        args.push(`--disable-features=${lockdownFeatures.join(',')}`)
+          'BrowsingTopicsBypassIPIsPubliclyRoutableCheck',
+          // Other Privacy Sandbox cross-site identifiers
+          'AttributionReporting',               // Conversion measurement
+          'AttributionReportingCrossAppWeb',
+          'PrivateAggregationApi',
+          'TrustTokens',                        // Private State Tokens
+          'PrivateStateTokens',
+          'Fledge',                             // Protected Audience
+          'FledgeBiddingAndAuctionServer',
+          'InterestGroupStorage',
+          'PrivacySandboxAdsAPIs',
+          'PrivacySandboxSettings4'
+        )
       }
-
-      // DNS strategy:
-      //  - With a SOCKS proxy, force remote DNS by mapping every hostname
-      //    to NOTFOUND in the local resolver. Chrome then has no choice
-      //    but to send the bare hostname through SOCKS (ATYP=domain), so
-      //    the proxy resolves. Prevents DNS leaks via DoH/system resolver
-      //    and avoids local-cache inconsistencies.
-      //  - With an HTTP(S) proxy, disable DoH entirely. Chrome already
-      //    sends `CONNECT host:port` with the hostname for HTTPS — the
-      //    proxy resolves it. DoH would otherwise resolve via Cloudflare/
-      //    Google DIRECTLY (bypassing the proxy), which means the DoH
-      //    provider sees the user's real IP and the queried hostname.
-      //    For HTTP CONNECT to absolute URIs and IPv literal connects,
-      //    DoH-off keeps everything on the upstream proxy's resolver.
-      //  - Without any proxy, leave DoH on automatic for ISP privacy.
-      if (isSocksProxy) {
-        args.push('--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1')
-      } else if (proxy) {
-        args.push('--dns-over-https-mode=off')
-      } else {
-        args.push('--dns-over-https-mode=automatic')
-      }
+      args.push(`--disable-features=${disableFeatures.join(',')}`)
 
       // TLS fingerprint masking (JA3/JA4): shuffle cipher order and randomize TLS extensions
       const tlsCiphers = [
