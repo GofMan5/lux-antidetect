@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { applyTheme, findTheme, getDefaultTheme } from '../lib/themes'
+import { applyTheme, findTheme, getDefaultTheme, DEFAULT_THEME_ID } from '../lib/themes'
 import type { Theme } from '../lib/themes'
 import { api } from '../lib/api'
 
@@ -20,7 +20,7 @@ interface SettingsStore {
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
-  activeThemeId: 'midnight-blue',
+  activeThemeId: DEFAULT_THEME_ID,
   customThemes: [],
   autoRegenFingerprint: true,
   blockWebAuthn: true,
@@ -37,7 +37,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       ])
 
       const customThemes = Array.isArray(customs) ? (customs as Theme[]) : []
-      const activeThemeId = typeof themeId === 'string' ? themeId : 'midnight-blue'
+      const activeThemeId = typeof themeId === 'string' ? themeId : DEFAULT_THEME_ID
       const autoRegenFingerprint = autoRegen !== false
       const blockWebAuthn = blockWa !== false
 

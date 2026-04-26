@@ -1,11 +1,37 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { createPortal } from 'react-dom'
+import { forwardRef, isValidElement } from 'react'
+import * as TooltipPrimitive from '@radix-ui/react-tooltip'
 import { cn } from '@renderer/lib/utils'
-import { TOOLTIP } from '@renderer/lib/ui'
 
-// `content` accepts any ReactNode so callers can render rich tooltip bodies
-// (lists, links, JSX). Existing string callers keep their previous behavior —
-// plain strings still render directly as text.
+// Vault Tooltip — exports BOTH a flat back-compat API
+//   `<Tooltip content={ReactNode|string} side="top">{trigger}</Tooltip>`
+// and the canonical shadcn Radix family for new code. The flat API renders
+// strings as `whitespace-nowrap` and ReactNode bodies as `max-w-xs whitespace-normal`,
+// preserving the previous behavior exactly.
+
+const TooltipProvider = TooltipPrimitive.Provider
+const TooltipRoot = TooltipPrimitive.Root
+const TooltipTrigger = TooltipPrimitive.Trigger
+
+const TooltipContent = forwardRef<
+  React.ElementRef<typeof TooltipPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>
+>(({ className, sideOffset = 6, ...props }, ref) => (
+  <TooltipPrimitive.Content
+    ref={ref}
+    sideOffset={sideOffset}
+    className={cn(
+      'z-[400] overflow-hidden rounded-[--radius-md] border border-border bg-popover px-2.5 py-1.5',
+      'text-xs text-popover-foreground shadow-[var(--shadow-md)]',
+      'data-[state=delayed-open]:animate-fadeIn data-[state=closed]:animate-fadeOut',
+      className
+    )}
+    {...props}
+  />
+))
+TooltipContent.displayName = TooltipPrimitive.Content.displayName
+
+// ─── Flat back-compat API ─────────────────────────────────────────────────
+
 export interface TooltipProps {
   content: React.ReactNode
   children: React.ReactNode
@@ -13,89 +39,41 @@ export interface TooltipProps {
   className?: string
 }
 
-const GAP = 8
+const FLAT_DELAY_MS = 250
 
-export function Tooltip({ content, children, side = 'top', className }: TooltipProps) {
-  const [visible, setVisible] = useState(false)
-  const triggerRef = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
-
-  const updatePos = useCallback(() => {
-    if (!triggerRef.current) return
-    const r = triggerRef.current.getBoundingClientRect()
-    let top = 0, left = 0
-    switch (side) {
-      case 'top':
-        top = r.top - GAP
-        left = r.left + r.width / 2
-        break
-      case 'bottom':
-        top = r.bottom + GAP
-        left = r.left + r.width / 2
-        break
-      case 'left':
-        top = r.top + r.height / 2
-        left = r.left - GAP
-        break
-      case 'right':
-        top = r.top + r.height / 2
-        left = r.right + GAP
-        break
-    }
-    setPos({ top, left })
-  }, [side])
-
-  useEffect(() => {
-    if (!visible) return
-    updatePos()
-  }, [visible, updatePos])
-
-  const transformOrigin: Record<string, string> = {
-    top: 'translate(-50%, -100%)',
-    bottom: 'translate(-50%, 0)',
-    left: 'translate(-100%, -50%)',
-    right: 'translate(0, -50%)'
-  }
-
-  // String callers (the vast majority) expect single-line `whitespace-nowrap`
-  // for backward compatibility. ReactNode bodies (e.g. bulleted reason lists)
-  // would overflow on one line, so we widen and wrap them instead.
+/**
+ * Legacy Lux flat tooltip. Wraps Radix's TooltipPrimitive — string content
+ * stays single-line, ReactNode wraps with a max width, matching the shape
+ * of the old hand-rolled portal-based tooltip.
+ *
+ * `children` is forwarded directly via `asChild` when it's a single React
+ * element so visibility classes (e.g. `hidden md:inline`) and event handlers
+ * land on the actual trigger. A wrapper span is only inserted as a fallback
+ * for non-element children (string / number / fragment).
+ */
+export function Tooltip({
+  content,
+  children,
+  side = 'top',
+  className
+}: TooltipProps): React.JSX.Element {
   const isStringContent = typeof content === 'string'
   const wrapClass = isStringContent
     ? 'whitespace-nowrap'
     : 'max-w-xs whitespace-normal break-words'
 
+  const trigger = isValidElement(children) ? children : <span className="inline-flex">{children}</span>
+
   return (
-    <div
-      ref={triggerRef}
-      className="inline-flex"
-      onMouseEnter={() => setVisible(true)}
-      onMouseLeave={() => setVisible(false)}
-      onFocus={() => setVisible(true)}
-      onBlur={() => setVisible(false)}
-    >
-      {children}
-      {visible && createPortal(
-        <div
-          role="tooltip"
-          className={cn(
-            TOOLTIP,
-            'fixed pointer-events-none',
-            wrapClass,
-            'animate-fadeIn',
-            className
-          )}
-          style={{
-            top: pos.top,
-            left: pos.left,
-            transform: transformOrigin[side],
-            zIndex: 9999
-          }}
-        >
+    <TooltipProvider delayDuration={FLAT_DELAY_MS}>
+      <TooltipRoot>
+        <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+        <TooltipContent side={side} className={cn(wrapClass, className)}>
           {content}
-        </div>,
-        document.body
-      )}
-    </div>
+        </TooltipContent>
+      </TooltipRoot>
+    </TooltipProvider>
   )
 }
+
+export { TooltipProvider, TooltipRoot, TooltipTrigger, TooltipContent }

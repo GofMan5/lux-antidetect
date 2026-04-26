@@ -1,10 +1,44 @@
-﻿import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import {
-  Plus, Play, Square, Copy, Trash2, Loader2, X, AlertCircle,
-  ArrowUpDown, ArrowUp, ArrowDown, Download, Upload, Globe, Globe2,
-  Flame, ClipboardCopy, Pencil, Terminal, Camera, MoreHorizontal,
-  LayoutGrid, ChevronDown, Check, XCircle, ExternalLink,
-  HardDrive, Sparkles, ChevronRight, Rows2, Rows3, Star, Eraser
+  memo,
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent
+} from 'react'
+import {
+  Plus,
+  Play,
+  Square,
+  Copy,
+  Trash2,
+  Loader2,
+  X,
+  AlertCircle,
+  Download,
+  Upload,
+  Globe,
+  Globe2,
+  Flame,
+  ClipboardCopy,
+  Pencil,
+  Terminal,
+  Camera,
+  MoreHorizontal,
+  LayoutGrid,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  HardDrive,
+  Sparkles,
+  Star,
+  Eraser,
+  ArrowUpDown,
+  Rows3,
+  Rows2,
+  Filter
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
@@ -15,39 +49,90 @@ import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
 import { ProfileEditorPanel, type InitialFingerprint } from './ProfileEditorPage'
 import { AutomationModal } from '../components/profile/AutomationModal'
-import { Button, Badge, SearchInput, DropdownMenu, EmptyState, Tooltip, Select, ContextMenu } from '../components/ui'
+import {
+  Button,
+  Badge,
+  SearchInput,
+  DropdownMenu,
+  EmptyState,
+  Tooltip,
+  Select,
+  ContextMenu,
+  Sheet,
+  SheetContent,
+  SheetTitle
+} from '../components/ui'
 import type { DropdownMenuItem } from '../components/ui'
 import { cn } from '../lib/utils'
-import { CHECKBOX } from '../lib/ui'
 import { api } from '../lib/api'
-import {
-  validateProfileFingerprint,
-  computeProfileHealth,
-  type ValidationWarning,
-  type HealthStatus
-} from '../lib/fingerprint-validator'
+import { formatRelativeTime } from '../lib/formatRelativeTime'
+import { useGroupCollapsedState } from '../hooks/useGroupCollapsedState'
 import {
   PRESET_BROWSER_MAP,
   buildPresetMenuItems
 } from '../lib/preset-menu'
-import type { BrowserType, ProfileStatus } from '../lib/types'
+import type {
+  BrowserType,
+  ProfileStatus,
+  Profile,
+  ProxyResponse,
+  FraudRisk,
+  SessionInfo
+} from '../lib/types'
 import type { PresetDescriptor } from '../../../preload/api-contract'
 
-// --- Constants ---------------------------------------------------------------
+// ────────────────────────────────────────────────────────────────────────────
+// Constants
+// ────────────────────────────────────────────────────────────────────────────
 
-type SortKey = 'name' | 'browser_type' | 'status' | 'updated_at' | 'last_used'
+type SortKey = 'name' | 'last_used' | 'created_at'
 type SortDir = 'asc' | 'desc'
+type Density = 'compact' | 'comfortable'
+type StatusFilterValue = 'all' | 'running' | 'error' | 'ready'
+type ProxyFilterValue = 'all' | 'with-proxy' | 'no-proxy'
 
-const BROWSER_COLORS: Record<BrowserType, string> = {
-  chromium: 'bg-blue-500/15 text-blue-400 ring-1 ring-blue-500/20',
-  firefox: 'bg-orange-500/15 text-orange-400 ring-1 ring-orange-500/20',
-  edge: 'bg-cyan-500/15 text-cyan-400 ring-1 ring-cyan-500/20'
+// Pixel heights per density for virtualization. Group headers add a fixed
+// 28px stripe between sections.
+const ROW_HEIGHT_BY_DENSITY: Record<Density, number> = {
+  compact: 40,
+  comfortable: 56
 }
+const GROUP_HEADER_HEIGHT_PX = 28
+const OVERSCAN = 5
 
-const BROWSER_ICONS: Record<BrowserType, typeof Globe> = {
-  chromium: Globe,
-  firefox: Flame,
-  edge: Globe2
+// LocalStorage keys for compact persistence (UI prefs only — never the data).
+const DENSITY_STORAGE_KEY = 'lux.profiles.density'
+const SORT_STORAGE_KEY = 'lux.profiles.sort'
+
+// Test sites surfaced as row-menu quick actions. Keep in sync with the
+// verification chips in ProfileEditorPage when adding new entries.
+const TEST_SITE_CREEPJS = 'https://abrahamjuliot.github.io/creepjs/'
+const TEST_SITE_PIXELSCAN = 'https://pixelscan.net'
+
+// Group bucket name for ungrouped profiles. Empty string here is fine because
+// a real group_name can't be empty — the DB column carries either a name or null.
+const NO_GROUP_KEY = ''
+const NO_GROUP_LABEL = 'Ungrouped'
+
+// Editor Sheet width (px). Spec says 640.
+const EDITOR_SHEET_WIDTH_PX = 640
+
+// Vertical clearance reserved at the bottom of the virtualized scroll surface
+// while the bulk-action floater is visible. Floater height (~48px) + the 16px
+// gap from `bottom-4` so the last row never overlaps the floater controls.
+const BULK_FLOATER_CLEARANCE_PX = 64
+
+// Status pill mapping: variant + text. Dot tinting comes from Badge's `dot`
+// prop which inherits the variant's foreground color.
+const STATUS_BADGE: Record<
+  ProfileStatus,
+  { variant: 'muted' | 'success' | 'warning' | 'destructive'; label: string }
+> = {
+  ready: { variant: 'muted', label: 'Ready' },
+  starting: { variant: 'warning', label: 'Starting' },
+  running: { variant: 'success', label: 'Running' },
+  stopping: { variant: 'warning', label: 'Stopping' },
+  error: { variant: 'destructive', label: 'Error' }
 }
 
 const BROWSER_LABEL: Record<BrowserType, string> = {
@@ -56,81 +141,264 @@ const BROWSER_LABEL: Record<BrowserType, string> = {
   edge: 'Edge'
 }
 
-// Test sites surfaced as row-menu quick actions. Keep in sync with the
-// verification chips in ProfileEditorPage when adding new entries.
-const TEST_SITE_CREEPJS = 'https://abrahamjuliot.github.io/creepjs/'
-const TEST_SITE_PIXELSCAN = 'https://pixelscan.net'
-
-const STATUS_DOT: Record<ProfileStatus, string> = {
-  ready: 'bg-muted/50',
-  starting: 'bg-warn animate-pulse',
-  running: 'bg-ok shadow-sm shadow-ok/40',
-  stopping: 'bg-muted animate-pulse',
-  error: 'bg-err shadow-sm shadow-err/40'
+const BROWSER_ICONS: Record<BrowserType, typeof Globe> = {
+  chromium: Globe,
+  firefox: Flame,
+  edge: Globe2
 }
 
-const STATUS_LABEL: Record<ProfileStatus, string> = {
-  ready: 'Stopped',
-  starting: 'Starting',
-  running: 'Running',
-  stopping: 'Stopping',
-  error: 'Error'
+// Bucket → dot tone for the proxy chip's reputation indicator.
+const FRAUD_DOT_CLASS: Record<NonNullable<FraudRisk>, string> = {
+  clean: 'bg-ok',
+  low: 'bg-ok',
+  medium: 'bg-warn',
+  high: 'bg-destructive',
+  critical: 'bg-destructive',
+  unknown: 'bg-muted-foreground/60'
 }
 
-const HEALTH_DOT: Record<HealthStatus, string> = {
-  good: 'bg-ok shadow-sm shadow-ok/40',
-  warn: 'bg-warn shadow-sm shadow-warn/40',
-  bad: 'bg-err shadow-sm shadow-err/40',
-  unknown: 'bg-muted/70 ring-1 ring-muted/60'
+// ISO country code → emoji flag (regional indicator pair). Returns empty
+// string for unknown / invalid codes so the chip just shows the proxy name.
+function countryFlagEmoji(code: string | null): string {
+  if (!code || code.length !== 2) return ''
+  const upper = code.toUpperCase()
+  return String.fromCodePoint(...[...upper].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
 }
 
-const HEALTH_STATUS_TEXT: Record<HealthStatus, string> = {
-  good: 'Healthy',
-  warn: 'Minor issues',
-  bad: 'Issues detected',
-  unknown: 'Unknown'
+// ────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+function parseTags(tags: string): string[] {
+  if (!tags) return []
+  return tags.split(',').map((t) => t.trim()).filter(Boolean)
 }
 
-// Tooltip fallback copy when there are no discrete reasons to list.
-const HEALTH_TOOLTIP_GOOD = 'Looks consistent'
-const HEALTH_TOOLTIP_UNKNOWN = 'Proxy not yet tested'
+function readDensityFromStorage(): Density {
+  try {
+    const raw = localStorage.getItem(DENSITY_STORAGE_KEY)
+    if (raw === 'compact' || raw === 'comfortable') return raw
+    // Migration path from prior key value 'cozy' → comfortable.
+    if (raw === 'cozy') return 'comfortable'
+  } catch {
+    /* ignore */
+  }
+  return 'compact'
+}
 
-// Virtual scroll constants (hoisted to avoid per-render allocation).
-// ROW_HEIGHT is driven by the `density` setting; these are the per-density
-// values picked up by a local ternary inside the component.
-const ROW_HEIGHT_BY_DENSITY = { compact: 36, cozy: 48 } as const
-type Density = keyof typeof ROW_HEIGHT_BY_DENSITY
-const OVERSCAN = 5
-
-// Bounded concurrency runner for IPC fan-out on health cache warm-up.
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (t: T) => Promise<R>
-): Promise<R[]> {
-  const out: R[] = new Array(items.length)
-  let cursor = 0
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const i = cursor++
-      if (i >= items.length) return
-      out[i] = await fn(items[i])
+function readSortFromStorage(): { key: SortKey; dir: SortDir } {
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as { key?: string; dir?: string }
+      const key: SortKey =
+        parsed.key === 'name' || parsed.key === 'last_used' || parsed.key === 'created_at'
+          ? parsed.key
+          : 'last_used'
+      const dir: SortDir = parsed.dir === 'asc' ? 'asc' : 'desc'
+      return { key, dir }
     }
+  } catch {
+    /* ignore */
+  }
+  return { key: 'last_used', dir: 'desc' }
+}
+
+// Binary search: smallest index `i` in a non-decreasing `arr` where
+// `arr[i] >= target`. Returns `arr.length` when no element satisfies.
+// Used to locate the first row whose top offset crosses the viewport.
+function lowerBound(arr: number[], target: number): number {
+  let lo = 0
+  let hi = arr.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (arr[mid] < target) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+// Reactive `prefers-reduced-motion: reduce` watcher. Returns the live
+// match value so smooth-scroll branches can flip back to instant when the
+// user changes their OS-level preference without a page reload.
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
   })
-  await Promise.all(workers)
-  return out
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handler = (e: MediaQueryListEvent): void => setReduced(e.matches)
+    mql.addEventListener('change', handler)
+    return () => mql.removeEventListener('change', handler)
+  }, [])
+  return reduced
 }
 
-// --- Sub-components ----------------------------------------------------------
-
-function SortIcon({ column, sortKey, sortDir }: { column: SortKey; sortKey: SortKey; sortDir: SortDir }) {
-  if (sortKey !== column) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />
-  return sortDir === 'asc'
-    ? <ArrowUp className="h-3 w-3 ml-1 text-accent" />
-    : <ArrowDown className="h-3 w-3 ml-1 text-accent" />
+// Comparators tuned for the ProfilesPage's three sortable columns. `name`
+// uses locale-aware compare; the timestamp keys do simple string compare
+// because ISO 8601 strings sort correctly lexically.
+function compareProfiles(a: Profile, b: Profile, key: SortKey, dir: SortDir): number {
+  const sign = dir === 'asc' ? 1 : -1
+  if (key === 'name') {
+    return sign * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  }
+  // last_used is nullable — null sorts to the end regardless of direction
+  // because "never used" is least informative.
+  if (key === 'last_used') {
+    const av = a.last_used ?? ''
+    const bv = b.last_used ?? ''
+    if (!av && !bv) return 0
+    if (!av) return 1
+    if (!bv) return -1
+    return av < bv ? -sign : av > bv ? sign : 0
+  }
+  // created_at
+  const av = a[key] ?? ''
+  const bv = b[key] ?? ''
+  return av < bv ? -sign : av > bv ? sign : 0
 }
 
-function RunningTimer({ startedAt }: { startedAt: string }) {
+// Visible row in the virtualized list. We flatten group sections into a
+// single sequence so the virtualizer can stay simple.
+type VisibleRow =
+  | { kind: 'group'; group: string; label: string; count: number; collapsed: boolean }
+  | { kind: 'profile'; group: string; profile: Profile; profileIndex: number }
+
+interface BuildSequenceArgs {
+  profiles: Profile[]
+  isCollapsed: (group: string) => boolean
+  density: Density
+}
+
+interface BuildSequenceResult {
+  rows: VisibleRow[]
+  /** Pixel offset of each row from the top of the scroll content. */
+  offsets: number[]
+  totalHeight: number
+  /**
+   * Map from `profileIndex` (0-based across all visible profiles) to its
+   * position in the `rows` array. Used by keyboard nav to translate ↑/↓
+   * row movements into a row index that includes group headers.
+   */
+  profileIndexToRowIndex: number[]
+}
+
+function buildVisibleSequence({
+  profiles,
+  isCollapsed,
+  density
+}: BuildSequenceArgs): BuildSequenceResult {
+  // Bucket profiles by group preserving the input order (which is already
+  // sorted by the caller). Iteration order of a Map matches insertion order.
+  const buckets = new Map<string, Profile[]>()
+  for (const p of profiles) {
+    const key = p.group_name ?? NO_GROUP_KEY
+    const list = buckets.get(key)
+    if (list) list.push(p)
+    else buckets.set(key, [p])
+  }
+
+  const rows: VisibleRow[] = []
+  const offsets: number[] = []
+  const profileIndexToRowIndex: number[] = []
+  const profileRowHeight = ROW_HEIGHT_BY_DENSITY[density]
+  let cursor = 0
+  let visibleProfileCounter = 0
+
+  for (const [group, list] of buckets) {
+    // Render a header for any non-empty bucket. Even ungrouped gets a header
+    // so the section is visually distinct (only when there's also a "real"
+    // group present). When all rows are ungrouped we suppress the header
+    // because a single header above the only section reads as noise.
+    const renderHeader = group !== NO_GROUP_KEY || buckets.size > 1
+    if (renderHeader) {
+      const collapsed = isCollapsed(group)
+      const label = group === NO_GROUP_KEY ? NO_GROUP_LABEL : group
+      rows.push({ kind: 'group', group, label, count: list.length, collapsed })
+      offsets.push(cursor)
+      cursor += GROUP_HEADER_HEIGHT_PX
+      if (collapsed) continue
+    }
+    for (const p of list) {
+      rows.push({ kind: 'profile', group, profile: p, profileIndex: visibleProfileCounter })
+      offsets.push(cursor)
+      profileIndexToRowIndex[visibleProfileCounter] = rows.length - 1
+      visibleProfileCounter++
+      cursor += profileRowHeight
+    }
+  }
+  return { rows, offsets, totalHeight: cursor, profileIndexToRowIndex }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ────────────────────────────────────────────────────────────────────────────
+
+interface FilterChipProps {
+  active: boolean
+  onClick: () => void
+  onClear?: () => void
+  children: React.ReactNode
+  dotClass?: string
+}
+
+function FilterChip({ active, onClick, onClear, children, dotClass }: FilterChipProps): React.JSX.Element {
+  // Active chip pairs the toggle action with an inline "clear" button. Two
+  // sibling <button>s inside a flex container avoid nesting <button> inside
+  // <button> (invalid HTML) while keeping the cluster visually unified.
+  if (active && onClear) {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
+          'bg-primary text-primary-foreground pl-2.5 pr-1'
+        )}
+      >
+        {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
+        <button
+          type="button"
+          onClick={onClick}
+          className="leading-none"
+          aria-pressed="true"
+        >
+          {children}
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onClear()
+          }}
+          aria-label="Clear filter"
+          className="inline-flex items-center justify-center h-4 w-4 rounded-full hover:bg-white/15"
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
+        'transition-colors duration-150 ease-[var(--ease-osmosis)] px-2.5',
+        active
+          ? 'bg-primary text-primary-foreground'
+          : 'bg-transparent border border-border text-muted-foreground hover:text-foreground hover:border-edge'
+      )}
+    >
+      {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
+      <span>{children}</span>
+    </button>
+  )
+}
+
+function RunningTimer({ startedAt }: { startedAt: string }): React.JSX.Element {
   const [elapsed, setElapsed] = useState('')
   useEffect(() => {
     const start = new Date(startedAt).getTime()
@@ -148,52 +416,497 @@ function RunningTimer({ startedAt }: { startedAt: string }) {
     const timer = setInterval(update, 1000)
     return () => clearInterval(timer)
   }, [startedAt])
-  return <span className="text-[10px] text-accent font-mono tabular-nums">{elapsed}</span>
+  return <span className="text-[10px] text-primary font-mono tabular-nums">{elapsed}</span>
 }
 
-function TableSkeleton() {
-  return (
-    <div className="bg-card rounded-[--radius-lg] border border-edge overflow-hidden">
-      <div className="h-10 bg-surface-alt/50 border-b border-edge" />
-      {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-edge/50 last:border-0">
-          <div className="h-4 w-4 rounded shimmer shrink-0" />
-          <div className="h-3 rounded-md shimmer w-32" />
-          <div className="h-5 w-14 rounded-full shimmer" />
-          <div className="h-5 w-20 rounded-full shimmer" />
-          <div className="h-3 w-24 rounded-md shimmer" />
-          <div className="h-4 w-12 rounded-full shimmer" />
-          <div className="flex-1" />
-          <div className="h-3 w-16 rounded-md shimmer" />
-          <div className="h-7 w-7 rounded-lg shimmer" />
+interface ProxyChipProps {
+  proxy: ProxyResponse
+}
+
+function ProxyChip({ proxy }: ProxyChipProps): React.JSX.Element {
+  const flag = countryFlagEmoji(proxy.country)
+  const dotClass = FRAUD_DOT_CLASS[proxy.fraud_risk ?? 'unknown']
+  const score = proxy.fraud_score
+  const country = proxy.country ?? 'unknown country'
+  const fraudRisk = proxy.fraud_risk ?? 'unknown'
+  const accessibleLabel =
+    `Proxy ${proxy.name}, ${country}, fraud risk ${fraudRisk}` +
+    (score != null ? `, score ${score}` : '')
+  const tooltip = (
+    <div className="space-y-0.5 text-[11.5px] leading-snug">
+      <div className="font-semibold text-foreground">{proxy.name}</div>
+      {proxy.external_ip && (
+        <div>
+          <span className="text-muted-foreground">IP </span>
+          <span className="font-mono">{proxy.external_ip}</span>
         </div>
+      )}
+      {proxy.isp && (
+        <div>
+          <span className="text-muted-foreground">ISP </span>
+          {proxy.isp}
+        </div>
+      )}
+      {proxy.asn && (
+        <div>
+          <span className="text-muted-foreground">ASN </span>
+          <span className="font-mono">{proxy.asn}</span>
+        </div>
+      )}
+      {proxy.fraud_risk && proxy.fraud_risk !== 'unknown' && score !== null && (
+        <div>
+          <span className="text-muted-foreground">Score </span>
+          <span className="font-mono">{score}</span>
+          <span className="text-muted-foreground"> · {proxy.fraud_risk}</span>
+        </div>
+      )}
+    </div>
+  )
+  return (
+    <Tooltip content={tooltip}>
+      <span
+        tabIndex={0}
+        role="img"
+        aria-label={accessibleLabel}
+        className={cn(
+          'inline-flex items-center gap-1.5 h-5 rounded-full px-2 max-w-full',
+          'bg-elevated/60 border border-border text-[11px] text-foreground',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
+        )}
+      >
+        {flag && (
+          <span className="leading-none" aria-hidden>
+            {flag}
+          </span>
+        )}
+        <span className="truncate font-medium" aria-hidden>
+          {proxy.name}
+        </span>
+        <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} aria-hidden />
+      </span>
+    </Tooltip>
+  )
+}
+
+interface TagChipsProps {
+  tags: string[]
+}
+
+function TagChips({ tags }: TagChipsProps): React.JSX.Element | null {
+  if (tags.length === 0) {
+    return <span className="text-[11px] text-muted-foreground/40">—</span>
+  }
+  const visible = tags.slice(0, 3)
+  const hidden = tags.length - visible.length
+  const overflowList = tags.slice(3)
+  return (
+    <div className="flex items-center gap-1 min-w-0">
+      {visible.map((tag) => (
+        <Badge key={tag} variant="outline" className="h-5 px-1.5 text-[10px] truncate max-w-[80px]">
+          {tag}
+        </Badge>
       ))}
+      {hidden > 0 && (
+        <Tooltip content={overflowList.join(', ')}>
+          <Badge
+            variant="outline"
+            className="h-5 px-1.5 text-[10px]"
+            aria-label={`Plus ${hidden} more tags: ${overflowList.join(', ')}`}
+          >
+            +{hidden}
+          </Badge>
+        </Tooltip>
+      )}
     </div>
   )
 }
 
-function formatRelativeTime(dateStr: string | null): string {
-  if (!dateStr) return 'Never'
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'Just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 30) return `${days}d ago`
-  return new Date(dateStr).toLocaleDateString()
+interface ProfileRowProps {
+  profile: Profile
+  proxy: ProxyResponse | null
+  session: SessionInfo | undefined
+  selected: boolean
+  focused: boolean
+  isFavorite: boolean
+  density: Density
+  groupColor: string | null
+  /**
+   * Lazy resolver: called on dropdown / context open so per-row action arrays
+   * don't get rebuilt on every parent render. Must be a stable reference.
+   */
+  getActionsForProfile: (
+    profileId: string,
+    profileName: string,
+    status: ProfileStatus,
+    browserType: BrowserType
+  ) => DropdownMenuItem[]
+  errorMessage: string | undefined
+  onToggleSelect: (profileId: string, profileIndex: number, shiftKey: boolean) => void
+  onClickRow: (profileId: string) => void
+  onDoubleClickRow: (profileId: string, status: ProfileStatus) => void
+  onContextMenu: (
+    e: ReactMouseEvent,
+    profile: { id: string; name: string; status: ProfileStatus; browserType: BrowserType }
+  ) => void
+  onToggleFavorite: (profileId: string) => void
+  onLaunch: (profileId: string) => void
+  onStop: (profileId: string) => void
+  onClearError: (profileId: string) => void
+  /** Position of this row in the visible-profile sequence. */
+  profileIndex: number
+  /** Ref-callback so the parent can focus a row imperatively for keyboard nav. */
+  registerRef: (profileId: string, el: HTMLDivElement | null) => void
 }
 
-function parseTags(tags: string): string[] {
-  if (!tags) return []
-  return tags.split(',').map(t => t.trim()).filter(Boolean)
+function ProfileRowComponent({
+  profile,
+  proxy,
+  session,
+  selected,
+  focused,
+  isFavorite,
+  density,
+  groupColor,
+  getActionsForProfile,
+  errorMessage,
+  onToggleSelect,
+  onClickRow,
+  onDoubleClickRow,
+  onContextMenu,
+  onToggleFavorite,
+  onLaunch,
+  onStop,
+  onClearError,
+  profileIndex,
+  registerRef
+}: ProfileRowProps): React.JSX.Element {
+  const status = STATUS_BADGE[profile.status]
+  const isTransitioning = profile.status === 'starting' || profile.status === 'stopping'
+  const isComfortable = density === 'comfortable'
+  const tags = parseTags(profile.tags)
+  const BrowserIcon = BROWSER_ICONS[profile.browser_type]
+
+  // Lazy: only built when the dropdown / context menu actually opens.
+  const rowActions = useMemo(
+    () => getActionsForProfile(profile.id, profile.name, profile.status, profile.browser_type),
+    [getActionsForProfile, profile.id, profile.name, profile.status, profile.browser_type]
+  )
+
+  // Resolve the last-used timestamp once per row render rather than twice
+  // (Tooltip content prop + <time> aria-label). React.memo gates re-renders
+  // so this only fires when the row actually changes.
+  const lastUsedLabel = useMemo(
+    () => (profile.last_used ? new Date(profile.last_used).toLocaleString() : 'Never used'),
+    [profile.last_used]
+  )
+
+  const refCallback = useCallback(
+    (el: HTMLDivElement | null) => registerRef(profile.id, el),
+    [registerRef, profile.id]
+  )
+
+  return (
+    <div
+      ref={refCallback}
+      role="option"
+      tabIndex={focused ? 0 : -1}
+      aria-selected={selected}
+      data-profile-id={profile.id}
+      onClick={() => onClickRow(profile.id)}
+      onDoubleClick={() => onDoubleClickRow(profile.id, profile.status)}
+      onContextMenu={(e) =>
+        onContextMenu(e, {
+          id: profile.id,
+          name: profile.name,
+          status: profile.status,
+          browserType: profile.browser_type
+        })
+      }
+      className={cn(
+        'group/row relative flex items-center gap-3 pl-4 pr-2 cursor-pointer select-none',
+        'border-b border-border/40 transition-colors duration-150',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
+        focused
+          ? 'bg-elevated/55'
+          : selected
+            ? 'bg-primary/[0.05]'
+            : 'hover:bg-elevated/30'
+      )}
+      style={{ height: ROW_HEIGHT_BY_DENSITY[density] }}
+    >
+      {/* Left group-color stripe */}
+      <span
+        aria-hidden
+        className="absolute left-0 top-0 bottom-0 w-[3px]"
+        style={{ backgroundColor: groupColor ?? 'transparent' }}
+      />
+      {/* Focus stripe (overrides group color when focused) */}
+      {focused && (
+        <span
+          aria-hidden
+          className="absolute left-0 top-0 bottom-0 w-[3px] bg-primary shadow-[0_0_8px_var(--color-primary)]"
+        />
+      )}
+
+      {/* Selection toggle — `role="checkbox"` makes the toggle a real
+          focusable element with proper aria semantics. The button is taken
+          out of the tab order (tabIndex=-1) because the row owns roving
+          tabindex; Space at the row level toggles selection via the
+          listbox keydown handler. Mouse / shift-click users still hit
+          the button's `onClick` for range extension. */}
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={selected}
+        aria-label={`${selected ? 'Deselect' : 'Select'} profile ${profile.name}`}
+        tabIndex={-1}
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggleSelect(profile.id, profileIndex, e.shiftKey)
+        }}
+        className={cn(
+          'shrink-0 inline-flex items-center justify-center h-4 w-4 rounded-[--radius-sm]',
+          'border bg-input transition-colors duration-150',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+          selected ? 'bg-primary border-primary' : 'border-edge hover:border-primary/60'
+        )}
+      >
+        {selected && (
+          <svg
+            aria-hidden
+            viewBox="0 0 12 12"
+            className="h-3 w-3 text-primary-foreground"
+          >
+            <path
+              d="M2.5 6.5l2.5 2.5 4.5-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+      </button>
+
+      {/* Star (favorite) */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggleFavorite(profile.id)
+        }}
+        className={cn(
+          'shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-[--radius-sm] transition-all',
+          isFavorite
+            ? 'text-warn'
+            : 'text-muted-foreground/40 opacity-0 group-hover/row:opacity-100 hover:text-warn'
+        )}
+        aria-label={isFavorite ? 'Unstar profile' : 'Star profile'}
+        title={isFavorite ? 'Unstar' : 'Star (pin to top)'}
+      >
+        <Star className="h-3.5 w-3.5" fill={isFavorite ? 'currentColor' : 'none'} />
+      </button>
+
+      {/* Status pill (badge with leading dot). Error variant tooltips the
+          error message and is clickable to dismiss it without opening the
+          editor — preserves prior behaviour. */}
+      {profile.status === 'error' ? (
+        <Tooltip content={errorMessage ?? 'Error - click to dismiss'}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClearError(profile.id)
+            }}
+            aria-label="Dismiss error"
+            className="shrink-0"
+          >
+            <Badge
+              variant={status.variant}
+              dot
+              className="h-5 min-w-[68px] justify-start tabular-nums cursor-pointer hover:bg-destructive/20"
+            >
+              <AlertCircle className="h-3 w-3 -mr-0.5" />
+              {status.label}
+            </Badge>
+          </button>
+        </Tooltip>
+      ) : (
+        <Badge
+          variant={status.variant}
+          dot
+          className="h-5 shrink-0 min-w-[68px] justify-start tabular-nums"
+        >
+          {isTransitioning && <Loader2 className="h-3 w-3 animate-spin -mr-0.5" />}
+          {status.label}
+        </Badge>
+      )}
+
+      {/* Name + meta line */}
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5 leading-tight">
+        <span className="font-medium text-foreground truncate">
+          {profile.name}
+        </span>
+        {isComfortable && (
+          <span className="text-[11px] text-muted-foreground flex items-center gap-1.5 truncate">
+            <BrowserIcon className="h-3 w-3" />
+            <span>{BROWSER_LABEL[profile.browser_type]}</span>
+            {profile.group_name && (
+              <>
+                <span className="text-muted-foreground/40">·</span>
+                <span className="truncate">{profile.group_name}</span>
+              </>
+            )}
+            {profile.status === 'running' && session && (
+              <>
+                <span className="text-muted-foreground/40">·</span>
+                <RunningTimer startedAt={session.started_at} />
+              </>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* Compact-density meta inline (browser + group on a single line, hidden in comfortable) */}
+      {!isComfortable && (
+        <span className="hidden md:flex items-center gap-1.5 text-[11px] text-muted-foreground/80 shrink-0 max-w-[160px] truncate">
+          <BrowserIcon className="h-3 w-3" />
+          <span>{BROWSER_LABEL[profile.browser_type]}</span>
+          {profile.group_name && (
+            <>
+              <span className="text-muted-foreground/40">·</span>
+              <span className="truncate">{profile.group_name}</span>
+            </>
+          )}
+        </span>
+      )}
+
+      {/* Tags */}
+      <div className="hidden lg:flex items-center min-w-0 max-w-[200px]">
+        <TagChips tags={tags} />
+      </div>
+
+      {/* Proxy chip */}
+      <div className="hidden md:flex items-center min-w-0 max-w-[180px] shrink-0">
+        {proxy ? (
+          <ProxyChip proxy={proxy} />
+        ) : (
+          <span className="text-[11px] text-muted-foreground/40">—</span>
+        )}
+      </div>
+
+      {/* Last used. `<time>` carries the canonical timestamp via `dateTime` and
+          a human-readable label via `aria-label`; the visible text remains the
+          relative summary so the dense column doesn't blow up. `tabIndex={0}`
+          makes the tooltip reachable for keyboard users (the global
+          `*:focus-visible` ring in `index.css` paints the focus indicator). */}
+      <Tooltip content={lastUsedLabel}>
+        <time
+          dateTime={profile.last_used ?? undefined}
+          aria-label={lastUsedLabel}
+          tabIndex={0}
+          className="hidden md:inline text-[11px] text-muted-foreground tabular-nums shrink-0 w-[72px] text-right"
+        >
+          {formatRelativeTime(profile.last_used)}
+        </time>
+      </Tooltip>
+
+      {/* Quick action — launch / stop on hover */}
+      <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+        {profile.status === 'running' ? (
+          <button
+            type="button"
+            onClick={() => onStop(profile.id)}
+            className={cn(
+              'opacity-0 group-hover/row:opacity-100 focus:opacity-100',
+              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+              'text-destructive hover:bg-destructive/10 transition-opacity'
+            )}
+            aria-label="Stop profile"
+            title="Stop"
+          >
+            <Square className="h-3.5 w-3.5" />
+          </button>
+        ) : profile.status === 'ready' || profile.status === 'error' ? (
+          <button
+            type="button"
+            onClick={() => onLaunch(profile.id)}
+            className={cn(
+              'opacity-0 group-hover/row:opacity-100 focus:opacity-100',
+              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+              'text-ok hover:bg-ok/10 transition-opacity'
+            )}
+            aria-label="Launch profile"
+            title="Launch"
+          >
+            <Play className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+        <DropdownMenu
+          align="right"
+          items={rowActions}
+          trigger={
+            <button
+              type="button"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm] text-muted-foreground hover:text-foreground hover:bg-elevated transition-colors"
+              aria-label="Profile actions"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          }
+        />
+      </div>
+    </div>
+  )
 }
 
-// --- Main Component ----------------------------------------------------------
+// Memoized to keep unrelated rows from re-rendering on every parent update
+// (filter typing, scroll, focus drift). All callbacks passed in are wrapped
+// in `useCallback` upstream, and `getActionsForProfile` is also stable, so
+// the default shallow comparator is enough.
+const ProfileRow = memo(ProfileRowComponent)
 
-export function ProfilesPage() {
-  // Store selectors
+interface GroupHeaderProps {
+  label: string
+  count: number
+  collapsed: boolean
+  onToggle: () => void
+}
+
+function GroupHeaderRow({ label, count, collapsed, onToggle }: GroupHeaderProps): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={cn(
+        'w-full flex items-center gap-2 pl-4 pr-4 text-[11px] font-semibold uppercase tracking-[0.08em]',
+        'bg-card/70 border-b border-border/40 text-muted-foreground hover:text-foreground',
+        'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+      )}
+      style={{ height: GROUP_HEADER_HEIGHT_PX }}
+      aria-expanded={!collapsed}
+    >
+      <ChevronDown
+        className={cn(
+          'h-3 w-3 transition-transform duration-150 ease-[var(--ease-osmosis)]',
+          collapsed && '-rotate-90'
+        )}
+      />
+      <span>{label}</span>
+      <Badge variant="muted" className="h-4 px-1.5 text-[10px] tabular-nums">
+        {count}
+      </Badge>
+    </button>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Main page
+// ────────────────────────────────────────────────────────────────────────────
+
+export function ProfilesPage(): React.JSX.Element {
+  // ── Stores ────────────────────────────────────────────────────────────
   const profiles = useProfilesStore((s) => s.profiles)
   const loading = useProfilesStore((s) => s.loading)
   const profileErrors = useProfilesStore((s) => s.profileErrors)
@@ -206,7 +919,6 @@ export function ProfilesPage() {
   const navigate = useNavigate()
   const openEditor = useProfilesStore((s) => s.openEditor)
   const closeEditor = useProfilesStore((s) => s.closeEditor)
-  const setPendingHealthBannerExpand = useProfilesStore((s) => s.setPendingHealthBannerExpand)
   const actions = useProfilesStore(
     useShallow((s) => ({
       launch: s.launchBrowser,
@@ -217,7 +929,6 @@ export function ProfilesPage() {
     }))
   )
   const pendingDeletes = useProfilesStore((s) => s.pendingDeletes)
-
   const proxies = useProxiesStore((s) => s.proxies)
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
   const confirm = useConfirmStore((s) => s.show)
@@ -225,27 +936,57 @@ export function ProfilesPage() {
   const favoriteIds = useFavoritesStore((s) => s.ids)
   const toggleFavorite = useFavoritesStore((s) => s.toggle)
 
-  // Local state
+  // ── Local UI state ────────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [groupFilter, setGroupFilter] = useState<string>('all')
-  const [statusFilter, setStatusFilter] = useState<'all' | ProfileStatus>('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [sortKey, setSortKey] = useState<SortKey>('updated_at')
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const [density, setDensity] = useState<Density>(() => {
-    try {
-      const saved = localStorage.getItem('lux.profiles.density')
-      if (saved === 'compact' || saved === 'cozy') return saved
-    } catch { /* storage disabled */ }
-    return 'cozy'
-  })
-  const ROW_HEIGHT = ROW_HEIGHT_BY_DENSITY[density]
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
+  const [browserFilter, setBrowserFilter] = useState<BrowserType | 'all'>('all')
+  const [groupFilter, setGroupFilter] = useState<string>('all')
+  const [proxyFilter, setProxyFilter] = useState<ProxyFilterValue>('all')
+  const [density, setDensity] = useState<Density>(readDensityFromStorage)
+  const initialSort = useMemo(readSortFromStorage, [])
+  const [sortKey, setSortKey] = useState<SortKey>(initialSort.key)
+  const [sortDir, setSortDir] = useState<SortDir>(initialSort.dir)
+  const [focusedProfileIdx, setFocusedProfileIdx] = useState<number | null>(null)
   const lastCheckedIdx = useRef<number | null>(null)
+  const { isCollapsed, toggle: toggleGroupCollapsed } = useGroupCollapsedState()
+  const prefersReducedMotion = useReducedMotion()
 
-  // Persist density across sessions without a round-trip through the DB.
-  useEffect(() => {
-    try { localStorage.setItem('lux.profiles.density', density) } catch { /* ignore */ }
-  }, [density])
+  // Map of profileId → row DOM. Populated via the row's ref callback so the
+  // listbox can imperatively focus rows on ↑/↓/Home/End. The map is cleaned
+  // up by the same callback when a row unmounts (el === null).
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  // Currently-focused profile id, kept in a ref so `registerRowRef` can read
+  // it without forcing the callback identity to change on every focus move.
+  // When a row mounts (or remounts after a virtualization recycle) and its
+  // id matches this ref, the callback claims DOM focus immediately. This
+  // closes the race where ↑/↓/Home/End/PageDown jumps target a row that
+  // hasn't entered the rendered window yet — by the time the row mounts,
+  // the focus effect has already run and won't refire.
+  const focusedProfileIdRef = useRef<string | null>(null)
+  const registerRowRef = useCallback((profileId: string, el: HTMLDivElement | null) => {
+    if (el) {
+      rowRefs.current.set(profileId, el)
+      // Claim focus the moment the targeted row mounts. Guard against
+      // grabbing focus during incidental mounts (scroll virtualization
+      // recycling rows that happen not to be the focus target) by checking
+      // the live ref. `preventScroll` matches the focus effect — scroll
+      // positioning is owned by the effect, not the row mount.
+      if (
+        focusedProfileIdRef.current === profileId &&
+        document.activeElement !== el
+      ) {
+        el.focus({ preventScroll: true })
+      }
+    } else {
+      rowRefs.current.delete(profileId)
+    }
+  }, [])
+
+  // Bulk-floater first action — focused when a selection appears so keyboard
+  // users can act on the bar without an extra Tab.
+  const bulkFirstActionRef = useRef<HTMLButtonElement | null>(null)
+  const previousSelectionSize = useRef(0)
 
   // Right-click context menu state — coords + the profile that was clicked.
   const [contextMenu, setContextMenu] = useState<{
@@ -257,112 +998,62 @@ export function ProfilesPage() {
     browserType: BrowserType
   } | null>(null)
 
-  // Inline-rename state: profile currently being renamed + the draft value.
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameDraft, setRenameDraft] = useState('')
-
-  // Case-insensitive substring highlight for the name column — splits
-  // the name around matches and wraps each match in a tinted <mark>.
-  const highlightName = useCallback((name: string): React.ReactNode => {
-    const q = searchQuery.trim()
-    if (!q) return name
-    const lower = name.toLowerCase()
-    const needle = q.toLowerCase()
-    const parts: React.ReactNode[] = []
-    let i = 0
-    while (i < name.length) {
-      const hit = lower.indexOf(needle, i)
-      if (hit === -1) {
-        parts.push(name.slice(i))
-        break
-      }
-      if (hit > i) parts.push(name.slice(i, hit))
-      parts.push(
-        <mark key={`m${hit}`} className="bg-accent/25 text-accent rounded-sm px-0.5 font-semibold">
-          {name.slice(hit, hit + needle.length)}
-        </mark>
-      )
-      i = hit + needle.length
-    }
-    return parts
-  }, [searchQuery])
-
-  const startRename = useCallback((profileId: string, current: string) => {
-    setRenamingId(profileId)
-    setRenameDraft(current)
-  }, [])
-
-  const cancelRename = useCallback(() => {
-    setRenamingId(null)
-    setRenameDraft('')
-  }, [])
-
-  const commitRename = useCallback(async (profileId: string, originalName: string): Promise<void> => {
-    const next = renameDraft.trim()
-    if (!next || next === originalName) {
-      cancelRename()
-      return
-    }
-    try {
-      await api.updateProfile(profileId, { name: next })
-      setRenamingId(null)
-      setRenameDraft('')
-      await fetchProfiles()
-    } catch (err) {
-      addToast(
-        `Rename failed: ${err instanceof Error ? err.message : 'unknown'}`,
-        'error'
-      )
-    }
-  }, [renameDraft, fetchProfiles, cancelRename, addToast])
-
-  // Presets cache for "New from preset" dropdown
+  // Presets cache + create-from-preset handoff to the editor
   const [presets, setPresets] = useState<PresetDescriptor[] | null>(null)
   const presetsLoadingRef = useRef(false)
-
-  // When a preset is chosen we hand its generated fingerprint to the editor.
   const [pendingFingerprint, setPendingFingerprint] = useState<InitialFingerprint | null>(null)
+  const [pendingBrowser, setPendingBrowser] = useState<BrowserType | null>(null)
   const [pendingSeed, setPendingSeed] = useState(0)
 
-  // Per-profile health signals (fingerprint warnings). Cached by id+updated_at.
-  const [healthCache, setHealthCache] = useState<
-    Record<string, { warnings: ValidationWarning[] }>
-  >({})
-
-  // When a profile is created via preset, we forward the preset's browser so
-  // the editor form opens with the correct browser_type (avoids UA/platform
-  // mismatch warnings for Firefox/Edge presets).
-  const [pendingBrowser, setPendingBrowser] = useState<BrowserType | null>(null)
-
-  // Automation modal state
+  // Automation modal target
   const [automationFor, setAutomationFor] = useState<{ id: string; name: string } | null>(null)
 
-  // Virtual scroll
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const [scrollTop, setScrollTop] = useState(0)
-  const [viewportHeight, setViewportHeight] = useState(600)
+  // ── Persist density / sort preferences ────────────────────────────────
+  useEffect(() => {
+    try {
+      localStorage.setItem(DENSITY_STORAGE_KEY, density)
+    } catch {
+      /* ignore */
+    }
+  }, [density])
 
-  const handleTableScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    setScrollTop(e.currentTarget.scrollTop)
-    setViewportHeight(e.currentTarget.clientHeight)
-  }, [])
+  useEffect(() => {
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: sortKey, dir: sortDir }))
+    } catch {
+      /* ignore */
+    }
+  }, [sortKey, sortDir])
 
-  // --- Data fetch ------------------------------------------------------------
-
+  // ── Initial fetch ─────────────────────────────────────────────────────
   useEffect(() => {
     fetchProfiles()
     fetchSessions()
     fetchProxies()
   }, [fetchProfiles, fetchSessions, fetchProxies])
 
+  // Title reflects running count (left untouched from prior behaviour).
   useEffect(() => {
-    const running = profiles.filter(p => p.status === 'running').length
+    const running = profiles.filter((p) => p.status === 'running').length
     document.title = running > 0 ? `Lux (${running} running)` : 'Lux Antidetect'
-    return () => { document.title = 'Lux Antidetect' }
+    return () => {
+      document.title = 'Lux Antidetect'
+    }
   }, [profiles])
 
-  // Fetch fingerprint presets once (cached). Swallow errors silently —
-  // the dropdown simply won't populate and the plain "New Profile" still works.
+  // ── Auto-refresh proxies when fraud metadata updates server-side ───────
+  // ProxiesPage already listens; the profiles list also benefits because the
+  // ProxyChip's reputation dot reflects fraud_risk on the joined ProxyResponse.
+  useEffect(() => {
+    const off = window.api?.onProxyMetadataUpdated?.(() => {
+      void fetchProxies()
+    })
+    return () => {
+      off?.()
+    }
+  }, [fetchProxies])
+
+  // ── Presets cache ─────────────────────────────────────────────────────
   const loadPresets = useCallback(async (): Promise<void> => {
     if (presets || presetsLoadingRef.current) return
     presetsLoadingRef.current = true
@@ -380,277 +1071,292 @@ export function ProfilesPage() {
     loadPresets()
   }, [loadPresets])
 
-  // Populate health cache: compute fingerprint validator warnings per profile.
-  // Key by `${id}:${updated_at}` so a profile edit invalidates just that entry.
-  useEffect(() => {
-    let cancelled = false
-    const pending = profiles.filter((p) => {
-      const key = `${p.id}:${p.updated_at}`
-      return !(key in healthCache)
-    })
-    if (pending.length === 0) return
-    ;(async () => {
-      // Cap at 8 concurrent IPC calls to avoid blocking the main process.
-      const results = await mapWithConcurrency(pending, 8, async (p) => {
-          try {
-            const detail = await api.getProfile(p.id)
-            let langs = ''
-            try {
-              const parsed = JSON.parse(detail.fingerprint.languages)
-              langs = Array.isArray(parsed) ? parsed.join(', ') : String(detail.fingerprint.languages ?? '')
-            } catch {
-              langs = detail.fingerprint.languages ?? ''
-            }
-            const warnings = validateProfileFingerprint({
-              user_agent: detail.fingerprint.user_agent,
-              platform: detail.fingerprint.platform,
-              timezone: detail.fingerprint.timezone,
-              languages: langs,
-              screen: `${detail.fingerprint.screen_width}x${detail.fingerprint.screen_height}`,
-              hardware_concurrency: detail.fingerprint.hardware_concurrency,
-              device_memory: detail.fingerprint.device_memory,
-              webgl_vendor: detail.fingerprint.webgl_vendor,
-              proxyCountryCode: detail.proxy?.country ?? null
-            })
-            return { key: `${p.id}:${p.updated_at}`, warnings }
-          } catch {
-            return { key: `${p.id}:${p.updated_at}`, warnings: [] as ValidationWarning[] }
-          }
-        })
-      if (cancelled) return
-      setHealthCache((prev) => {
-        // Prune entries for profiles that no longer exist (or whose
-        // updated_at has rolled forward) to prevent unbounded growth.
-        const valid = new Set(profiles.map((p) => `${p.id}:${p.updated_at}`))
-        const next: Record<string, { warnings: ValidationWarning[] }> = {}
-        for (const k of Object.keys(prev)) {
-          if (valid.has(k)) next[k] = prev[k]
-        }
-        for (const r of results) next[r.key] = { warnings: r.warnings }
-        return next
-      })
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [profiles, healthCache])
-
-  // --- Derived data ----------------------------------------------------------
-
+  // ── Derived: filtered + sorted profiles ───────────────────────────────
   const proxyMap = useMemo(() => new Map(proxies.map((p) => [p.id, p])), [proxies])
+  // O(1) lookup for the running session that matches a row, instead of
+  // `sessions.find()` per visible row on every scroll/keystroke tick.
+  const sessionMap = useMemo(
+    () => new Map(sessions.map((s) => [s.profile_id, s])),
+    [sessions]
+  )
 
-  const groups = useMemo(() => {
-    const set = new Set(profiles.filter(p => p.group_name).map(p => p.group_name!))
-    return Array.from(set).sort()
+  const allGroups = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of profiles) {
+      if (p.group_name) set.add(p.group_name)
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [profiles])
 
-  const groupOptions = useMemo(() => [
-    { value: 'all', label: 'All Groups' },
-    ...groups.map(g => ({ value: g, label: g }))
-  ], [groups])
-
   const filteredProfiles = useMemo(() => {
-    // Hide profiles that are in the middle of a pending (undoable) delete
-    // so they disappear from the UI while the Undo toast is visible.
-    let result = pendingDeletes.size === 0
-      ? profiles
-      : profiles.filter((p) => !pendingDeletes.has(p.id))
-    if (groupFilter !== 'all') {
-      result = result.filter(p => p.group_name === groupFilter)
-    }
+    let result =
+      pendingDeletes.size === 0 ? profiles : profiles.filter((p) => !pendingDeletes.has(p.id))
+
     if (statusFilter !== 'all') {
+      result = result.filter((p) => {
+        if (statusFilter === 'running') return p.status === 'running' || p.status === 'starting'
+        if (statusFilter === 'ready') return p.status === 'ready'
+        return p.status === 'error'
+      })
+    }
+
+    if (browserFilter !== 'all') {
+      result = result.filter((p) => p.browser_type === browserFilter)
+    }
+
+    if (groupFilter !== 'all') {
+      result = result.filter((p) => (p.group_name ?? NO_GROUP_KEY) === groupFilter)
+    }
+
+    if (proxyFilter !== 'all') {
       result = result.filter((p) =>
-        statusFilter === 'running'
-          ? p.status === 'running' || p.status === 'starting'
-          : statusFilter === 'ready'
-            ? p.status === 'ready'
-            : p.status === statusFilter
+        proxyFilter === 'with-proxy' ? p.proxy_id != null : p.proxy_id == null
       )
     }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      result = result.filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.browser_type.toLowerCase().includes(q) ||
-        (p.group_name?.toLowerCase().includes(q)) ||
-        parseTags(p.tags).some(t => t.toLowerCase().includes(q))
+
+    const q = searchQuery.trim().toLowerCase()
+    if (q) {
+      result = result.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.browser_type.toLowerCase().includes(q) ||
+          (p.group_name?.toLowerCase().includes(q) ?? false) ||
+          parseTags(p.tags).some((t) => t.toLowerCase().includes(q))
       )
     }
-    const dir = sortDir === 'asc' ? 1 : -1
+
     return [...result].sort((a, b) => {
-      // Favorites always float above non-favorites regardless of sort key.
+      // Favorites float above non-favorites regardless of sort key.
       const aFav = favoriteIds.has(a.id)
       const bFav = favoriteIds.has(b.id)
       if (aFav !== bFav) return aFav ? -1 : 1
-      const av = a[sortKey] ?? ''
-      const bv = b[sortKey] ?? ''
-      return av < bv ? -dir : av > bv ? dir : 0
+      return compareProfiles(a, b, sortKey, sortDir)
     })
-  }, [profiles, pendingDeletes, groupFilter, statusFilter, searchQuery, sortKey, sortDir, favoriteIds])
+  }, [
+    profiles,
+    pendingDeletes,
+    statusFilter,
+    browserFilter,
+    groupFilter,
+    proxyFilter,
+    searchQuery,
+    sortKey,
+    sortDir,
+    favoriteIds
+  ])
 
-  const statusCounts = useMemo(() => {
-    // `pending` deletes shouldn't factor into visible counts.
-    const pool = profiles.filter((p) => !pendingDeletes.has(p.id))
-    const running = pool.filter((p) => p.status === 'running' || p.status === 'starting').length
-    const ready = pool.filter((p) => p.status === 'ready').length
-    const error = pool.filter((p) => p.status === 'error').length
-    return { total: pool.length, running, ready, error }
-  }, [profiles, pendingDeletes])
+  // ── Virtualization sequence ───────────────────────────────────────────
+  const sequence = useMemo(
+    () => buildVisibleSequence({ profiles: filteredProfiles, isCollapsed, density }),
+    [filteredProfiles, isCollapsed, density]
+  )
 
-  // --- Sorting ---------------------------------------------------------------
+  // ── Scroll math ───────────────────────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportHeight, setViewportHeight] = useState(600)
 
-  const toggleSort = useCallback((key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(key)
-      setSortDir('asc')
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop)
+    setViewportHeight(e.currentTarget.clientHeight)
+  }, [])
+
+  // Find first/last visible row indices via binary search over the offsets
+  // array (monotonically non-decreasing). lowerBound(offsets, top) returns
+  // the first row whose top edge is >= scrollTop; we step back one to catch
+  // the row whose body straddles the viewport top.
+  const { startIdx, endIdx } = useMemo(() => {
+    const { offsets, rows } = sequence
+    if (rows.length === 0) return { startIdx: 0, endIdx: 0 }
+    const top = scrollTop
+    const bottom = scrollTop + viewportHeight
+    let start = lowerBound(offsets, top)
+    if (start > 0) start -= 1
+    const end = lowerBound(offsets, bottom)
+    return {
+      startIdx: Math.max(0, start - OVERSCAN),
+      endIdx: Math.min(rows.length, end + OVERSCAN)
     }
-  }, [sortKey])
+  }, [sequence, scrollTop, viewportHeight])
 
-  // --- Profile actions -------------------------------------------------------
+  // Clamp focused profile index when the filtered list shrinks below it.
+  const visibleProfileCount = sequence.profileIndexToRowIndex.length
+  useEffect(() => {
+    if (focusedProfileIdx === null) return
+    if (focusedProfileIdx >= visibleProfileCount) {
+      setFocusedProfileIdx(visibleProfileCount > 0 ? visibleProfileCount - 1 : null)
+    }
+  }, [visibleProfileCount, focusedProfileIdx])
 
-  const handleLaunch = useCallback(async (id: string): Promise<void> => {
-    const p = profiles.find(x => x.id === id)
-    const name = p?.name ?? 'Profile'
-    try {
-      await actions.launch(id)
-      const updated = useProfilesStore.getState().profiles.find(x => x.id === id)
-      if (updated?.status === 'error') {
-        addToast(`Failed to launch ${name}`, 'error')
-      } else if (updated?.status === 'running' || updated?.status === 'starting') {
-        addToast(`${name} launched`, 'success')
+  // ── Profile actions ───────────────────────────────────────────────────
+
+  const handleLaunch = useCallback(
+    async (id: string): Promise<void> => {
+      const p = profiles.find((x) => x.id === id)
+      const name = p?.name ?? 'Profile'
+      try {
+        await actions.launch(id)
+        const updated = useProfilesStore.getState().profiles.find((x) => x.id === id)
+        if (updated?.status === 'error') {
+          addToast(`Failed to launch ${name}`, 'error')
+        } else if (updated?.status === 'running' || updated?.status === 'starting') {
+          addToast(`${name} launched`, 'success')
+        }
+      } catch (err) {
+        addToast(`Launch failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
       }
-    } catch (err) {
-      addToast(`Launch failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
-    }
-  }, [actions, profiles, addToast])
+    },
+    [actions, profiles, addToast]
+  )
 
-  const handleStop = useCallback(async (id: string): Promise<void> => {
-    const p = profiles.find(x => x.id === id)
-    const name = p?.name ?? 'Profile'
-    try {
-      await actions.stop(id)
-      addToast(`${name} stopped`, 'info')
-    } catch (err) {
-      addToast(`Stop failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
-    }
-  }, [actions, profiles, addToast])
+  const handleStop = useCallback(
+    async (id: string): Promise<void> => {
+      const p = profiles.find((x) => x.id === id)
+      const name = p?.name ?? 'Profile'
+      try {
+        await actions.stop(id)
+        addToast(`${name} stopped`, 'info')
+      } catch (err) {
+        addToast(`Stop failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
+      }
+    },
+    [actions, profiles, addToast]
+  )
 
-  const handleWipeData = async (id: string, name: string): Promise<void> => {
-    const ok = await confirm({
-      title: 'Wipe browsing data',
-      message:
-        `Delete every Chromium-side trace for "${name}" — cookies, localStorage, IndexedDB, ` +
-        `cache, history, login data, sessions. The Lux profile (name, group, fingerprint, ` +
-        `proxy assignment) stays intact. The browser must be stopped first; the next launch ` +
-        `boots a fresh user-data-dir.`,
-      confirmLabel: 'Wipe',
-      danger: true
-    })
-    if (!ok) return
-    try {
-      await api.wipeProfileData(id)
-      addToast(`"${name}" wiped — fresh state on next launch`, 'success')
-    } catch (err) {
-      addToast(
-        `Wipe failed: ${err instanceof Error ? err.message : 'unknown error'}`,
-        'error'
-      )
-    }
-  }
+  const handleWipeData = useCallback(
+    async (id: string, name: string): Promise<void> => {
+      const ok = await confirm({
+        title: 'Wipe browsing data',
+        message:
+          `Delete every Chromium-side trace for "${name}" — cookies, localStorage, IndexedDB, ` +
+          `cache, history, login data, sessions. The Lux profile (name, group, fingerprint, ` +
+          `proxy assignment) stays intact. The browser must be stopped first; the next launch ` +
+          `boots a fresh user-data-dir.`,
+        confirmLabel: 'Wipe',
+        danger: true
+      })
+      if (!ok) return
+      try {
+        await api.wipeProfileData(id)
+        addToast(`"${name}" wiped — fresh state on next launch`, 'success')
+      } catch (err) {
+        addToast(
+          `Wipe failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+          'error'
+        )
+      }
+    },
+    [confirm, addToast]
+  )
 
-  const handleDelete = async (id: string, name: string): Promise<void> => {
-    const ok = await confirm({
-      title: 'Delete Profile',
-      message: `Delete "${name}"? You'll have a few seconds to undo.`,
-      confirmLabel: 'Delete',
-      danger: true
-    })
-    if (!ok) return
-    // Soft-delete: hide the row locally, show a toast with Undo. The
-    // actual IPC delete fires when the toast times out unless the user
-    // clicks Undo first.
-    if (editorProfileId === id) closeEditor()
-    const undo = actions.scheduleDelete(id)
-    addToast(`Profile "${name}" deleted`, 'info', {
-      duration: 5000,
-      silent: true,
-      action: {
-        label: 'Undo',
-        onClick: () => {
-          undo()
-          addToast(`Restored "${name}"`, 'success', { silent: true, duration: 2500 })
+  const handleDelete = useCallback(
+    async (id: string, name: string): Promise<void> => {
+      const ok = await confirm({
+        title: 'Delete Profile',
+        message: `Delete "${name}"? You'll have a few seconds to undo.`,
+        confirmLabel: 'Delete',
+        danger: true
+      })
+      if (!ok) return
+      if (editorProfileId === id) closeEditor()
+      const undo = actions.scheduleDelete(id)
+      addToast(`Profile "${name}" deleted`, 'info', {
+        duration: 5000,
+        silent: true,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            undo()
+            addToast(`Restored "${name}"`, 'success', { silent: true, duration: 2500 })
+          }
+        }
+      })
+    },
+    [confirm, editorProfileId, closeEditor, actions, addToast]
+  )
+
+  const handleDuplicate = useCallback(
+    async (id: string): Promise<void> => {
+      try {
+        await actions.duplicate(id)
+        addToast('Profile duplicated', 'success')
+      } catch (e) {
+        addToast((e as Error).message, 'error')
+      }
+    },
+    [actions, addToast]
+  )
+
+  // Cookie / CDP / screenshot handlers — preserved as-is from prior page.
+  const handleExportCookies = useCallback(
+    async (profileId: string, format: 'json' | 'netscape'): Promise<void> => {
+      try {
+        const result = await window.api.exportCookies(profileId, format)
+        const ext = format === 'json' ? 'json' : 'txt'
+        const blob = new Blob([result.data], { type: 'text/plain' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `cookies_${profileId.slice(0, 8)}.${ext}`
+        a.click()
+        URL.revokeObjectURL(url)
+        addToast(`Exported ${result.count} cookies (${format})`, 'success')
+      } catch (err) {
+        addToast(
+          `Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          'error'
+        )
+      }
+    },
+    [addToast]
+  )
+
+  const handleImportCookies = useCallback(
+    async (profileId: string): Promise<void> => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.json,.txt,.cookies'
+      input.onchange = async (): Promise<void> => {
+        const file = input.files?.[0]
+        if (!file) return
+        try {
+          const text = await file.text()
+          const format = file.name.endsWith('.json') ? 'json' : 'netscape'
+          const result = await window.api.importCookies(profileId, text, format)
+          addToast(`Imported ${result.imported}/${result.total} cookies`, 'success')
+        } catch (err) {
+          addToast(
+            `Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+            'error'
+          )
         }
       }
-    })
-  }
+      input.click()
+    },
+    [addToast]
+  )
 
-  const handleDuplicate = async (id: string): Promise<void> => {
-    try {
-      await actions.duplicate(id)
-      addToast('Profile duplicated', 'success')
-    } catch (e) {
-      addToast((e as Error).message, 'error')
-    }
-  }
-
-  // --- Cookie / CDP / Screenshot handlers ------------------------------------
-
-  const handleExportCookies = async (profileId: string, format: 'json' | 'netscape'): Promise<void> => {
-    try {
-      const result = await window.api.exportCookies(profileId, format)
-      const ext = format === 'json' ? 'json' : 'txt'
-      const blob = new Blob([result.data], { type: 'text/plain' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `cookies_${profileId.slice(0, 8)}.${ext}`
-      a.click()
-      URL.revokeObjectURL(url)
-      addToast(`Exported ${result.count} cookies (${format})`, 'success')
-    } catch (err) {
-      addToast(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
-    }
-  }
-
-  const handleImportCookies = async (profileId: string): Promise<void> => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.json,.txt,.cookies'
-    input.onchange = async (): Promise<void> => {
-      const file = input.files?.[0]
-      if (!file) return
+  const handleScreenshot = useCallback(
+    async (profileId: string): Promise<void> => {
       try {
-        const text = await file.text()
-        const format = file.name.endsWith('.json') ? 'json' : 'netscape'
-        const result = await window.api.importCookies(profileId, text, format)
-        addToast(`Imported ${result.imported}/${result.total} cookies`, 'success')
+        const base64 = await window.api.captureScreenshot(profileId)
+        const link = document.createElement('a')
+        link.href = `data:image/png;base64,${base64}`
+        link.download = `screenshot_${profileId.slice(0, 8)}_${Date.now()}.png`
+        link.click()
+        addToast('Screenshot saved', 'success')
       } catch (err) {
-        addToast(`Import failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+        addToast(`Screenshot failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
       }
-    }
-    input.click()
-  }
+    },
+    [addToast]
+  )
 
-  const handleScreenshot = async (profileId: string): Promise<void> => {
+  // ── Import / Export profiles ──────────────────────────────────────────
+
+  const handleExportProfiles = useCallback(async (): Promise<void> => {
     try {
-      const base64 = await window.api.captureScreenshot(profileId)
-      const link = document.createElement('a')
-      link.href = `data:image/png;base64,${base64}`
-      link.download = `screenshot_${profileId.slice(0, 8)}_${Date.now()}.png`
-      link.click()
-      addToast('Screenshot saved', 'success')
-    } catch (err) {
-      addToast(`Screenshot failed: ${err instanceof Error ? err.message : 'Unknown'}`, 'error')
-    }
-  }
-
-  // --- Import / Export profiles ----------------------------------------------
-
-  const handleExportProfiles = async (): Promise<void> => {
-    try {
-      const ids = selectedIds.size > 0 ? Array.from(selectedIds) : profiles.map(p => p.id)
+      const ids = selectedIds.size > 0 ? Array.from(selectedIds) : profiles.map((p) => p.id)
       const exportData: Record<string, unknown>[] = []
       for (const id of ids) {
         const detail = await api.getProfile(id)
@@ -687,13 +1393,13 @@ export function ProfilesPage() {
     } catch (err) {
       addToast(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
     }
-  }
+  }, [selectedIds, profiles, addToast])
 
-  const handleImportProfiles = (): void => {
+  const handleImportProfiles = useCallback((): void => {
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = '.json'
-    input.onchange = async () => {
+    input.onchange = async (): Promise<void> => {
       const file = input.files?.[0]
       if (!file) return
       try {
@@ -722,98 +1428,164 @@ export function ProfilesPage() {
         fetchProfiles()
         addToast(`Imported ${data.length} profile(s)`, 'success')
       } catch (err) {
-        addToast(`Import failed: ${err instanceof Error ? err.message : 'Invalid file'}`, 'error')
+        addToast(
+          `Import failed: ${err instanceof Error ? err.message : 'Invalid file'}`,
+          'error'
+        )
       }
     }
     input.click()
-  }
+  }, [fetchProfiles, addToast])
 
-  // --- Navigation & panel ----------------------------------------------------
+  // ── Editor (Sheet) handlers ───────────────────────────────────────────
 
-  const handleRowClick = (id: string): void => {
-    openEditor('edit', id)
-  }
+  const handleEditRow = useCallback(
+    (id: string): void => {
+      openEditor('edit', id)
+    },
+    [openEditor]
+  )
+
+  // Stable row-event callbacks. Defined once so memoized rows receive stable
+  // props identity on every parent re-render — without these wrappers, every
+  // keystroke or scroll would force every row to re-render.
+  const handleRowClick = useCallback(
+    (profileId: string): void => {
+      openEditor('edit', profileId)
+    },
+    [openEditor]
+  )
+
+  const handleRowDoubleClick = useCallback(
+    (profileId: string, status: ProfileStatus): void => {
+      if (status === 'ready' || status === 'error') {
+        void useProfilesStore.getState().launchBrowser(profileId)
+      }
+    },
+    []
+  )
+
+  const handleRowContextMenu = useCallback(
+    (
+      e: ReactMouseEvent,
+      profile: { id: string; name: string; status: ProfileStatus; browserType: BrowserType }
+    ): void => {
+      e.preventDefault()
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        profileId: profile.id,
+        profileName: profile.name,
+        status: profile.status,
+        browserType: profile.browserType
+      })
+    },
+    []
+  )
+
+  const handleRowLaunch = useCallback(
+    (profileId: string): void => {
+      void handleLaunch(profileId)
+    },
+    [handleLaunch]
+  )
+
+  const handleRowStop = useCallback(
+    (profileId: string): void => {
+      void handleStop(profileId)
+    },
+    [handleStop]
+  )
+
+  // `clearProfileError` and `toggleFavorite` from Zustand are already stable
+  // identity-wise. We pass them straight through.
 
   const handleNewProfile = useCallback((): void => {
     setPendingFingerprint(null)
     setPendingBrowser(null)
-    // Bump the seed so the editor remounts even if we're already in create
-    // mode  this triggers the dirty-guard inside ProfileEditorPanel.
     setPendingSeed((s) => s + 1)
     openEditor('create')
   }, [openEditor])
 
-  const handleNewFromPreset = useCallback(async (presetId: string): Promise<void> => {
-    try {
-      const preset = presets?.find((p) => p.id === presetId)
-      const fp = await api.generateFingerprintFromPreset(presetId)
-      setPendingFingerprint(fp as InitialFingerprint)
-      setPendingBrowser(preset ? PRESET_BROWSER_MAP[preset.browser] : null)
-      setPendingSeed((s) => s + 1)
-      openEditor('create')
-    } catch (err) {
-      addToast(
-        err instanceof Error ? err.message : 'Failed to generate preset fingerprint',
-        'error'
-      )
-    }
-  }, [openEditor, addToast, presets])
+  const handleNewFromPreset = useCallback(
+    async (presetId: string): Promise<void> => {
+      try {
+        const preset = presets?.find((p) => p.id === presetId)
+        const fp = await api.generateFingerprintFromPreset(presetId)
+        setPendingFingerprint(fp as InitialFingerprint)
+        setPendingBrowser(preset ? PRESET_BROWSER_MAP[preset.browser] : null)
+        setPendingSeed((s) => s + 1)
+        openEditor('create')
+      } catch (err) {
+        addToast(
+          err instanceof Error ? err.message : 'Failed to generate preset fingerprint',
+          'error'
+        )
+      }
+    },
+    [openEditor, addToast, presets]
+  )
 
-  // Build grouped DropdownMenu items via the shared helper so list + editor
-  // pages stay in lockstep (see src/renderer/src/lib/preset-menu.tsx).
   const presetMenuItems = useMemo<DropdownMenuItem[]>(
     () => buildPresetMenuItems(presets, (p) => void handleNewFromPreset(p.id)),
     [presets, handleNewFromPreset]
   )
 
-  const handlePanelSave = (): void => {
+  const handleEditorSave = useCallback((): void => {
     setPendingFingerprint(null)
     setPendingBrowser(null)
     fetchProfiles()
     closeEditor()
-  }
+  }, [fetchProfiles, closeEditor])
 
-  const handlePanelCancel = useCallback((): void => {
+  const handleEditorCancel = useCallback((): void => {
     setPendingFingerprint(null)
     setPendingBrowser(null)
     closeEditor()
   }, [closeEditor])
 
-  // --- Selection -------------------------------------------------------------
+  // ── Selection / bulk ──────────────────────────────────────────────────
 
-  const handleCheckbox = useCallback((profileId: string, idx: number, shiftKey: boolean) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-
-      if (shiftKey && lastCheckedIdx.current !== null) {
-        const start = Math.min(lastCheckedIdx.current, idx)
-        const end = Math.max(lastCheckedIdx.current, idx)
-        for (let i = start; i <= end; i++) {
-          next.add(filteredProfiles[i].id)
+  const handleToggleSelect = useCallback(
+    (profileId: string, profileIndex: number, shiftKey: boolean) => {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (shiftKey && lastCheckedIdx.current !== null) {
+          const start = Math.min(lastCheckedIdx.current, profileIndex)
+          const end = Math.max(lastCheckedIdx.current, profileIndex)
+          // Walk the visible profile sequence by row index so selection stays
+          // continuous through collapsed groups (collapsed rows aren't visible
+          // here so they're naturally skipped).
+          for (let i = start; i <= end; i++) {
+            const rowIdx = sequence.profileIndexToRowIndex[i]
+            const row = sequence.rows[rowIdx]
+            if (row && row.kind === 'profile') next.add(row.profile.id)
+          }
+        } else {
+          if (next.has(profileId)) next.delete(profileId)
+          else next.add(profileId)
         }
-      } else {
-        if (next.has(profileId)) next.delete(profileId)
-        else next.add(profileId)
-      }
+        lastCheckedIdx.current = profileIndex
+        return next
+      })
+    },
+    [sequence]
+  )
 
-      lastCheckedIdx.current = idx
-      return next
+  const handleSelectAllVisible = useCallback(() => {
+    setSelectedIds((prev) => {
+      // If every visible profile is already selected → clear selection,
+      // matching the toggle semantics of macOS Finder ⌘A.
+      const allIds = filteredProfiles.map((p) => p.id)
+      const allSelected = allIds.every((id) => prev.has(id))
+      if (allSelected) return new Set()
+      return new Set(allIds)
     })
   }, [filteredProfiles])
 
-  const handleSelectAll = useCallback((checked: boolean) => {
-    if (checked) setSelectedIds(new Set(filteredProfiles.map(p => p.id)))
-    else setSelectedIds(new Set())
-  }, [filteredProfiles])
-
-  // --- Bulk actions ----------------------------------------------------------
-
-  const handleBulkLaunch = async (): Promise<void> => {
+  const handleBulkLaunch = useCallback(async (): Promise<void> => {
     const count = selectedIds.size
     if (count === 0) return
-    // Surface "launching N profiles" so users know the queue is moving,
-    // especially with the max-concurrent-sessions setting that serializes
-    // starts. We clear selection immediately so further edits don't stack.
     const ids = Array.from(selectedIds)
     setSelectedIds(new Set())
     addToast(`Launching ${count} profile${count === 1 ? '' : 's'}…`, 'info', {
@@ -822,14 +1594,16 @@ export function ProfilesPage() {
     })
     try {
       const results = await api.bulkLaunch(ids)
-      const failed = results.filter(r => !r.ok).length
+      const failed = results.filter((r) => !r.ok).length
       if (failed > 0) addToast(`${results.length - failed} launched, ${failed} failed`, 'warning')
       else addToast(`${results.length} profile${results.length === 1 ? '' : 's'} launched`, 'success')
-    } catch { addToast('Bulk launch failed', 'error') }
+    } catch {
+      addToast('Bulk launch failed', 'error')
+    }
     fetchProfiles()
-  }
+  }, [selectedIds, fetchProfiles, addToast])
 
-  const handleBulkStop = async (): Promise<void> => {
+  const handleBulkStop = useCallback(async (): Promise<void> => {
     const count = selectedIds.size
     if (count === 0) return
     const ids = Array.from(selectedIds)
@@ -840,15 +1614,50 @@ export function ProfilesPage() {
     })
     try {
       const results = await api.bulkStop(ids)
-      const failed = results.filter(r => !r.ok).length
+      const failed = results.filter((r) => !r.ok).length
       if (failed > 0) addToast(`${results.length - failed} stopped, ${failed} failed`, 'warning')
       else addToast(`${results.length} profile${results.length === 1 ? '' : 's'} stopped`, 'success')
-    } catch { addToast('Bulk stop failed', 'error') }
+    } catch {
+      addToast('Bulk stop failed', 'error')
+    }
     fetchProfiles()
-  }
+  }, [selectedIds, fetchProfiles, addToast])
 
-  const handleBulkDelete = async (): Promise<void> => {
+  const handleBulkTestProxies = useCallback(async (): Promise<void> => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    const proxyIds = new Set<string>()
+    for (const id of ids) {
+      const p = profiles.find((x) => x.id === id)
+      if (p?.proxy_id) proxyIds.add(p.proxy_id)
+    }
+    if (proxyIds.size === 0) {
+      addToast('No proxies attached to selected profiles', 'info')
+      return
+    }
+    addToast(`Testing ${proxyIds.size} prox${proxyIds.size === 1 ? 'y' : 'ies'}…`, 'info', {
+      duration: 2000,
+      silent: true
+    })
+    let okCount = 0
+    let failCount = 0
+    for (const proxyId of proxyIds) {
+      try {
+        const ok = await api.testProxy(proxyId)
+        if (ok) okCount++
+        else failCount++
+      } catch {
+        failCount++
+      }
+    }
+    fetchProxies()
+    if (failCount === 0) addToast(`All ${okCount} proxies passed`, 'success')
+    else addToast(`${okCount} passed, ${failCount} failed`, 'warning')
+  }, [selectedIds, profiles, fetchProxies, addToast])
+
+  const handleBulkDelete = useCallback(async (): Promise<void> => {
     const count = selectedIds.size
+    if (count === 0) return
     const ok = await confirm({
       title: 'Delete Profiles',
       message: `Delete ${count} selected profile${count === 1 ? '' : 's'}? You'll have a few seconds to undo.`,
@@ -856,8 +1665,6 @@ export function ProfilesPage() {
       danger: true
     })
     if (!ok) return
-    // Stage a delete for each id so Undo can restore all of them in one
-    // click. Each scheduled timer finalizes via api.deleteProfile.
     const ids = Array.from(selectedIds)
     const undos = ids.map((id) => actions.scheduleDelete(id))
     setSelectedIds(new Set())
@@ -877,834 +1684,817 @@ export function ProfilesPage() {
         }
       }
     })
-    return
-  }
+  }, [selectedIds, confirm, closeEditor, actions, addToast])
 
-  // --- Row action dropdown items ---------------------------------------------
+  // Latest profiles snapshot — used by `getRowActions` so the callback's
+  // identity stays stable across refetches. The action list is built lazily
+  // (only when a row's dropdown / context menu opens), so reading the latest
+  // value at click time is correct without inflating React deps.
+  const profilesRef = useRef(profiles)
+  useEffect(() => {
+    profilesRef.current = profiles
+  }, [profiles])
 
-  const getRowActions = useCallback((profileId: string, profileName: string, status: ProfileStatus, browserType: BrowserType): DropdownMenuItem[] => {
-    const isRunning = status === 'running'
-    const isTransitioning = status === 'starting' || status === 'stopping'
-    const supportsAutomation = browserType !== 'firefox'
+  // ── Row action items (DropdownMenu + ContextMenu share this builder) ──
+  // `getRowActions` is intentionally `useCallback`-stable so it can be passed
+  // straight through `React.memo`'d rows without busting their props identity.
+  // It is only invoked when a row's dropdown / context menu actually opens.
 
-    const items: DropdownMenuItem[] = []
+  const getRowActions = useCallback(
+    (
+      profileId: string,
+      profileName: string,
+      status: ProfileStatus,
+      browserType: BrowserType
+    ): DropdownMenuItem[] => {
+      const isRunning = status === 'running'
+      const isTransitioning = status === 'starting' || status === 'stopping'
+      const supportsAutomation = browserType !== 'firefox'
 
-    if (isRunning) {
-      items.push({ label: 'Stop', icon: <Square className="h-4 w-4" />, onClick: () => handleStop(profileId) })
-    } else if (!isTransitioning) {
-      items.push({ label: 'Launch', icon: <Play className="h-4 w-4" />, onClick: () => handleLaunch(profileId) })
-    }
+      const items: DropdownMenuItem[] = []
 
-    items.push(
-      { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onClick: () => handleRowClick(profileId) },
-      { label: 'Duplicate', icon: <Copy className="h-4 w-4" />, onClick: () => handleDuplicate(profileId) },
-      { label: 'Copy ID', icon: <ClipboardCopy className="h-4 w-4" />, onClick: () => { navigator.clipboard.writeText(profileId); addToast('ID copied', 'info') } },
-      {
-        label: 'Reveal profile folder',
-        icon: <HardDrive className="h-4 w-4" />,
-        onClick: async () => {
-          try {
-            await api.revealProfileDir(profileId)
-          } catch (err) {
-            addToast(
-              `Reveal failed: ${err instanceof Error ? err.message : 'unknown'}`,
-              'error'
-            )
-          }
-        }
+      if (isRunning) {
+        items.push({
+          label: 'Stop',
+          icon: <Square className="h-4 w-4" />,
+          onClick: () => handleStop(profileId)
+        })
+      } else if (!isTransitioning) {
+        items.push({
+          label: 'Launch',
+          icon: <Play className="h-4 w-4" />,
+          onClick: () => handleLaunch(profileId)
+        })
       }
-    )
 
-    // If this profile has a proxy attached, offer a quick copy of the full
-    // connection string (including password — the only IPC path that exposes
-    // it, intentionally).
-    const profileRec = profiles.find((p) => p.id === profileId)
-    const attachedProxyId = profileRec?.proxy_id ?? null
-    if (attachedProxyId) {
-      items.push({
-        label: 'Copy proxy string',
-        icon: <ClipboardCopy className="h-4 w-4" />,
-        onClick: async () => {
-          try {
-            const conn = await api.getProxyConnectionString(attachedProxyId)
-            await navigator.clipboard.writeText(conn)
-            addToast('Proxy string copied', 'info', { duration: 2000 })
-          } catch (err) {
-            addToast(
-              `Copy failed: ${err instanceof Error ? err.message : 'unknown'}`,
-              'error'
-            )
-          }
-        }
-      })
-    }
-
-    if (isRunning) {
       items.push(
-        { label: 'Export Cookies', icon: <Download className="h-4 w-4" />, onClick: () => handleExportCookies(profileId, 'json') },
-        { label: 'Import Cookies', icon: <Upload className="h-4 w-4" />, onClick: () => handleImportCookies(profileId) },
+        { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onClick: () => handleEditRow(profileId) },
         {
-          label: supportsAutomation ? 'Automation…' : 'Automation… (Chromium only)',
-          icon: <Terminal className="h-4 w-4" />,
-          disabled: !supportsAutomation,
+          label: 'Duplicate',
+          icon: <Copy className="h-4 w-4" />,
+          onClick: () => handleDuplicate(profileId)
+        },
+        {
+          label: 'Copy ID',
+          icon: <ClipboardCopy className="h-4 w-4" />,
           onClick: () => {
-            setAutomationFor({ id: profileId, name: profileName })
+            navigator.clipboard.writeText(profileId)
+            addToast('ID copied', 'info')
           }
         },
-        { label: 'Screenshot', icon: <Camera className="h-4 w-4" />, onClick: () => handleScreenshot(profileId) }
+        {
+          label: 'Reveal profile folder',
+          icon: <HardDrive className="h-4 w-4" />,
+          onClick: async () => {
+            try {
+              await api.revealProfileDir(profileId)
+            } catch (err) {
+              addToast(
+                `Reveal failed: ${err instanceof Error ? err.message : 'unknown'}`,
+                'error'
+              )
+            }
+          }
+        }
       )
-    }
 
-    const openTestSite = async (label: string, url: string): Promise<void> => {
-      try {
-        await api.openUrlInProfile(profileId, url)
-        addToast(`Opened ${label}`, 'success')
-      } catch (err) {
-        addToast(
-          err instanceof Error ? err.message : `Failed to open ${label}`,
-          'error'
+      const profileRec = profilesRef.current.find((p) => p.id === profileId)
+      const attachedProxyId = profileRec?.proxy_id ?? null
+      if (attachedProxyId) {
+        items.push({
+          label: 'Copy proxy string',
+          icon: <ClipboardCopy className="h-4 w-4" />,
+          onClick: async () => {
+            try {
+              const conn = await api.getProxyConnectionString(attachedProxyId)
+              await navigator.clipboard.writeText(conn)
+              addToast('Proxy string copied', 'info', { duration: 2000 })
+            } catch (err) {
+              addToast(
+                `Copy failed: ${err instanceof Error ? err.message : 'unknown'}`,
+                'error'
+              )
+            }
+          }
+        })
+      }
+
+      if (isRunning) {
+        items.push(
+          {
+            label: 'Export Cookies',
+            icon: <Download className="h-4 w-4" />,
+            onClick: () => handleExportCookies(profileId, 'json')
+          },
+          {
+            label: 'Import Cookies',
+            icon: <Upload className="h-4 w-4" />,
+            onClick: () => handleImportCookies(profileId)
+          },
+          {
+            label: supportsAutomation ? 'Automation…' : 'Automation… (Chromium only)',
+            icon: <Terminal className="h-4 w-4" />,
+            disabled: !supportsAutomation,
+            onClick: () => {
+              setAutomationFor({ id: profileId, name: profileName })
+            }
+          },
+          {
+            label: 'Screenshot',
+            icon: <Camera className="h-4 w-4" />,
+            onClick: () => handleScreenshot(profileId)
+          }
         )
       }
-    }
 
-    items.push(
-      {
-        label: 'Open in CreepJS',
-        icon: <ExternalLink className="h-4 w-4" />,
-        onClick: () => { void openTestSite('CreepJS', TEST_SITE_CREEPJS) }
-      },
-      {
-        label: 'Open in PixelScan',
-        icon: <ExternalLink className="h-4 w-4" />,
-        onClick: () => { void openTestSite('PixelScan', TEST_SITE_PIXELSCAN) }
-      }
-    )
-
-    items.push(
-      {
-        label: isRunning || isTransitioning ? 'Wipe data (stop first)' : 'Wipe browsing data',
-        icon: <Eraser className="h-4 w-4" />,
-        variant: 'danger',
-        disabled: isRunning || isTransitioning,
-        onClick: () => handleWipeData(profileId, profileName)
-      },
-      { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, variant: 'danger', onClick: () => handleDelete(profileId, profileName) }
-    )
-
-    return items
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleLaunch, handleStop, addToast, profiles])
-
-  // --- Keyboard navigation — focused row index ------------------------------
-  // A keyboard-driven "selected row" cursor that moves with ↑/↓; Enter opens
-  // the editor for the focused row, Space toggles selection, Delete triggers
-  // the soft-delete flow. Focus index clamps when the list changes.
-  const [focusedIdx, setFocusedIdx] = useState<number | null>(null)
-
-  useEffect(() => {
-    if (focusedIdx === null) return
-    if (focusedIdx >= filteredProfiles.length) {
-      setFocusedIdx(filteredProfiles.length > 0 ? filteredProfiles.length - 1 : null)
-    }
-  }, [filteredProfiles.length, focusedIdx])
-
-  // --- Keyboard shortcuts ----------------------------------------------------
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-        if (e.key === 'Escape') (e.target as HTMLElement).blur()
-        return
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-        e.preventDefault()
-        handleNewProfile()
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-        e.preventDefault()
-        document.getElementById('profile-search')?.focus()
-      } else if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault()
-        document.getElementById('profile-search')?.focus()
-      } else if (e.key === 'Escape') {
-        if (editorMode) handlePanelCancel()
-        else if (selectedIds.size > 0) setSelectedIds(new Set())
-        else if (focusedIdx !== null) setFocusedIdx(null)
-      } else if (!editorMode && filteredProfiles.length > 0 && !e.altKey) {
-        // Arrow-key row navigation. Only active when the editor isn't open
-        // so the editor form keeps its natural Tab focus trapping.
-        if (e.key === 'ArrowDown') {
-          e.preventDefault()
-          setFocusedIdx((i) => (i === null ? 0 : Math.min(filteredProfiles.length - 1, i + 1)))
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault()
-          setFocusedIdx((i) => (i === null ? 0 : Math.max(0, i - 1)))
-        } else if (e.key === 'Home') {
-          e.preventDefault()
-          setFocusedIdx(0)
-        } else if (e.key === 'End') {
-          e.preventDefault()
-          setFocusedIdx(filteredProfiles.length - 1)
-        } else if (e.key === 'Enter' && focusedIdx !== null) {
-          e.preventDefault()
-          const p = filteredProfiles[focusedIdx]
-          if (p) openEditor('edit', p.id)
-        } else if (e.key === ' ' && focusedIdx !== null) {
-          e.preventDefault()
-          const p = filteredProfiles[focusedIdx]
-          if (p) {
-            setSelectedIds((prev) => {
-              const next = new Set(prev)
-              if (next.has(p.id)) next.delete(p.id)
-              else next.add(p.id)
-              return next
-            })
-          }
-        } else if (e.key === 'Delete' && focusedIdx !== null) {
-          e.preventDefault()
-          const p = filteredProfiles[focusedIdx]
-          if (p) void handleDelete(p.id, p.name)
+      const openTestSite = async (label: string, url: string): Promise<void> => {
+        try {
+          await api.openUrlInProfile(profileId, url)
+          addToast(`Opened ${label}`, 'success')
+        } catch (err) {
+          addToast(
+            err instanceof Error ? err.message : `Failed to open ${label}`,
+            'error'
+          )
         }
       }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorMode, selectedIds.size, focusedIdx, filteredProfiles, handleNewProfile, handlePanelCancel, openEditor])
 
-  // --- Render helpers --------------------------------------------------------
+      items.push(
+        {
+          label: 'Open in CreepJS',
+          icon: <ExternalLink className="h-4 w-4" />,
+          onClick: () => {
+            void openTestSite('CreepJS', TEST_SITE_CREEPJS)
+          }
+        },
+        {
+          label: 'Open in PixelScan',
+          icon: <ExternalLink className="h-4 w-4" />,
+          onClick: () => {
+            void openTestSite('PixelScan', TEST_SITE_PIXELSCAN)
+          }
+        }
+      )
 
-  const isAllSelected = filteredProfiles.length > 0 && selectedIds.size === filteredProfiles.length
-  const hasSelection = selectedIds.size > 0
+      items.push(
+        {
+          label: isRunning || isTransitioning ? 'Wipe data (stop first)' : 'Wipe browsing data',
+          icon: <Eraser className="h-4 w-4" />,
+          variant: 'danger',
+          disabled: isRunning || isTransitioning,
+          onClick: () => handleWipeData(profileId, profileName)
+        },
+        {
+          label: 'Delete',
+          icon: <Trash2 className="h-4 w-4" />,
+          variant: 'danger',
+          onClick: () => handleDelete(profileId, profileName)
+        }
+      )
 
-  const thClass =
-    'text-left px-3 py-3 font-semibold text-muted/80 text-[10.5px] uppercase tracking-[0.08em] select-none'
-  const thSortable = cn(
-    thClass,
-    'cursor-pointer hover:text-content transition-colors duration-150 ease-[var(--ease-osmosis)]'
+      return items
+    },
+    [
+      handleStop,
+      handleLaunch,
+      handleEditRow,
+      handleDuplicate,
+      handleExportCookies,
+      handleImportCookies,
+      handleScreenshot,
+      handleWipeData,
+      handleDelete,
+      addToast
+    ]
   )
 
-  // --- Loading state ---------------------------------------------------------
+  // ── Keyboard shortcuts ────────────────────────────────────────────────
+  // Split into two scopes:
+  //   • Global (document-level) — Ctrl/Cmd+N, Ctrl/Cmd+F, Ctrl/Cmd+A,
+  //     `/`, Escape: should fire from anywhere on the page.
+  //   • Listbox-scoped — Arrow/Home/End/Enter/Space/Delete/L/S/E/N
+  //     (no-modifier single keys): only fire when the list (or one of its
+  //     rows) has focus, so they don't hijack typing in inputs / popovers.
 
-  if (loading) {
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const inEditableTarget = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+
+      if (inEditableTarget) {
+        if (e.key === 'Escape') {
+          target?.blur()
+          return
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+          e.preventDefault()
+          document.getElementById('profile-search')?.focus()
+          return
+        }
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        handleNewProfile()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        document.getElementById('profile-search')?.focus()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        handleSelectAllVisible()
+        return
+      }
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        document.getElementById('profile-search')?.focus()
+        return
+      }
+      if (e.key === 'Escape') {
+        if (editorMode) handleEditorCancel()
+        else if (selectedIds.size > 0) setSelectedIds(new Set())
+        else if (focusedProfileIdx !== null) setFocusedProfileIdx(null)
+      }
+    }
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [
+    editorMode,
+    selectedIds.size,
+    focusedProfileIdx,
+    handleNewProfile,
+    handleEditorCancel,
+    handleSelectAllVisible
+  ])
+
+  // Listbox-scoped: only navigation keys when the list (or a row) has focus.
+  const handleListboxKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>): void => {
+      if (editorMode || e.altKey) return
+      if (filteredProfiles.length === 0) return
+
+      const navigateTo = (next: number | null): void => {
+        e.preventDefault()
+        setFocusedProfileIdx(next)
+      }
+
+      if (e.key === 'ArrowDown') {
+        navigateTo(
+          focusedProfileIdx === null
+            ? 0
+            : Math.min(visibleProfileCount - 1, focusedProfileIdx + 1)
+        )
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        navigateTo(focusedProfileIdx === null ? 0 : Math.max(0, focusedProfileIdx - 1))
+        return
+      }
+      if (e.key === 'Home') {
+        navigateTo(0)
+        return
+      }
+      if (e.key === 'End') {
+        navigateTo(visibleProfileCount - 1)
+        return
+      }
+      if (focusedProfileIdx === null) return
+
+      const focusedProfile = filteredProfiles[focusedProfileIdx]
+      if (!focusedProfile) return
+
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        openEditor('edit', focusedProfile.id)
+      } else if (e.key === ' ') {
+        e.preventDefault()
+        setSelectedIds((prev) => {
+          const next = new Set(prev)
+          if (next.has(focusedProfile.id)) next.delete(focusedProfile.id)
+          else next.add(focusedProfile.id)
+          return next
+        })
+      } else if (e.key === 'Delete') {
+        e.preventDefault()
+        void handleDelete(focusedProfile.id, focusedProfile.name)
+      } else if (e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        void handleLaunch(focusedProfile.id)
+      } else if (e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        void handleStop(focusedProfile.id)
+      } else if (e.key.toLowerCase() === 'e') {
+        e.preventDefault()
+        openEditor('edit', focusedProfile.id)
+      } else if (e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        handleNewProfile()
+      }
+    },
+    [
+      editorMode,
+      focusedProfileIdx,
+      filteredProfiles,
+      visibleProfileCount,
+      openEditor,
+      handleDelete,
+      handleLaunch,
+      handleStop,
+      handleNewProfile
+    ]
+  )
+
+  // When a selection first appears (size transitions 0 → >0), pull DOM focus
+  // onto the floater's first action so keyboard users can immediately Launch
+  // / Stop / Delete without an extra Tab. We only do this on the 0→>0 edge,
+  // not on every intra-selection change, so adding more rows mid-keystroke
+  // doesn't hijack focus repeatedly.
+  useEffect(() => {
+    const prev = previousSelectionSize.current
+    const current = selectedIds.size
+    if (prev === 0 && current > 0) {
+      bulkFirstActionRef.current?.focus()
+    }
+    previousSelectionSize.current = current
+  }, [selectedIds])
+
+  // Bring the focused row into view when it changes, and shift DOM focus to
+  // the matching element so screen readers announce the move and `:focus-visible`
+  // paints a real ring (not just the React-driven stripe). Smooth scroll is
+  // gated on `prefers-reduced-motion: reduce` per OS-level user preference.
+  // For long jumps (Home/End/large arrow runs) the target row may not be in
+  // the rendered virtualization window yet at this effect tick; we publish
+  // the desired profile id to `focusedProfileIdRef` so `registerRowRef` can
+  // claim focus the moment the row mounts. The synchronous `focus()` call
+  // below handles the common case (target already rendered, e.g. ↑/↓ by 1).
+  useEffect(() => {
+    if (focusedProfileIdx === null) {
+      focusedProfileIdRef.current = null
+      return
+    }
+    const el = scrollRef.current
+    if (!el) return
+    const rowIdx = sequence.profileIndexToRowIndex[focusedProfileIdx]
+    if (rowIdx === undefined) return
+    const row = sequence.rows[rowIdx]
+    if (row.kind !== 'profile') return
+    focusedProfileIdRef.current = row.profile.id
+    const top = sequence.offsets[rowIdx]
+    const rowH = getRowHeight(row, density)
+    const viewTop = el.scrollTop
+    const viewBottom = viewTop + el.clientHeight
+    const scrollBehavior: ScrollBehavior = prefersReducedMotion ? 'auto' : 'smooth'
+    if (top < viewTop) el.scrollTo({ top, behavior: scrollBehavior })
+    else if (top + rowH > viewBottom) {
+      el.scrollTo({ top: top + rowH - el.clientHeight, behavior: scrollBehavior })
+    }
+    // Move DOM focus to the row so screen-reader users land there too. If the
+    // row hasn't mounted yet (long jump outside the rendered window), the ref
+    // we published above lets `registerRowRef` claim focus on mount.
+    const targetEl = rowRefs.current.get(row.profile.id)
+    if (targetEl && document.activeElement !== targetEl) {
+      targetEl.focus({ preventScroll: true })
+    }
+  }, [focusedProfileIdx, sequence, density, prefersReducedMotion])
+
+  // ── Editor Sheet open/close handler ───────────────────────────────────
+
+  const handleEditorOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) handleEditorCancel()
+    },
+    [handleEditorCancel]
+  )
+
+  // ── Render ────────────────────────────────────────────────────────────
+
+  const hasSelection = selectedIds.size > 0
+  const hasActiveFilters =
+    statusFilter !== 'all' ||
+    browserFilter !== 'all' ||
+    groupFilter !== 'all' ||
+    proxyFilter !== 'all' ||
+    searchQuery.trim().length > 0
+
+  // Loading skeleton — minimal "cards in a strip" feel
+  if (loading && profiles.length === 0) {
     return (
-      <div className="flex h-full min-w-0 overflow-hidden">
-        <div className="flex-1 flex flex-col p-6 overflow-hidden min-w-0">
-          <div className="flex items-center justify-between mb-5 shrink-0">
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-content">Profiles</h1>
-              <div className="h-5 w-8 rounded-full shimmer" />
-            </div>
-          </div>
-          <TableSkeleton />
+      <div className="flex-1 flex flex-col bg-background">
+        <div className="h-12 border-b border-border/50" />
+        <div className="flex-1 p-4 space-y-1.5">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="h-10 rounded-[--radius-md] shimmer" />
+          ))}
         </div>
       </div>
     )
   }
 
-  // --- Main render -----------------------------------------------------------
+  const showOnboarding = profiles.length === 0 && pendingDeletes.size === 0
 
   return (
-    <div className="flex h-full min-w-0 overflow-hidden">
-      {/* Main content area */}
-      <div className="flex-1 flex flex-col p-6 overflow-hidden min-w-0 relative">
-        {/* Page Header */}
-        <div className="flex items-center justify-between mb-4 shrink-0">
-          <div className="flex items-center gap-3">
-            <h1 className="text-[22px] font-semibold text-content tracking-tight">Profiles</h1>
-            <Badge variant="muted" className="text-[11px] tabular-nums">{profiles.length}</Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <SearchInput
-              id="profile-search"
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="Search profiles..."
-              className="w-64"
-              matchCount={filteredProfiles.length}
+    <div className="flex-1 flex flex-col min-h-0 bg-background relative">
+      {/* ── Filter strip ──────────────────────────────────────────────── */}
+      <div
+        className={cn(
+          'sticky top-0 z-10 shrink-0 flex items-center gap-2 px-4 h-12 min-w-0',
+          'bg-card/85 backdrop-blur-sm border-b border-border/50'
+        )}
+      >
+        <SearchInput
+          id="profile-search"
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search profiles…"
+          className="w-[280px] shrink-0"
+          matchCount={filteredProfiles.length}
+        />
+
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto scrollbar-hide">
+          <FilterChip active={statusFilter === 'running'} onClick={() => setStatusFilter('running')} onClear={() => setStatusFilter('all')} dotClass="bg-ok">
+            Running
+          </FilterChip>
+          <FilterChip active={statusFilter === 'ready'} onClick={() => setStatusFilter('ready')} onClear={() => setStatusFilter('all')} dotClass="bg-muted-foreground/60">
+            Ready
+          </FilterChip>
+          <FilterChip active={statusFilter === 'error'} onClick={() => setStatusFilter('error')} onClear={() => setStatusFilter('all')} dotClass="bg-destructive">
+            Error
+          </FilterChip>
+
+          <div className="h-5 w-px bg-border/60 mx-1" />
+
+          <FilterChip active={browserFilter === 'chromium'} onClick={() => setBrowserFilter('chromium')} onClear={() => setBrowserFilter('all')}>
+            Chromium
+          </FilterChip>
+          <FilterChip active={browserFilter === 'firefox'} onClick={() => setBrowserFilter('firefox')} onClear={() => setBrowserFilter('all')}>
+            Firefox
+          </FilterChip>
+          <FilterChip active={browserFilter === 'edge'} onClick={() => setBrowserFilter('edge')} onClear={() => setBrowserFilter('all')}>
+            Edge
+          </FilterChip>
+
+          <div className="h-5 w-px bg-border/60 mx-1" />
+
+          <FilterChip active={proxyFilter === 'with-proxy'} onClick={() => setProxyFilter('with-proxy')} onClear={() => setProxyFilter('all')}>
+            With proxy
+          </FilterChip>
+          <FilterChip active={proxyFilter === 'no-proxy'} onClick={() => setProxyFilter('no-proxy')} onClear={() => setProxyFilter('all')}>
+            No proxy
+          </FilterChip>
+
+          {allGroups.length > 0 && (
+            <Select
+              options={[
+                { value: 'all', label: 'All groups' },
+                { value: NO_GROUP_KEY, label: NO_GROUP_LABEL },
+                ...allGroups.map((g) => ({ value: g, label: g }))
+              ]}
+              value={groupFilter}
+              onChange={(e) => setGroupFilter(e.target.value)}
+              className="ml-1 !h-7 !text-[11.5px] min-w-[120px] shrink-0"
             />
-            {groups.length > 0 && (
-              <Select
-                options={groupOptions}
-                value={groupFilter}
-                onChange={(e) => setGroupFilter(e.target.value)}
-                className="w-auto min-w-[140px] !h-9 text-xs"
-              />
-            )}
-            <Tooltip content={density === 'compact' ? 'Switch to cozy rows' : 'Switch to compact rows'}>
-              <Button
-                variant="ghost"
-                icon={density === 'compact' ? <Rows2 className="h-4 w-4" /> : <Rows3 className="h-4 w-4" />}
-                onClick={() => setDensity(density === 'compact' ? 'cozy' : 'compact')}
-                aria-label={density === 'compact' ? 'Switch to cozy rows' : 'Switch to compact rows'}
-              />
-            </Tooltip>
-            <Tooltip content="Import profiles">
-              <Button variant="ghost" icon={<Upload className="h-4 w-4" />} onClick={handleImportProfiles} />
-            </Tooltip>
-            <Tooltip content="Export profiles">
-              <Button variant="ghost" icon={<Download className="h-4 w-4" />} onClick={handleExportProfiles} />
-            </Tooltip>
-            <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={handleNewProfile}>
-              New Profile
-            </Button>
-            <DropdownMenu
-              align="right"
-              items={presetMenuItems}
-              trigger={
-                <button
-                  type="button"
-                  aria-label="New from preset"
-                  title="New from preset"
-                  className={cn(
-                    'h-9 w-8 rounded-[--radius-md] inline-flex items-center justify-center',
-                    'bg-accent/10 text-accent ring-1 ring-inset ring-accent/15',
-                    'hover:bg-accent/15 hover:ring-accent/25',
-                    'transition-colors duration-150 ease-[var(--ease-osmosis)]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
-                  )}
-                >
-                  <ChevronDown className="h-4 w-4" />
-                </button>
-              }
-            />
-          </div>
+          )}
         </div>
 
-        {/* Status filter chips — show only when there's anything to filter. */}
-        {statusCounts.total > 0 && (
-          <div className="flex items-center gap-1.5 mb-3 shrink-0 animate-fadeIn">
-            {([
-              { key: 'all', label: 'All', count: statusCounts.total, tone: 'default' },
-              { key: 'ready', label: 'Ready', count: statusCounts.ready, tone: 'muted' },
-              { key: 'running', label: 'Running', count: statusCounts.running, tone: 'success' },
-              { key: 'error', label: 'Error', count: statusCounts.error, tone: 'error' }
-            ] as const).map((chip) => {
-              if (chip.count === 0 && chip.key !== 'all') return null
-              const active = statusFilter === chip.key
-              return (
-                <button
-                  key={chip.key}
-                  onClick={() => setStatusFilter(chip.key as typeof statusFilter)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium',
-                    'ring-1 ring-inset transition-colors duration-150 ease-[var(--ease-osmosis)]',
-                    active
-                      ? chip.tone === 'success'
-                        ? 'bg-ok/12 text-ok ring-ok/30'
-                        : chip.tone === 'error'
-                          ? 'bg-err/12 text-err ring-err/30'
-                          : chip.tone === 'muted'
-                            ? 'bg-elevated text-content ring-edge'
-                            : 'bg-accent/12 text-accent ring-accent/30'
-                      : 'bg-surface/60 text-muted ring-edge/60 hover:text-content hover:ring-edge/90'
-                  )}
-                >
-                  {chip.tone === 'success' && <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" />}
-                  {chip.tone === 'error' && <span className="h-1.5 w-1.5 rounded-full bg-err" />}
-                  {chip.label}
-                  <span className={cn('tabular-nums', active ? '' : 'text-muted/80')}>{chip.count}</span>
-                </button>
-              )
-            })}
-          </div>
-        )}
+        <div className="flex items-center gap-1 shrink-0">
 
-        {/* Bulk Action Bar */}
-        {hasSelection && (
-          <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-card border border-edge rounded-[--radius-lg] shrink-0 animate-scaleIn">
-            <span className="text-sm text-content font-semibold">{selectedIds.size} selected</span>
-            <div className="h-4 w-px bg-edge" />
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<Play className="h-3.5 w-3.5" />}
-              onClick={handleBulkLaunch}
-              className="text-ok hover:text-ok hover:bg-ok/10"
-            >
-              Launch All
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<Square className="h-3.5 w-3.5" />}
-              onClick={handleBulkStop}
-              className="text-warn hover:text-warn hover:bg-warn/10"
-            >
-              Stop All
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<Download className="h-3.5 w-3.5" />}
-              onClick={handleExportProfiles}
-            >
-              Export
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<Trash2 className="h-3.5 w-3.5" />}
-              onClick={handleBulkDelete}
-              className="text-err hover:text-err hover:bg-err/10"
-            >
-              Delete
-            </Button>
-            <div className="flex-1" />
-            <button
-              onClick={() => setSelectedIds(new Set())}
-              className="rounded-[--radius-sm] p-1 text-muted hover:text-content hover:bg-elevated transition-colors"
-              aria-label="Clear selection"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-
-        {/* Empty State */}
-        {filteredProfiles.length === 0 ? (
-          profiles.length === 0 ? (
-            <OnboardingWelcome
-              onCreateProfile={handleNewProfile}
-              onImportProfiles={handleImportProfiles}
-              onGoSettings={() => navigate('/settings')}
-              onGoProxies={() => navigate('/proxies')}
-            />
-          ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <EmptyState
-                icon={<LayoutGrid />}
-                title="No matching profiles"
-                description="Try clearing the search, changing the group filter, or resetting the tag filter above."
-                action={
-                  <Button variant="secondary" size="sm" onClick={() => { setSearchQuery(''); setGroupFilter('all') }}>
-                    Clear filters
-                  </Button>
-                }
-              />
-            </div>
-          )
-        ) : (
-          /* Data Table */
-          <div
-            ref={scrollRef}
-            onScroll={handleTableScroll}
-            className="flex-1 overflow-auto min-h-0 bg-card rounded-[--radius-lg] border border-edge/80 surface-lit shadow-[var(--shadow-sm)]"
+        {/* Density toggle */}
+        <Tooltip
+          content={density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'}
+        >
+          <button
+            type="button"
+            onClick={() => setDensity(density === 'compact' ? 'comfortable' : 'compact')}
+            className={cn(
+              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            )}
+            aria-label="Toggle row density"
           >
-            <table className="w-full text-sm table-fixed">
-              <colgroup>
-                <col className="w-[40px]" />
-                <col />
-                <col className="w-[60px]" />
-                <col className="w-[110px]" />
-                <col className="w-[110px]" />
-                <col className="w-[130px]" />
-                <col className="w-[140px]" />
-                <col className="w-[100px]" />
-                <col className="w-[52px]" />
-              </colgroup>
-              <thead className="sticky top-0 z-10">
-                <tr className="bg-surface-alt/80 backdrop-blur-sm border-b border-edge/80">
-                  <th className="px-3 py-2.5">
-                    <input
-                      type="checkbox"
-                      checked={isAllSelected}
-                      onChange={(e) => handleSelectAll(e.target.checked)}
-                      className={CHECKBOX}
-                      aria-label="Select all profiles"
-                    />
-                  </th>
-                  <th className={thSortable} onClick={() => toggleSort('name')}>
-                    <span className="inline-flex items-center">Name<SortIcon column="name" sortKey={sortKey} sortDir={sortDir} /></span>
-                  </th>
-                  <th className={thClass} title="Launch health">Health</th>
-                  <th className={thSortable} onClick={() => toggleSort('status')}>
-                    <span className="inline-flex items-center">Status<SortIcon column="status" sortKey={sortKey} sortDir={sortDir} /></span>
-                  </th>
-                  <th className={thSortable} onClick={() => toggleSort('browser_type')}>
-                    <span className="inline-flex items-center">Browser<SortIcon column="browser_type" sortKey={sortKey} sortDir={sortDir} /></span>
-                  </th>
-                  <th className={thClass}>Proxy</th>
-                  <th className={thClass}>Tags</th>
-                  <th className={thSortable} onClick={() => toggleSort('last_used')}>
-                    <span className="inline-flex items-center">Last Used<SortIcon column="last_used" sortKey={sortKey} sortDir={sortDir} /></span>
-                  </th>
-                  <th className="px-2 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {(() => {
-                  const totalHeight = filteredProfiles.length * ROW_HEIGHT
-                  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
-                  const endIdx = Math.min(filteredProfiles.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN)
-                  const topPad = startIdx * ROW_HEIGHT
-                  const bottomPad = Math.max(0, totalHeight - endIdx * ROW_HEIGHT)
-                  const visibleProfiles = filteredProfiles.slice(startIdx, endIdx)
-                  return (
-                    <>
-                      {topPad > 0 && <tr style={{ height: topPad }}><td colSpan={9} /></tr>}
-                      {visibleProfiles.map((profile, localIdx) => {
-                        const idx = startIdx + localIdx
-                        const proxy = proxyMap.get(profile.proxy_id ?? '')
-                        const isEditing = editorProfileId === profile.id && editorMode === 'edit'
-                        const isChecked = selectedIds.has(profile.id)
-                        const tags = parseTags(profile.tags)
-                        const session = sessions.find(s => s.profile_id === profile.id)
-                        const isTransitioning = profile.status === 'starting' || profile.status === 'stopping'
+            {density === 'compact' ? <Rows3 className="h-3.5 w-3.5" /> : <Rows2 className="h-3.5 w-3.5" />}
+          </button>
+        </Tooltip>
 
-                        return (
-                          <tr
-                            key={profile.id}
-                            onClick={() => handleRowClick(profile.id)}
-                            onDoubleClick={(e) => {
-                              e.preventDefault()
-                              if (profile.status === 'ready' || profile.status === 'error') handleLaunch(profile.id)
-                            }}
-                            onContextMenu={(e) => {
-                              e.preventDefault()
-                              setContextMenu({
-                                x: e.clientX,
-                                y: e.clientY,
-                                profileId: profile.id,
-                                profileName: profile.name,
-                                status: profile.status,
-                                browserType: profile.browser_type
-                              })
-                            }}
-                            className={cn(
-                              'group/row border-b border-edge/40 cursor-pointer relative',
-                              'transition-colors duration-150 ease-[var(--ease-osmosis)]',
-                              isEditing
-                                ? 'bg-accent/10 shadow-[inset_2px_0_0_0_var(--color-accent)]'
-                                : focusedIdx === idx
-                                  ? 'bg-elevated/60 shadow-[inset_2px_0_0_0_var(--color-accent)]'
-                                  : 'hover:bg-elevated/40'
-                            )}
-                            style={{ height: ROW_HEIGHT }}
-                          >
-                            {/* Checkbox — wrapped in a full-cell label so the entire
-                                column area is a safe click target for selection. */}
-                            <td className="px-1" onClick={(e) => e.stopPropagation()}>
-                              <label
-                                className="flex h-full w-full items-center justify-center cursor-pointer select-none py-2 px-2 rounded-[--radius-sm] hover:bg-elevated/60 transition-colors"
-                                aria-label={isChecked ? 'Deselect profile' : 'Select profile'}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={isChecked}
-                                  onChange={(e) => handleCheckbox(profile.id, idx, (e.nativeEvent as MouseEvent).shiftKey)}
-                                  className={CHECKBOX}
-                                />
-                              </label>
-                            </td>
+        {/* Sort */}
+        <Select
+          options={[
+            { value: 'last_used:desc', label: 'Last used' },
+            { value: 'name:asc', label: 'Name (A→Z)' },
+            { value: 'name:desc', label: 'Name (Z→A)' },
+            { value: 'created_at:desc', label: 'Newest' },
+            { value: 'created_at:asc', label: 'Oldest' }
+          ]}
+          value={`${sortKey}:${sortDir}`}
+          onChange={(e) => {
+            const [k, d] = e.target.value.split(':') as [SortKey, SortDir]
+            setSortKey(k)
+            setSortDir(d)
+          }}
+          className="!h-7 !text-[11.5px] min-w-[130px]"
+        />
 
-                            {/* Name */}
-                            <td className="px-3 truncate" title={profile.name}>
-                              <div className="flex items-center gap-2 min-w-0 group/name">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    toggleFavorite(profile.id)
-                                  }}
-                                  className={cn(
-                                    'shrink-0 rounded-[--radius-sm] p-0.5 transition-all',
-                                    favoriteIds.has(profile.id)
-                                      ? 'text-warn opacity-100'
-                                      : 'text-muted/40 opacity-0 group-hover/name:opacity-100 hover:text-warn'
-                                  )}
-                                  aria-label={favoriteIds.has(profile.id) ? 'Unstar profile' : 'Star profile'}
-                                  title={favoriteIds.has(profile.id) ? 'Unstar' : 'Star (pin to top)'}
-                                >
-                                  <Star
-                                    className="h-3.5 w-3.5"
-                                    fill={favoriteIds.has(profile.id) ? 'currentColor' : 'none'}
-                                  />
-                                </button>
-                                {profile.group_color && (
-                                  <span
-                                    className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-edge"
-                                    style={{ backgroundColor: profile.group_color }}
-                                  />
-                                )}
-                                {renamingId === profile.id ? (
-                                  <input
-                                    autoFocus
-                                    value={renameDraft}
-                                    onChange={(e) => setRenameDraft(e.target.value)}
-                                    onClick={(e) => e.stopPropagation()}
-                                    onDoubleClick={(e) => e.stopPropagation()}
-                                    onKeyDown={(e) => {
-                                      e.stopPropagation()
-                                      if (e.key === 'Enter') { e.preventDefault(); void commitRename(profile.id, profile.name) }
-                                      else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
-                                    }}
-                                    onBlur={() => { void commitRename(profile.id, profile.name) }}
-                                    className="flex-1 min-w-0 rounded-[--radius-sm] border border-accent/50 bg-surface px-2 py-0.5 text-[13px] text-content font-medium focus:outline-none focus:border-accent"
-                                  />
-                                ) : (
-                                  <span
-                                    className="text-content font-medium truncate"
-                                    onDoubleClick={(e) => {
-                                      // Shadow the row-level dblclick (which
-                                      // launches); name dblclick renames instead.
-                                      e.stopPropagation()
-                                      e.preventDefault()
-                                      startRename(profile.id, profile.name)
-                                    }}
-                                    title={`Double-click to rename · ${profile.name}`}
-                                  >
-                                    {highlightName(profile.name)}
-                                  </span>
-                                )}
-                              </div>
-                            </td>
+        <Tooltip content="Import profiles from JSON">
+          <button
+            type="button"
+            onClick={handleImportProfiles}
+            className={cn(
+              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            )}
+            aria-label="Import profiles"
+          >
+            <Upload className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
+        <Tooltip content="Export profiles to JSON">
+          <button
+            type="button"
+            onClick={handleExportProfiles}
+            className={cn(
+              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            )}
+            aria-label="Export profiles"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
 
-                            {/* Health */}
-                            <td className="px-3" onClick={(e) => e.stopPropagation()}>
-                              {(() => {
-                                const cacheKey = `${profile.id}:${profile.updated_at}`
-                                const entry = healthCache[cacheKey]
-                                const proxy = profile.proxy_id != null
-                                  ? proxyMap.get(profile.proxy_id)
-                                  : undefined
-                                // "No proxy attached" is an intentional direct-connection
-                                // choice, not a health concern. Map it to 'ok' so a
-                                // clean no-proxy profile still shows green instead of
-                                // the gray "unknown" dot (regression fix).
-                                const proxyCheckStatus: 'ok' | 'failed' | 'untested' =
-                                  profile.proxy_id == null ? 'ok'
-                                  : proxy?.check_ok === true ? 'ok'
-                                  : proxy?.check_ok === false ? 'failed'
-                                  : 'untested'
-                                // While the per-profile warnings warm-up is in-flight we
-                                // treat the row as `unknown` (no reasons yet) rather than
-                                // guessing; this avoids flicker when the cache hydrates.
-                                // Exception: a no-proxy profile stays 'ok' even during
-                                // warm-up — its status doesn't depend on a proxy check,
-                                // so gray-flashing it would itself be a regression.
-                                const fallbackProxyStatus: 'ok' | 'failed' | 'untested' =
-                                  profile.proxy_id == null
-                                    ? 'ok'
-                                    : proxyCheckStatus === 'ok' ? 'untested' : proxyCheckStatus
-                                const { status, reasons } = entry
-                                  ? computeProfileHealth({
-                                      warnings: entry.warnings,
-                                      proxyCheckStatus
-                                    })
-                                  : computeProfileHealth({
-                                      warnings: [],
-                                      proxyCheckStatus: fallbackProxyStatus
-                                    })
-                                const statusText = HEALTH_STATUS_TEXT[status]
-                                const tooltipFallback =
-                                  status === 'good'
-                                    ? HEALTH_TOOLTIP_GOOD
-                                    : status === 'unknown'
-                                      ? HEALTH_TOOLTIP_UNKNOWN
-                                      : statusText
-                                const tooltipContent = reasons.length === 0
-                                  ? tooltipFallback
-                                  : (
-                                      <div className="text-left">
-                                        <div className="text-xs font-medium mb-1">{statusText}</div>
-                                        <ul className="list-disc list-inside text-xs space-y-1">
-                                          {reasons.map((r, i) => (
-                                            <li key={`${i}:${r}`}>{r}</li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                    )
-                                const ariaLabel = reasons.length === 0
-                                  ? `Health: ${statusText}`
-                                  : `Health: ${statusText}, ${reasons.length} issue${reasons.length === 1 ? '' : 's'}`
-                                const Glyph =
-                                  status === 'good' ? Check
-                                  : status === 'warn' ? AlertCircle
-                                  : status === 'bad' ? XCircle
-                                  : null
-                                return (
-                                  <Tooltip content={tooltipContent}>
-                                    <button
-                                      type="button"
-                                      aria-label={ariaLabel}
-                                      onClick={() => {
-                                        setPendingHealthBannerExpand(profile.id)
-                                        openEditor('edit', profile.id)
-                                      }}
-                                      className={cn(
-                                        // 24×24px hit area wraps a 16×16px visual dot —
-                                        // keeps column density while meeting minimum
-                                        // click-target guidance.
-                                        'inline-flex items-center justify-center h-6 w-6 rounded-full',
-                                        'cursor-pointer hover:opacity-80 transition-opacity',
-                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
-                                      )}
-                                    >
-                                      <span
-                                        aria-hidden="true"
-                                        className={cn(
-                                          'inline-flex items-center justify-center h-4 w-4 rounded-full text-white/90',
-                                          HEALTH_DOT[status]
-                                        )}
-                                      >
-                                        {Glyph && <Glyph className="h-2.5 w-2.5" aria-hidden="true" />}
-                                      </span>
-                                    </button>
-                                  </Tooltip>
-                                )
-                              })()}
-                            </td>
-
-                            {/* Status */}
-                            <td className="px-3">
-                              <div className="flex items-center gap-2">
-                                {isTransitioning ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-accent shrink-0" />
-                                ) : profile.status === 'error' ? (
-                                  <Tooltip content={profileErrors[profile.id] || 'Error - click to dismiss'}>
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); clearProfileError(profile.id) }}
-                                      className="shrink-0"
-                                    >
-                                      <AlertCircle className="h-3.5 w-3.5 text-err" />
-                                    </button>
-                                  </Tooltip>
-                                ) : (
-                                  <span className={cn('h-2 w-2 rounded-full shrink-0', STATUS_DOT[profile.status])} />
-                                )}
-                                <span className="text-xs text-muted">{STATUS_LABEL[profile.status]}</span>
-                                {profile.status === 'running' && session && (
-                                  <RunningTimer startedAt={session.started_at} />
-                                )}
-                              </div>
-                            </td>
-
-                            {/* Browser / OS */}
-                            <td className="px-3">
-                              <span className={cn(
-                                'inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium',
-                                BROWSER_COLORS[profile.browser_type]
-                              )}>
-                                {(() => {
-                                  const Icon = BROWSER_ICONS[profile.browser_type]
-                                  return <Icon className="h-3 w-3" />
-                                })()}
-                                {BROWSER_LABEL[profile.browser_type]}
-                              </span>
-                            </td>
-
-                            {/* Proxy */}
-                            <td className="px-3">
-                              {proxy ? (
-                                <Badge variant="default" className="text-[11px]">
-                                  {proxy.name}
-                                </Badge>
-                              ) : (
-                                <span className="text-xs text-muted/40">No proxy</span>
-                              )}
-                            </td>
-
-                            {/* Tags */}
-                            <td className="px-3">
-                              <div className="flex items-center gap-1 min-w-0">
-                                {tags.length > 0 ? tags.slice(0, 2).map(tag => (
-                                  <span key={tag} title={tag} className="min-w-0">
-                                    <Badge
-                                      variant="accent"
-                                      className="text-[10px] px-1.5 py-0 max-w-[60px] truncate block"
-                                    >
-                                      {tag}
-                                    </Badge>
-                                  </span>
-                                )) : (
-                                  <span className="text-xs text-muted/30">{'\u2014'}</span>
-                                )}
-                                {tags.length > 2 && (
-                                  <span className="text-[10px] text-muted/50 shrink-0">+{tags.length - 2}</span>
-                                )}
-                              </div>
-                            </td>
-
-                            {/* Last Used */}
-                            <td className="px-3">
-                              <Tooltip content={profile.last_used ? new Date(profile.last_used).toLocaleString() : 'Never used'}>
-                                <span className="text-xs text-muted tabular-nums">
-                                  {formatRelativeTime(profile.last_used)}
-                                </span>
-                              </Tooltip>
-                            </td>
-
-                            {/* Actions — inline quick launch/stop + ⋯ dropdown */}
-                            <td className="px-2" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center gap-0.5 justify-end">
-                                {/* Quick-launch / quick-stop — revealed on row
-                                    hover so the row stays clean when idle. */}
-                                {profile.status === 'running' ? (
-                                  <button
-                                    onClick={() => handleStop(profile.id)}
-                                    className="opacity-0 group-hover/row:opacity-100 focus:opacity-100 transition-opacity h-7 w-7 rounded-[--radius-sm] inline-flex items-center justify-center text-err hover:bg-err/10"
-                                    aria-label="Stop profile"
-                                    title="Stop"
-                                  >
-                                    <Square className="h-3.5 w-3.5" />
-                                  </button>
-                                ) : (profile.status === 'ready' || profile.status === 'error') ? (
-                                  <button
-                                    onClick={() => handleLaunch(profile.id)}
-                                    className="opacity-0 group-hover/row:opacity-100 focus:opacity-100 transition-opacity h-7 w-7 rounded-[--radius-sm] inline-flex items-center justify-center text-ok hover:bg-ok/10"
-                                    aria-label="Launch profile"
-                                    title="Launch"
-                                  >
-                                    <Play className="h-3.5 w-3.5" />
-                                  </button>
-                                ) : null}
-                                <DropdownMenu
-                                  align="right"
-                                  trigger={
-                                    <button className="h-7 w-7 rounded-[--radius-sm] inline-flex items-center justify-center text-muted hover:text-content hover:bg-elevated transition-colors">
-                                      <MoreHorizontal className="h-4 w-4" />
-                                    </button>
-                                  }
-                                  items={getRowActions(profile.id, profile.name, profile.status, profile.browser_type)}
-                                />
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                      {bottomPad > 0 && <tr style={{ height: bottomPad }}><td colSpan={9} /></tr>}
-                    </>
-                  )
-                })()}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={handleNewProfile}>
+          New profile
+        </Button>
+        <DropdownMenu
+          align="right"
+          items={presetMenuItems}
+          trigger={
+            <button
+              type="button"
+              aria-label="New from preset"
+              title="New from preset"
+              className={cn(
+                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+                'bg-primary/10 text-primary ring-1 ring-inset ring-primary/20',
+                'hover:bg-primary/15 hover:ring-primary/30',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+              )}
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          }
+        />
+        </div>
       </div>
 
-      {/* Editor Panel */}
-      {editorMode && (
-        <div className="w-[38%] min-w-[340px] max-w-[460px] shrink-0 border-l border-edge bg-card overflow-hidden flex flex-col animate-slideInRight">
-          <div className="flex items-center justify-between px-4 py-3.5 border-b border-edge shrink-0">
-            <h2 className="text-sm font-semibold text-content">
-              {editorMode === 'create' ? 'New Profile' : 'Edit Profile'}
-            </h2>
-            <Button variant="ghost" icon={<X className="h-4 w-4" />} onClick={handlePanelCancel} aria-label="Close panel" />
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <ProfileEditorPanel
-              key={editorMode === 'edit' ? editorProfileId : `__new__:${pendingSeed}`}
-              profileId={editorMode === 'edit' ? editorProfileId : null}
-              initialFingerprint={editorMode === 'create' ? pendingFingerprint : null}
-              initialBrowser={editorMode === 'create' ? pendingBrowser : null}
-              onSave={handlePanelSave}
-              onCancel={handlePanelCancel}
-            />
+      {/* ── Body ──────────────────────────────────────────────────────── */}
+      {showOnboarding ? (
+        <OnboardingWelcome
+          onCreateProfile={handleNewProfile}
+          onImportProfiles={handleImportProfiles}
+          onGoSettings={() => navigate('/settings')}
+          onGoProxies={() => navigate('/proxies')}
+        />
+      ) : filteredProfiles.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <EmptyState
+            icon={<LayoutGrid />}
+            title={hasActiveFilters ? 'No matching profiles' : 'No profiles yet'}
+            description={
+              hasActiveFilters
+                ? 'Try clearing filters or adjusting your search.'
+                : 'Create your first profile to get started.'
+            }
+            action={
+              hasActiveFilters ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setSearchQuery('')
+                    setStatusFilter('all')
+                    setBrowserFilter('all')
+                    setGroupFilter('all')
+                    setProxyFilter('all')
+                  }}
+                  icon={<Filter className="h-3.5 w-3.5" />}
+                >
+                  Clear filters
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={handleNewProfile}
+                  icon={<Plus className="h-3.5 w-3.5" />}
+                >
+                  Create profile
+                </Button>
+              )
+            }
+          />
+        </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          onKeyDown={handleListboxKeyDown}
+          className="flex-1 min-h-0 overflow-auto focus:outline-none"
+          role="listbox"
+          aria-label="Profiles"
+          aria-multiselectable="true"
+          tabIndex={focusedProfileIdx === null ? 0 : -1}
+        >
+          {/* Wrapper extra-bottom-padding when a selection is active so the
+              floating bulk bar (64px tall) doesn't obscure the last row. */}
+          <div
+            style={{
+              position: 'relative',
+              height: sequence.totalHeight + (hasSelection ? BULK_FLOATER_CLEARANCE_PX : 0)
+            }}
+          >
+            {sequence.rows.slice(startIdx, endIdx).map((row, localIdx) => {
+              const idx = startIdx + localIdx
+              const top = sequence.offsets[idx]
+              const style: CSSProperties = {
+                position: 'absolute',
+                top,
+                left: 0,
+                right: 0
+              }
+
+              if (row.kind === 'group') {
+                return (
+                  <div key={`group:${row.group}`} style={style}>
+                    <GroupHeaderRow
+                      label={row.label}
+                      count={row.count}
+                      collapsed={row.collapsed}
+                      onToggle={() => toggleGroupCollapsed(row.group)}
+                    />
+                  </div>
+                )
+              }
+
+              const profile = row.profile
+              const proxy = profile.proxy_id ? proxyMap.get(profile.proxy_id) ?? null : null
+              const session = sessionMap.get(profile.id)
+              const isSelected = selectedIds.has(profile.id)
+              const isFocused = focusedProfileIdx === row.profileIndex
+              const isFavorite = favoriteIds.has(profile.id)
+
+              return (
+                <div key={profile.id} style={style}>
+                  <ProfileRow
+                    profile={profile}
+                    proxy={proxy}
+                    session={session}
+                    selected={isSelected}
+                    focused={isFocused}
+                    isFavorite={isFavorite}
+                    density={density}
+                    groupColor={profile.group_color}
+                    getActionsForProfile={getRowActions}
+                    errorMessage={profileErrors[profile.id]}
+                    profileIndex={row.profileIndex}
+                    registerRef={registerRowRef}
+                    onToggleSelect={handleToggleSelect}
+                    onClickRow={handleRowClick}
+                    onDoubleClickRow={handleRowDoubleClick}
+                    onContextMenu={handleRowContextMenu}
+                    onToggleFavorite={toggleFavorite}
+                    onLaunch={handleRowLaunch}
+                    onStop={handleRowStop}
+                    onClearError={clearProfileError}
+                  />
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
 
+      {/* ── Bulk action bar ──────────────────────────────────────────── */}
+      {hasSelection && (
+        <div
+          role="toolbar"
+          aria-label={`Bulk actions for ${selectedIds.size} selected profile${
+            selectedIds.size === 1 ? '' : 's'
+          }`}
+          className={cn(
+            'absolute bottom-4 left-1/2 -translate-x-1/2 z-20',
+            'flex items-center gap-2 px-3 py-2',
+            'bg-card/85 backdrop-blur-md border border-border/60 rounded-[--radius-lg]',
+            'shadow-[var(--shadow-md)] animate-slideUp'
+          )}
+        >
+          <span className="text-[12px] font-semibold text-foreground tabular-nums px-1.5">
+            {selectedIds.size} selected
+          </span>
+          <span className="h-4 w-px bg-border/60" />
+          <Button
+            ref={bulkFirstActionRef}
+            variant="ghost"
+            size="sm"
+            icon={<Play className="h-3.5 w-3.5" />}
+            onClick={handleBulkLaunch}
+            className="text-ok hover:text-ok hover:bg-ok/10"
+          >
+            Launch all
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Square className="h-3.5 w-3.5" />}
+            onClick={handleBulkStop}
+            className="text-warn hover:text-warn hover:bg-warn/10"
+          >
+            Stop all
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<ArrowUpDown className="h-3.5 w-3.5" />}
+            onClick={handleBulkTestProxies}
+          >
+            Test proxies
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+            onClick={handleBulkDelete}
+            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+          >
+            Delete
+          </Button>
+          <span className="h-4 w-px bg-border/60" />
+          <button
+            type="button"
+            onClick={() => setSelectedIds(new Set())}
+            className={cn(
+              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            )}
+            aria-label="Clear selection"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* ── Editor Sheet ────────────────────────────────────────────── */}
+      <Sheet open={editorMode !== null} onOpenChange={handleEditorOpenChange}>
+        <SheetContent
+          side="right"
+          width={EDITOR_SHEET_WIDTH_PX}
+          hideClose
+          className="p-0 gap-0"
+          aria-describedby={undefined}
+        >
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/60 shrink-0">
+            <SheetTitle>
+              {editorMode === 'create' ? 'New Profile' : 'Edit Profile'}
+            </SheetTitle>
+            <button
+              type="button"
+              onClick={handleEditorCancel}
+              className={cn(
+                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+                'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+              )}
+              aria-label="Close editor"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {editorMode !== null && (
+              <ProfileEditorPanel
+                key={
+                  editorMode === 'edit'
+                    ? `edit:${editorProfileId}`
+                    : `create:${pendingSeed}`
+                }
+                profileId={editorMode === 'edit' ? editorProfileId : null}
+                initialFingerprint={editorMode === 'create' ? pendingFingerprint : null}
+                initialBrowser={editorMode === 'create' ? pendingBrowser : null}
+                onSave={handleEditorSave}
+                onCancel={handleEditorCancel}
+              />
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Automation modal (Chromium only) */}
       {automationFor && (
         <AutomationModal
           open={!!automationFor}
@@ -1713,8 +2503,7 @@ export function ProfilesPage() {
         />
       )}
 
-      {/* Right-click context menu on profile rows — reuses row action items
-          so the right-click menu is always in sync with the ⋯ dropdown. */}
+      {/* Right-click context menu — same item builder as the row dropdown */}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
@@ -1732,9 +2521,14 @@ export function ProfilesPage() {
   )
 }
 
-/* ------------------------------------------------------------------ */
-/*  Onboarding welcome — first-run experience (0 profiles)            */
-/* ------------------------------------------------------------------ */
+// Resolve the height of any visible sequence row.
+function getRowHeight(row: VisibleRow, density: Density): number {
+  return row.kind === 'group' ? GROUP_HEADER_HEIGHT_PX : ROW_HEIGHT_BY_DENSITY[density]
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Onboarding (first-run, 0 profiles)
+// ────────────────────────────────────────────────────────────────────────────
 
 interface OnboardingStepProps {
   step: number
@@ -1746,29 +2540,39 @@ interface OnboardingStepProps {
   optional?: boolean
 }
 
-function OnboardingStep({ step, icon, title, description, actionLabel, onAction, optional }: OnboardingStepProps): React.JSX.Element {
+function OnboardingStep({
+  step,
+  icon,
+  title,
+  description,
+  actionLabel,
+  onAction,
+  optional
+}: OnboardingStepProps): React.JSX.Element {
   return (
-    <li className="group relative flex items-start gap-4 rounded-[--radius-lg] border border-edge bg-surface/60 p-4 transition-colors hover:border-accent/40">
+    <li className="group relative flex items-start gap-4 rounded-[--radius-lg] border border-border bg-card p-4 transition-colors hover:border-primary/40">
       <div className="shrink-0 relative">
-        <div className="h-10 w-10 rounded-full bg-accent/10 border border-accent/30 flex items-center justify-center text-accent">
+        <div className="h-10 w-10 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center text-primary">
           {icon}
         </div>
-        <div className="absolute -top-1 -left-1 h-5 w-5 rounded-full bg-surface-alt border border-edge text-[10px] font-mono font-semibold text-muted flex items-center justify-center">
+        <div className="absolute -top-1 -left-1 h-5 w-5 rounded-full bg-elevated border border-border text-[10px] font-mono font-semibold text-muted-foreground flex items-center justify-center">
           {step}
         </div>
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
-          <h3 className="text-[14px] font-semibold text-content">{title}</h3>
+          <h3 className="text-[14px] font-semibold text-foreground">{title}</h3>
           {optional && (
-            <span className="text-[10px] font-medium text-muted/80 uppercase tracking-wide">Optional</span>
+            <span className="text-[10px] font-medium text-muted-foreground/80 uppercase tracking-wide">
+              Optional
+            </span>
           )}
         </div>
-        <p className="text-[13px] text-muted leading-relaxed">{description}</p>
+        <p className="text-[13px] text-muted-foreground leading-relaxed">{description}</p>
       </div>
       <button
         onClick={onAction}
-        className="shrink-0 inline-flex items-center gap-1 rounded-[--radius-md] border border-edge bg-surface px-3 py-2 text-[12px] font-semibold text-content transition-colors hover:border-accent hover:text-accent self-center"
+        className="shrink-0 inline-flex items-center gap-1 rounded-[--radius-md] border border-border bg-elevated px-3 py-2 text-[12px] font-semibold text-foreground transition-colors hover:border-primary hover:text-primary self-center"
       >
         {actionLabel}
         <ChevronRight className="h-3.5 w-3.5" />
@@ -1793,21 +2597,19 @@ function OnboardingWelcome({
   return (
     <div className="flex-1 overflow-y-auto px-6 pb-10">
       <div className="mx-auto max-w-2xl animate-fadeIn">
-        {/* Hero */}
         <div className="flex flex-col items-center text-center pt-8 pb-6">
           <div className="relative mb-5">
-            <div className="h-16 w-16 rounded-full bg-gradient-to-br from-accent/25 to-accent/5 border border-accent/30 flex items-center justify-center shadow-[0_0_40px_var(--color-accent-glow)]">
-              <Sparkles className="h-7 w-7 text-accent" />
+            <div className="h-16 w-16 rounded-full bg-gradient-to-br from-primary/25 to-primary/5 border border-primary/30 flex items-center justify-center shadow-[0_0_40px_rgba(59,130,246,0.20)]">
+              <Sparkles className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h2 className="text-[22px] font-bold text-content tracking-tight">Welcome to Lux</h2>
-          <p className="mt-2 text-sm text-muted leading-relaxed max-w-md">
-            Let's get you set up. These three steps take about a minute and prepare
-            the app for running isolated browser profiles with distinct fingerprints.
+          <h2 className="text-[22px] font-bold text-foreground tracking-tight">Welcome to Lux</h2>
+          <p className="mt-2 text-sm text-muted-foreground leading-relaxed max-w-md">
+            Three quick steps. About a minute. Then you're ready to run isolated browser
+            profiles with distinct fingerprints.
           </p>
         </div>
 
-        {/* Steps */}
         <ol className="space-y-2.5">
           <OnboardingStep
             step={1}
@@ -1831,17 +2633,16 @@ function OnboardingWelcome({
             icon={<Plus className="h-5 w-5" />}
             title="Create your first profile"
             description="Every profile gets its own fingerprint, storage, and optional proxy. You can also import existing profiles from a JSON file."
-            actionLabel="Create Profile"
+            actionLabel="Create profile"
             onAction={onCreateProfile}
           />
         </ol>
 
-        {/* Secondary action */}
-        <div className="mt-6 flex items-center justify-center gap-2 text-[12px] text-muted">
+        <div className="mt-6 flex items-center justify-center gap-2 text-[12px] text-muted-foreground">
           <span>Already have profiles?</span>
           <button
             onClick={onImportProfiles}
-            className="inline-flex items-center gap-1 font-medium text-accent hover:text-accent-dim transition-colors"
+            className="inline-flex items-center gap-1 font-medium text-primary hover:text-accent-dim transition-colors"
           >
             Import from JSON
             <Upload className="h-3.5 w-3.5" />

@@ -27,22 +27,25 @@ const STATUS_MUTED = { ok: '#7eaa6c', warn: '#d4a168', err: '#c95960' }
 
 export const THEME_PRESETS: Theme[] = [
   {
-    // Default. Champagne gold accent on a deep ink surface with a faint
-    // warm undertone — distinct from the cyan / blue / purple stack
-    // every other dev tool ships.
+    // Default. "Vault" — electric blue accent on a deep graphite surface.
+    // Values mirror the `@theme` block in `index.css` so applying this
+    // preset is effectively a no-op; the runtime override path stays
+    // identical to switching to any alternate preset below.
     id: 'champagne-noir',
-    name: 'Champagne Noir',
+    name: 'Vault',
     colors: {
-      surface: '#0a0b0d',
-      surfaceAlt: '#0e0f12',
-      card: '#15171b',
-      elevated: '#1d2026',
-      edge: '#2a2d34',
-      content: '#e8e6e3',
-      muted: '#7a7d85',
-      accent: '#d4b075',
-      accentDim: '#b8965e',
-      ...STATUS_MUTED
+      surface: '#08090c',
+      surfaceAlt: '#0d0e13',
+      card: '#11131a',
+      elevated: '#181a23',
+      edge: '#232631',
+      content: '#ffffff',
+      muted: '#8a8d9a',
+      accent: '#3b82f6',
+      accentDim: '#2563eb',
+      ok: '#34d399',
+      warn: '#fbbf24',
+      err: '#ef4444'
     }
   },
   {
@@ -165,6 +168,8 @@ export function clearThemeOverrides(): void {
     root.style.removeProperty(cssVar)
   }
 }
+
+export const DEFAULT_THEME_ID = 'champagne-noir'
 
 export function getDefaultTheme(): Theme {
   return THEME_PRESETS[0]

@@ -1,7 +1,167 @@
-import { useState, useRef, useEffect, useCallback, cloneElement, isValidElement } from 'react'
-import type { ReactElement } from 'react'
-import { createPortal } from 'react-dom'
+import { forwardRef, isValidElement } from 'react'
+import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { cn } from '@renderer/lib/utils'
+
+// Vault DropdownMenu — exports BOTH the legacy Lux flat API
+//   `<DropdownMenu trigger={ReactNode} items={[{label,icon,onClick,...}]} align="left|right" />`
+// and the canonical shadcn Radix family for new code. Built on
+// @radix-ui/react-dropdown-menu so keyboard navigation, focus trapping, and
+// portal positioning come for free.
+
+// ─── Canonical shadcn family ─────────────────────────────────────────────
+
+const DropdownMenuRoot = DropdownMenuPrimitive.Root
+const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger
+const DropdownMenuGroup = DropdownMenuPrimitive.Group
+const DropdownMenuPortal = DropdownMenuPrimitive.Portal
+const DropdownMenuSub = DropdownMenuPrimitive.Sub
+const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup
+
+const DropdownMenuSubTrigger = forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.SubTrigger
+    ref={ref}
+    className={cn(
+      'flex cursor-pointer select-none items-center gap-2 rounded-[--radius-md] px-2.5 py-[7px]',
+      'text-[13px] outline-none',
+      'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+      'focus:bg-elevated data-[state=open]:bg-elevated',
+      className
+    )}
+    {...props}
+  />
+))
+DropdownMenuSubTrigger.displayName = DropdownMenuPrimitive.SubTrigger.displayName
+
+const DropdownMenuSubContent = forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.SubContent
+    ref={ref}
+    className={cn(
+      'z-[300] min-w-[8rem] overflow-hidden rounded-[--radius-lg] border border-border bg-popover p-1',
+      'text-popover-foreground shadow-[var(--shadow-md)] surface-lit',
+      'data-[state=open]:animate-scaleIn',
+      className
+    )}
+    {...props}
+  />
+))
+DropdownMenuSubContent.displayName = DropdownMenuPrimitive.SubContent.displayName
+
+const DropdownMenuContent = forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
+>(({ className, sideOffset = 4, ...props }, ref) => (
+  <DropdownMenuPrimitive.Portal>
+    <DropdownMenuPrimitive.Content
+      ref={ref}
+      sideOffset={sideOffset}
+      className={cn(
+        'z-[300] min-w-[200px] max-w-[320px] max-h-[min(60vh,480px)] overflow-y-auto',
+        'rounded-[--radius-lg] border border-border bg-popover p-1',
+        'text-popover-foreground shadow-[var(--shadow-md)] surface-lit',
+        'data-[state=open]:animate-scaleIn',
+        className
+      )}
+      {...props}
+    />
+  </DropdownMenuPrimitive.Portal>
+))
+DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName
+
+/**
+ * Canonical shadcn `<DropdownMenu.Item>` primitive. Exported as
+ * `DropdownMenuItemPrimitive` because the legacy Lux `DropdownMenuItem`
+ * is already a public *interface* (the data shape passed to the flat API).
+ * New shadcn-shaped code should use `DropdownMenuItemPrimitive` directly.
+ */
+const DropdownMenuItemPrimitive = forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & {
+    inset?: boolean
+    variant?: 'default' | 'danger'
+  }
+>(({ className, inset, variant = 'default', ...props }, ref) => (
+  <DropdownMenuPrimitive.Item
+    ref={ref}
+    className={cn(
+      'relative flex cursor-pointer select-none items-center gap-2 rounded-[--radius-md] px-2.5 py-[7px]',
+      'text-[13px] outline-none whitespace-nowrap',
+      'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+      'data-[disabled]:pointer-events-none data-[disabled]:opacity-40',
+      variant === 'danger'
+        ? 'text-destructive focus:bg-destructive/12'
+        : 'text-foreground focus:bg-elevated',
+      inset && 'pl-8',
+      className
+    )}
+    {...props}
+  />
+))
+DropdownMenuItemPrimitive.displayName = DropdownMenuPrimitive.Item.displayName
+
+const DropdownMenuCheckboxItem = forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem>
+>(({ className, children, ...props }, ref) => (
+  <DropdownMenuPrimitive.CheckboxItem
+    ref={ref}
+    className={cn(
+      'relative flex cursor-pointer select-none items-center rounded-[--radius-md] py-1.5 pl-8 pr-2',
+      'text-[13px] outline-none focus:bg-elevated',
+      'data-[disabled]:pointer-events-none data-[disabled]:opacity-40',
+      className
+    )}
+    {...props}
+  >
+    {children}
+  </DropdownMenuPrimitive.CheckboxItem>
+))
+DropdownMenuCheckboxItem.displayName = DropdownMenuPrimitive.CheckboxItem.displayName
+
+const DropdownMenuLabel = forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.Label>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.Label
+    ref={ref}
+    className={cn(
+      'px-2.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground select-none',
+      className
+    )}
+    {...props}
+  />
+))
+DropdownMenuLabel.displayName = DropdownMenuPrimitive.Label.displayName
+
+const DropdownMenuSeparator = forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.Separator>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>
+>(({ className, ...props }, ref) => (
+  <DropdownMenuPrimitive.Separator
+    ref={ref}
+    className={cn('my-1 h-px bg-border', className)}
+    {...props}
+  />
+))
+DropdownMenuSeparator.displayName = DropdownMenuPrimitive.Separator.displayName
+
+const DropdownMenuShortcut = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLSpanElement>): React.JSX.Element => (
+  <span
+    className={cn('ml-auto text-[11px] tracking-widest text-muted-foreground', className)}
+    {...props}
+  />
+)
+DropdownMenuShortcut.displayName = 'DropdownMenuShortcut'
+
+// ─── Legacy flat API ──────────────────────────────────────────────────────
 
 export interface DropdownMenuItem {
   label: string
@@ -19,170 +179,80 @@ export interface DropdownMenuProps {
   align?: 'left' | 'right'
 }
 
-type TriggerProps = {
-  onClick?: (e: React.MouseEvent) => void
-  onKeyDown?: (e: React.KeyboardEvent) => void
-  'aria-haspopup'?: boolean | 'menu' | 'true' | 'false'
-  'aria-expanded'?: boolean
-}
-
-export function DropdownMenu({ trigger, items, align = 'right' }: DropdownMenuProps) {
-  const [open, setOpen] = useState(false)
-  const triggerRef = useRef<HTMLDivElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const [focusIdx, setFocusIdx] = useState(-1)
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
-
-  const close = useCallback(() => { setOpen(false); setFocusIdx(-1) }, [])
-
-  // Calculate position from trigger rect
-  const updatePos = useCallback(() => {
-    if (!triggerRef.current) return
-    const rect = triggerRef.current.getBoundingClientRect()
-    const menuWidth = 220
-    let left = align === 'right' ? rect.right - menuWidth : rect.left
-    // Clamp to viewport
-    left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8))
-    let top = rect.bottom + 4
-    // If it would overflow bottom, show above
-    if (top + 200 > window.innerHeight) {
-      top = Math.max(8, rect.top - 4)
-    }
-    setPos({ top, left })
-  }, [align])
-
-  useEffect(() => {
-    if (!open) return
-    updatePos()
-    const onScroll = () => updatePos()
-    // Listen on capture to catch scroll in any ancestor
-    window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onScroll)
-    return () => {
-      window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [open, updatePos])
-
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node
-      if (triggerRef.current?.contains(target)) return
-      if (menuRef.current?.contains(target)) return
-      close()
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open, close])
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    const enabledIdxs = items
-      .map((it, i) => (!it.disabled && it.kind !== 'heading' ? i : -1))
-      .filter((i) => i >= 0)
-    if (!open) {
-      if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
-        e.preventDefault()
-        setOpen(true)
-        setFocusIdx(enabledIdxs[0] ?? -1)
-      }
-      return
-    }
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      const cur = enabledIdxs.indexOf(focusIdx)
-      if (enabledIdxs.length) setFocusIdx(enabledIdxs[(cur + 1) % enabledIdxs.length])
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      const cur = enabledIdxs.indexOf(focusIdx)
-      if (enabledIdxs.length) setFocusIdx(enabledIdxs[(cur - 1 + enabledIdxs.length) % enabledIdxs.length])
-    } else if (e.key === 'Enter' && focusIdx >= 0) {
-      e.preventDefault(); items[focusIdx].onClick(); close()
-    } else if (e.key === 'Escape') {
-      close()
-    }
-  }, [open, items, focusIdx, close])
-
-  // Hoist aria-haspopup/aria-expanded + click handler onto the actual
-  // focusable trigger element (typically a <button>). Falls back to a
-  // wrapping div if `trigger` is not a single React element.
-  const renderedTrigger = (() => {
-    if (isValidElement(trigger)) {
-      const element = trigger as ReactElement<TriggerProps>
-      const originalOnClick = element.props.onClick
-      const originalOnKeyDown = element.props.onKeyDown
-      return cloneElement(element, {
-        'aria-haspopup': 'menu',
-        'aria-expanded': open,
-        onClick: (e: React.MouseEvent) => {
-          originalOnClick?.(e)
-          if (!e.defaultPrevented) setOpen((o) => !o)
-        },
-        onKeyDown: (e: React.KeyboardEvent) => {
-          originalOnKeyDown?.(e)
-          handleKeyDown(e)
-        }
-      })
-    }
-    return (
-      <div
-        onClick={() => setOpen(!open)}
-        onKeyDown={handleKeyDown}
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        {trigger}
-      </div>
-    )
-  })()
+/**
+ * Legacy Lux flat DropdownMenu. Forwards a single React element trigger
+ * through Radix's `asChild`, so the focusable button keeps its semantics
+ * (`aria-haspopup` / `aria-expanded`). Falls back to a wrapping span only
+ * for non-element children (string / number / fragment).
+ */
+function DropdownMenu({ trigger, items, align = 'right' }: DropdownMenuProps): React.JSX.Element {
+  const renderedTrigger = isValidElement(trigger) ? trigger : <span>{trigger}</span>
 
   return (
-    <div ref={triggerRef} className="relative inline-flex">
-      {renderedTrigger}
-      {open && pos && createPortal(
-        <div
-          ref={menuRef}
-          role="menu"
-          className="fixed min-w-[200px] max-w-[320px] max-h-[min(60vh,480px)] overflow-y-auto rounded-[--radius-lg] bg-elevated/95 border border-edge/80 p-1 backdrop-blur-md surface-lit shadow-[var(--shadow-md)] animate-scaleIn"
-          style={{ top: pos.top, left: pos.left, zIndex: 200 }}
+    <DropdownMenuPrimitive.Root>
+      <DropdownMenuPrimitive.Trigger asChild>{renderedTrigger}</DropdownMenuPrimitive.Trigger>
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content
+          align={align === 'right' ? 'end' : 'start'}
+          sideOffset={4}
+          className={cn(
+            'z-[300] min-w-[200px] max-w-[320px] max-h-[min(60vh,480px)] overflow-y-auto',
+            'rounded-[--radius-lg] border border-border bg-popover p-1',
+            'text-popover-foreground shadow-[var(--shadow-md)] surface-lit',
+            'data-[state=open]:animate-scaleIn'
+          )}
         >
           {items.map((item, i) => {
             if (item.kind === 'heading') {
               return (
-                <div
+                <DropdownMenuPrimitive.Label
                   key={i}
-                  role="presentation"
-                  className="px-2.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted select-none"
+                  className="px-2.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground select-none"
                 >
                   {item.label}
-                </div>
+                </DropdownMenuPrimitive.Label>
               )
             }
             return (
-              <button
+              <DropdownMenuPrimitive.Item
                 key={i}
-                role="menuitem"
                 disabled={item.disabled}
-                onClick={() => { item.onClick(); close() }}
+                onSelect={() => item.onClick()}
                 className={cn(
-                  'flex w-full items-center gap-2 rounded-[--radius-md] px-2.5 py-[7px] text-[13px] whitespace-nowrap',
+                  'relative flex cursor-pointer select-none items-center gap-2 rounded-[--radius-md] px-2.5 py-[7px]',
+                  'text-[13px] outline-none whitespace-nowrap',
                   'transition-colors duration-150 ease-[var(--ease-osmosis)]',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
-                  item.disabled && 'opacity-40 pointer-events-none',
-                  i === focusIdx && 'bg-card',
+                  'data-[disabled]:pointer-events-none data-[disabled]:opacity-40',
                   item.variant === 'danger'
-                    ? 'text-err hover:bg-err/12'
-                    : 'text-content hover:bg-card'
+                    ? 'text-destructive focus:bg-destructive/12 hover:bg-destructive/12'
+                    : 'text-foreground focus:bg-elevated hover:bg-elevated'
                 )}
               >
                 {item.icon && <span className="h-4 w-4 shrink-0">{item.icon}</span>}
                 <span className="truncate">{item.label}</span>
-              </button>
+              </DropdownMenuPrimitive.Item>
             )
           })}
-        </div>,
-        document.body
-      )}
-    </div>
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
   )
+}
+
+export {
+  DropdownMenu,
+  DropdownMenuRoot,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItemPrimitive,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuGroup,
+  DropdownMenuPortal,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuRadioGroup
 }

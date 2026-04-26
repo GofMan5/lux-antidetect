@@ -1,68 +1,92 @@
+@import url('https://rsms.me/inter/inter.css');
 @import "tailwindcss";
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Lux design system — "Champagne Noir"
+ * Lux design system — "Vault"
  *
- * Surfaces: deep ink with a faint warm undertone. Each layer steps up by
- * a tiny luminance and adds a 1px inset highlight at the top — that gives
- * cards a felt sense of being "lit from above" without the cheap gradient
- * trick.
+ * Surfaces: deep graphite (#08090c) with cool black-blue undertone. Layers
+ * step up a few percent at a time so cards, popovers and elevated surfaces
+ * read as distinct without ever feeling lit-from-above. Borders are
+ * intentionally near-invisible — `rgba(255,255,255,0.07)` — so chrome
+ * recedes and content carries the visual weight.
  *
- * Accent: champagne gold (#d4b075). Distinct from the cyan / purple /
- * cobalt-blue palette that every other dev tool ships, signals the "Lux"
- * (luxury / light) brand without being gaudy. Used sparingly — primary
- * actions, active nav, focus rings.
+ * Accent: electric blue (#3b82f6). Used sparingly for primary CTAs, focus
+ * rings, and active nav. Status pills use a separate, muted sage / amber /
+ * coral / sky set so the blue doesn't have to do everything.
  *
- * Status colors are intentionally muted (sage / amber / dusty rose). On a
- * tool people stare at for hours, neon green and screaming red are
- * fatiguing. The muted set is still readable but stops shouting.
+ * Typography: Inter Variable, tabular-nums for IDs/timestamps. Slightly
+ * negative letter-spacing keeps dense rows compact.
  *
- * Typography: Inter Variable, tabular-nums for IDs/timestamps via
- * font-feature-settings. Letter-spacing is slightly negative (-0.012em)
- * so dense rows don't feel airy.
- *
- * Motion easing comes from one curve everywhere — `cubic-bezier(0.32,
- * 0.72, 0, 1)`. It's the "osmosis" curve: gentle entry, slight overshoot
- * at the end, no bounce.
+ * Motion uses a single curve everywhere — `cubic-bezier(0.32, 0.72, 0,
+ * 1)` — the "osmosis" curve. Spring overshoot on entry, no bounce.
  * ──────────────────────────────────────────────────────────────────────── */
 
 @theme {
-  /* Surfaces — warmer near-blacks, layered by ~3% luminance */
-  --color-surface: #0a0b0d;
-  --color-surface-alt: #0e0f12;
-  --color-card: #15171b;
-  --color-elevated: #1d2026;
-  --color-edge: #2a2d34;
+  /* ── Surfaces — true graphite, layered subtly ───────────────────────── */
+  --color-background:    #08090c;
+  --color-surface:       #08090c;   /* legacy alias — keep so existing components still render */
+  --color-surface-alt:   #0d0e13;
+  --color-card:          #11131a;
+  --color-popover:       #11131a;
+  --color-elevated:      #181a23;
+  --color-secondary:     #181a23;
+  --color-edge:          #232631;
+  --color-input:         rgba(255, 255, 255, 0.05);
+  /* Border tone is split deliberately so input boundaries are perceivable
+   * to low-vision users (~3.1:1 contrast against the graphite background)
+   * while purely decorative dividers stay near-invisible. The legacy
+   * `--color-border` is kept as an alias of the heavier value because
+   * it's used everywhere the input-border tone is also acceptable. */
+  --color-border:        rgba(255, 255, 255, 0.18);
 
-  /* Type — content is warm off-white (not pure #fff), muted slightly cool */
-  --color-content: #e8e6e3;
-  --color-muted: #7a7d85;
+  /* ── Type ───────────────────────────────────────────────────────────── */
+  --color-foreground:    #ffffff;
+  --color-content:       #ffffff;   /* legacy alias */
+  /* `--color-muted` and `--color-muted-foreground` are intentionally aliased
+   * to the same value (#8a8d9a, the muted-text tone). Legacy call-sites
+   * across the codebase use `text-muted` to mean "muted text color"; that
+   * spelling resolves to `--color-muted` in Tailwind v4, so the alias must
+   * stay. If a "muted-surface" tone is ever needed, introduce a new token
+   * (e.g. `--color-muted-surface`) rather than re-pointing `--color-muted`. */
+  --color-muted:         #8a8d9a;
+  --color-muted-foreground: #8a8d9a;
+  --color-card-foreground: #ffffff;
+  --color-popover-foreground: #ffffff;
+  --color-secondary-foreground: #ffffff;
 
-  /* Accent — champagne gold, distinct from typical dev-tool palettes */
-  --color-accent: #d4b075;
-  --color-accent-dim: #b8965e;
-  --color-accent-glow: rgba(212, 176, 117, 0.18);
+  /* ── Accent — electric blue Vault ──────────────────────────────────── */
+  --color-primary:       #3b82f6;
+  --color-primary-foreground: #ffffff;
+  --color-accent:        #3b82f6;   /* legacy alias, now blue */
+  --color-accent-dim:    #2563eb;
+  --color-accent-foreground: #ffffff;
+  --color-accent-glow:   rgba(59, 130, 246, 0.20);
+  --color-ring:          #3b82f6;
 
-  /* Status — muted: sage / warm amber / dusty rose / soft teal */
-  --color-ok: #7eaa6c;
-  --color-warn: #d4a168;
-  --color-err: #c95960;
-  --color-info: #7da9c4;
+  /* ── Status ─────────────────────────────────────────────────────────── */
+  --color-ok:            #34d399;
+  --color-warn:          #fbbf24;
+  --color-err:           #ef4444;
+  --color-info:          #60a5fa;
+  --color-destructive:   #ef4444;
+  --color-destructive-foreground: #ffffff;
 
-  /* Radii — slightly tighter than before; aggressive rounding feels toy-ish on a pro tool */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  /* ── Radii — sharper than before; matches Vault precision feel ─────── */
+  --radius:              0.5rem;     /* shadcn default */
+  --radius-sm:           4px;
+  --radius-md:           6px;
+  --radius-lg:           10px;
+  --radius-xl:           14px;
 
-  /* Shadows — every elevated surface gets a 1px inset top highlight (premium feel) + soft drop */
-  --shadow-sm: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 4px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 16px 48px rgba(0, 0, 0, 0.6);
-  --shadow-focus: 0 0 0 1px var(--color-accent), 0 0 0 4px rgba(212, 176, 117, 0.15);
+  /* ── Shadows — Vault depth: subtle inner top highlight + heavier drop ── */
+  --shadow-sm:           0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md:           0 4px 14px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-lg:           0 18px 44px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-focus:        0 0 0 1px var(--color-primary), 0 0 0 4px rgba(59, 130, 246, 0.20);
 
-  /* Motion — single easing curve everywhere */
+  /* ── Motion ─────────────────────────────────────────────────────────── */
   --ease-osmosis: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
 
   --animate-fadeIn: fadeIn 0.18s var(--ease-osmosis);
   --animate-fadeOut: fadeOut 0.15s ease-in;
@@ -71,12 +95,30 @@
   --animate-scaleIn: scaleIn 0.18s var(--ease-osmosis);
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-slideInRight: slideInRight 0.32s var(--ease-osmosis);
+  --animate-slideInLeft: slideInLeft 0.32s var(--ease-osmosis);
+  --animate-slideOutRight: slideOutRight 0.24s var(--ease-osmosis);
+  --animate-slideOutLeft: slideOutLeft 0.24s var(--ease-osmosis);
   --animate-toastProgress: toastProgress linear forwards;
 }
 
 @keyframes slideInRight {
   from { opacity: 0; transform: translateX(24px); }
   to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideOutRight {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(24px); }
+}
+
+@keyframes slideOutLeft {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(-24px); }
 }
 
 @keyframes toastProgress {
@@ -114,10 +156,22 @@
   100% { background-position: 200% 0; }
 }
 
-/* ─── Inter font (variable weight) — bundled via Google Fonts CSS import ─── */
-@import url('https://rsms.me/inter/inter.css');
+/* Honor `prefers-reduced-motion: reduce`. Animations and transitions collapse
+ * to a single tick; smooth scroll falls back to instant. Imperative callers
+ * that pass `behavior: 'smooth'` to scrollTo() should additionally branch on
+ * the media query because the CSS `scroll-behavior` override does not affect
+ * those calls. */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 
-/* Base reset */
+/* Base reset (Inter font is imported at the very top so the CSS @import rule
+ * precedes all other rules — required by the spec). */
 html {
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
@@ -127,16 +181,16 @@ html {
 }
 
 body {
-  @apply bg-surface text-content antialiased;
+  @apply bg-background text-foreground antialiased;
   margin: 0;
   font-size: 13px;
   font-feature-settings: 'cv11', 'ss01', 'ss03'; /* curated alternates: open 4, alt 1/L, alt G */
   font-variation-settings: 'opsz' 14;
   letter-spacing: -0.012em;
   overflow: hidden;
-  /* Subtle vignette — warm radial darkening at the edges, perceived as depth */
-  background-image: radial-gradient(circle at 50% 0%, rgba(212, 176, 117, 0.025) 0%, transparent 60%),
-                    radial-gradient(circle at 100% 100%, rgba(122, 125, 133, 0.02) 0%, transparent 50%);
+  /* Subtle vignette — cool blue glow at the top, deeper black at the edges. */
+  background-image: radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.022) 0%, transparent 60%),
+                    radial-gradient(circle at 100% 100%, rgba(255, 255, 255, 0.012) 0%, transparent 50%);
 }
 
 /* Tabular numbers for densely-packed numeric data (timestamps, ports, sizes). */
@@ -144,7 +198,7 @@ body {
 
 * { box-sizing: border-box; }
 
-/* Focus ring — gold halo, 1px inner + 4px outer at low opacity. */
+/* Focus ring — electric blue halo, 1px inner + 4px outer at low opacity. */
 *:focus-visible {
   outline: none;
   box-shadow: var(--shadow-focus);
@@ -164,7 +218,7 @@ body {
 .interactive:hover:not(:disabled) { background-color: var(--color-elevated); }
 .interactive:active:not(:disabled) { transform: translateY(0.5px); }
 
-/* Scrollbar — Webkit. Edge-tone thumb, gold on hover. */
+/* Scrollbar — Webkit. Edge-tone thumb, electric blue on hover. */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -172,7 +226,7 @@ body {
   border-radius: 999px;
   transition: background 0.16s var(--ease-osmosis);
 }
-::-webkit-scrollbar-thumb:hover { background: var(--color-accent-dim); }
+::-webkit-scrollbar-thumb:hover { background: var(--color-primary); }
 
 /* Scrollbar — Firefox */
 * {
@@ -182,21 +236,21 @@ body {
 
 /* Selection */
 ::selection {
-  background-color: var(--color-accent);
-  color: #1a1a1a;
+  background-color: var(--color-primary);
+  color: #ffffff;
 }
 
 /* Native select dropdown — chevron uses muted tone. */
 select option {
   background-color: var(--color-card);
-  color: var(--color-content);
+  color: var(--color-foreground);
   padding: 6px 8px;
 }
 
 select {
   -webkit-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237a7d85' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a8d9a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 32px !important;
@@ -208,18 +262,19 @@ input:focus, select:focus, textarea:focus { outline: none; }
 .drag-region { -webkit-app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; }
 
-/* Glass — warm-undertone version of the surface */
+/* Glass — graphite-tinted semi-transparent surface */
 .glass {
   backdrop-filter: blur(14px) saturate(140%);
-  background: rgba(14, 15, 18, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(13, 14, 19, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 /* Surface highlight — a 1px inset gradient at the top of any card-style
  * element. Adds a "lit from above" feel without being a separate visible
- * line. Apply via `.surface-lit`. */
+ * line. Apply via `.surface-lit`. Vault uses a much subtler highlight
+ * because true-graphite surfaces shouldn't feel waxy. */
 .surface-lit {
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, transparent 24px);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0%, transparent 24px);
 }
 
 .scrollbar-hide::-webkit-scrollbar { display: none; }
@@ -254,13 +309,13 @@ input[type="number"]::-webkit-outer-spin-button {
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
-/* Update progress bar — gold + dim shimmer */
+/* Update progress bar — electric blue shimmer (primary → accent-dim → primary) */
 .shimmer-bar {
   background-image: linear-gradient(
     90deg,
-    var(--color-accent-dim) 0%,
-    var(--color-accent) 50%,
-    var(--color-accent-dim) 100%
+    var(--color-primary) 0%,
+    var(--color-accent-dim) 50%,
+    var(--color-primary) 100%
   );
   background-size: 200% 100%;
   animation: shimmer 2s linear infinite;

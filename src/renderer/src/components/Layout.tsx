@@ -1,64 +1,398 @@
-import { useEffect, useState } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
-import { LayoutGrid, Globe, Settings, Shield, ChevronLeft, ChevronRight, Keyboard, Search } from 'lucide-react'
+import { useEffect } from 'react'
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import {
+  LayoutGrid,
+  Globe,
+  Settings,
+  Shield,
+  Keyboard,
+  Search,
+  FileText,
+  User,
+  ExternalLink
+} from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
-import { Tooltip } from '@renderer/components/ui/Tooltip'
+import {
+  Tooltip,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+  Separator,
+  Toaster
+} from '@renderer/components/ui'
 import { NotificationCenter } from './NotificationCenter'
 import { UpdateNotification } from './UpdateNotification'
 import { useKeyboardShortcutsStore } from './KeyboardShortcutsHelp'
 import { useCommandPaletteStore } from './CommandPalette'
 import { useProfilesStore } from '../stores/profiles'
 
-const NAV_ITEMS = [
-  { to: '/profiles', label: 'Profiles', icon: LayoutGrid },
-  { to: '/proxies', label: 'Proxies', icon: Globe },
-  { to: '/settings', label: 'Settings', icon: Settings }
-] as const
+// ─── Constants ─────────────────────────────────────────────────────────────
 
-const SIDEBAR_COLLAPSED_KEY = 'lux:sidebar-collapsed'
-const AUTO_COLLAPSE_BREAKPOINT_PX = 1100
+const TOPBAR_HEIGHT_PX = 56
+const LEFTRAIL_WIDTH_PX = 56
 
-function readPersistedCollapsed(): boolean | null {
-  try {
-    const raw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
-    if (raw === null) return null
-    return raw === '1'
-  } catch { return null }
+// LocalStorage key from the previous collapsible-sidebar design. Kept here
+// only so we can clear it on mount — the new shell isn't collapsible.
+const LEGACY_SIDEBAR_KEY = 'lux:sidebar-collapsed'
+
+// External project links surfaced in the account popover. Hoisted so the
+// canonical URL lives in one place; if the team renames the GitHub repo,
+// only this constant needs to change.
+const PROJECT_REPO_URL = 'https://github.com/GofMan5/lux-antidetect'
+
+interface RailItem {
+  to: string
+  label: string
+  icon: typeof LayoutGrid
+  shortcut: string
+  /**
+   * When true, the item is rendered but disabled (route doesn't exist yet).
+   * Tooltip surfaces the "Coming in iteration 2" copy.
+   */
+  comingSoon?: boolean
 }
 
-export function Layout(): React.JSX.Element {
-  // Initial state honors the user's last manual choice; if they never
-  // touched the toggle, fall back to viewport-based auto-collapse so
-  // small windows don't open with a 240px sidebar eating half the chrome.
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    const persisted = readPersistedCollapsed()
-    if (persisted !== null) return persisted
-    return typeof window !== 'undefined' && window.innerWidth < AUTO_COLLAPSE_BREAKPOINT_PX
-  })
+const RAIL_ITEMS: RailItem[] = [
+  { to: '/profiles', label: 'Profiles', icon: LayoutGrid, shortcut: 'G P' },
+  { to: '/proxies', label: 'Proxies', icon: Globe, shortcut: 'G X' },
+  { to: '/templates', label: 'Templates', icon: FileText, shortcut: '', comingSoon: true },
+  { to: '/settings', label: 'Settings', icon: Settings, shortcut: 'G S' }
+]
 
-  // Track whether the user has explicitly chosen — once they have, the
-  // auto-collapse rule stops interfering.
-  const [userOverrode, setUserOverrode] = useState<boolean>(() => readPersistedCollapsed() !== null)
+// Detected once; cosmetic ⌘K vs Ctrl K rendering only.
+function getMetaKeyLabel(): string {
+  if (typeof navigator === 'undefined') return 'Ctrl'
+  return navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'
+}
 
-  useEffect(() => {
-    if (userOverrode) return
-    const mq = window.matchMedia(`(max-width: ${AUTO_COLLAPSE_BREAKPOINT_PX - 1}px)`)
-    const apply = (matches: boolean): void => setCollapsed(matches)
-    apply(mq.matches)
-    const handler = (e: MediaQueryListEvent): void => apply(e.matches)
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [userOverrode])
+// ─── Sub-components ────────────────────────────────────────────────────────
 
-  const toggleCollapsed = (): void => {
-    setCollapsed((prev) => {
-      const next = !prev
-      try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0') } catch { /* ignore */ }
-      setUserOverrode(true)
-      return next
-    })
+function BrandMark(): React.JSX.Element {
+  return (
+    <NavLink
+      to="/profiles"
+      className={cn(
+        'no-drag flex items-center gap-2.5 px-3 h-full select-none',
+        'transition-opacity duration-150 ease-[var(--ease-osmosis)] hover:opacity-90'
+      )}
+      aria-label="Lux home"
+    >
+      <div
+        className={cn(
+          'h-8 w-8 rounded-[--radius-md] flex items-center justify-center shrink-0',
+          'bg-primary/12 ring-1 ring-inset ring-primary/20',
+          'shadow-[0_0_18px_rgba(59,130,246,0.18)]'
+        )}
+      >
+        <Shield className="h-4 w-4 text-primary" strokeWidth={2.2} />
+      </div>
+      <div className="flex flex-col leading-none">
+        <span className="text-[13px] font-bold tracking-[0.04em] text-foreground">LUX</span>
+        <span className="text-[9px] font-medium tracking-[0.18em] text-muted-foreground/70 uppercase mt-0.5">
+          Antidetect
+        </span>
+      </div>
+    </NavLink>
+  )
+}
+
+interface TopBarSearchTriggerProps {
+  onClick: () => void
+}
+
+function TopBarSearchTrigger({ onClick }: TopBarSearchTriggerProps): React.JSX.Element {
+  const meta = getMetaKeyLabel()
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'no-drag group relative w-full max-w-[420px] h-9 rounded-[--radius-md]',
+        'flex items-center gap-2 pl-3 pr-2 text-left',
+        'bg-input border border-border',
+        'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+        'hover:border-edge/80 hover:bg-input/80',
+        'focus-visible:outline-none focus-visible:border-primary/60 focus-visible:ring-[3px] focus-visible:ring-primary/15'
+      )}
+      aria-label="Open command palette"
+    >
+      <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+      <span className="flex-1 text-[12.5px] text-muted-foreground/80 truncate">
+        Search profiles, proxies, actions…
+      </span>
+      <span className="flex items-center gap-0.5 shrink-0">
+        <kbd
+          className={cn(
+            'h-5 min-w-[18px] px-1 inline-flex items-center justify-center',
+            'rounded-[--radius-sm] border border-border bg-card/80',
+            'text-[10px] font-mono text-muted-foreground'
+          )}
+        >
+          {meta}
+        </kbd>
+        <kbd
+          className={cn(
+            'h-5 min-w-[18px] px-1 inline-flex items-center justify-center',
+            'rounded-[--radius-sm] border border-border bg-card/80',
+            'text-[10px] font-mono text-muted-foreground'
+          )}
+        >
+          K
+        </kbd>
+      </span>
+    </button>
+  )
+}
+
+interface TopBarIconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  label: string
+}
+
+function TopBarIconButton({
+  label,
+  className,
+  children,
+  ...rest
+}: TopBarIconButtonProps): React.JSX.Element {
+  return (
+    <Tooltip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        className={cn(
+          'no-drag h-9 w-9 inline-flex items-center justify-center rounded-[--radius-md]',
+          'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+          'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+          className
+        )}
+        {...rest}
+      >
+        {children}
+      </button>
+    </Tooltip>
+  )
+}
+
+function AccountMenu(): React.JSX.Element {
+  const navigate = useNavigate()
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Account menu"
+          className={cn(
+            'no-drag h-9 w-9 inline-flex items-center justify-center rounded-full',
+            'bg-elevated/60 ring-1 ring-inset ring-border',
+            'text-foreground hover:bg-elevated hover:ring-edge/80',
+            'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
+          )}
+        >
+          <User className="h-4 w-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 p-0">
+        <div className="p-3 pb-2">
+          <p className="text-[12px] font-medium text-foreground">Lux Antidetect</p>
+          <p className="text-[10.5px] text-muted-foreground/80 mt-0.5">
+            Local-only, no cloud sync
+          </p>
+        </div>
+        <Separator />
+        <div className="p-1.5">
+          <button
+            type="button"
+            onClick={() => navigate('/settings')}
+            className={cn(
+              'w-full inline-flex items-center gap-2 rounded-[--radius-sm] px-2.5 py-1.5',
+              'text-[12.5px] text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            )}
+          >
+            <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+            Settings
+          </button>
+          <a
+            href={PROJECT_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              'w-full inline-flex items-center gap-2 rounded-[--radius-sm] px-2.5 py-1.5',
+              'text-[12.5px] text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            )}
+          >
+            <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+            Project repository
+          </a>
+        </div>
+        <Separator />
+        <div className="px-3 py-2 flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground/70">
+          <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" aria-hidden />
+          <span>LUX v{__APP_VERSION__}</span>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+interface TopBarProps {
+  onOpenPalette: () => void
+  onOpenShortcuts: () => void
+}
+
+function TopBar({ onOpenPalette, onOpenShortcuts }: TopBarProps): React.JSX.Element {
+  return (
+    <header
+      className={cn(
+        'drag-region shrink-0 flex items-stretch gap-2 px-2',
+        'border-b border-border/50 bg-card/85 backdrop-blur-md',
+        'relative z-30'
+      )}
+      style={{ height: TOPBAR_HEIGHT_PX }}
+    >
+      <div className="no-drag flex items-center shrink-0">
+        <BrandMark />
+      </div>
+
+      {/*
+       * Drag region — empty middle gutter is draggable, search trigger is no-drag.
+       * The search button caps at 360px so visible drag gutters remain on each
+       * side at the layout's hard 900px minimum width.
+       */}
+      <div className="flex-1 flex items-center justify-center min-w-0 px-3">
+        <div className="w-full max-w-[360px]">
+          <TopBarSearchTrigger onClick={onOpenPalette} />
+        </div>
+      </div>
+
+      <div className="no-drag flex items-center gap-1 shrink-0 pr-2">
+        <NotificationCenter />
+        <TopBarIconButton label="Keyboard shortcuts (?)" onClick={onOpenShortcuts}>
+          <Keyboard className="h-4 w-4" strokeWidth={1.9} />
+        </TopBarIconButton>
+        <AccountMenu />
+      </div>
+    </header>
+  )
+}
+
+interface LeftRailItemProps {
+  item: RailItem
+  runningCount: number
+}
+
+function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Element {
+  const Icon = item.icon
+  const isProfiles = item.to === '/profiles'
+  const showRunningBadge = isProfiles && runningCount > 0
+
+  // Coming-soon items are non-navigating buttons disguised as a NavLink-styled
+  // disc. Keep keyboard-accessible (focusable, `aria-disabled`).
+  if (item.comingSoon) {
+    return (
+      <Tooltip content={`${item.label} — Coming in iteration 2`} side="right">
+        <button
+          type="button"
+          aria-disabled="true"
+          aria-label={item.label}
+          tabIndex={0}
+          className={cn(
+            'h-10 w-10 mx-auto inline-flex items-center justify-center rounded-[--radius-md]',
+            'text-muted-foreground/40 cursor-not-allowed',
+            'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+          )}
+        >
+          <Icon className="h-[18px] w-[18px]" strokeWidth={1.9} />
+        </button>
+      </Tooltip>
+    )
   }
 
+  return (
+    <Tooltip
+      content={
+        <span className="flex items-center gap-2">
+          <span>{item.label}</span>
+          {item.shortcut && (
+            <span className="font-mono text-[10px] text-muted-foreground/80">{item.shortcut}</span>
+          )}
+        </span>
+      }
+      side="right"
+    >
+      <NavLink
+        to={item.to}
+        className={({ isActive }) =>
+          cn(
+            'group relative h-10 w-10 mx-auto inline-flex items-center justify-center',
+            'rounded-[--radius-md] transition-colors duration-150 ease-[var(--ease-osmosis)]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+            isActive
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:bg-elevated/40 hover:text-foreground'
+          )
+        }
+        aria-label={item.label}
+      >
+        {({ isActive }) => (
+          <>
+            {isActive && (
+              <span
+                aria-hidden
+                className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-primary"
+              />
+            )}
+            <span className="relative">
+              <Icon className="h-[18px] w-[18px]" strokeWidth={isActive ? 2.2 : 1.9} />
+              {showRunningBadge && (
+                <span
+                  className={cn(
+                    'absolute -top-1.5 -right-1.5 min-w-[16px] h-4 rounded-full px-1',
+                    'bg-ok text-[#0a0b0d] text-[9px] font-bold leading-none',
+                    'inline-flex items-center justify-center ring-2 ring-card'
+                  )}
+                  aria-label={`${runningCount} running`}
+                >
+                  {runningCount > 9 ? '9+' : runningCount}
+                </span>
+              )}
+            </span>
+          </>
+        )}
+      </NavLink>
+    </Tooltip>
+  )
+}
+
+interface LeftRailProps {
+  runningCount: number
+}
+
+function LeftRail({ runningCount }: LeftRailProps): React.JSX.Element {
+  return (
+    <nav
+      aria-label="Primary navigation"
+      className={cn(
+        'shrink-0 flex flex-col bg-card/60 border-r border-border/50',
+        'relative z-20'
+      )}
+      style={{ width: LEFTRAIL_WIDTH_PX }}
+    >
+      <div className="flex flex-col gap-1 py-3 flex-1">
+        {RAIL_ITEMS.map((item) => (
+          <LeftRailItem key={item.to} item={item} runningCount={runningCount} />
+        ))}
+      </div>
+    </nav>
+  )
+}
+
+// ─── Layout ────────────────────────────────────────────────────────────────
+
+export function Layout(): React.JSX.Element {
   const showShortcuts = useKeyboardShortcutsStore((s) => s.show)
   const showPalette = useCommandPaletteStore((s) => s.show)
   const location = useLocation()
@@ -66,217 +400,34 @@ export function Layout(): React.JSX.Element {
     (s) => s.profiles.filter((p) => p.status === 'running' || p.status === 'starting').length
   )
 
+  // Drop the legacy persisted collapsed-sidebar key from previous design.
+  // Best-effort — silently ignore storage errors.
+  useEffect(() => {
+    try {
+      localStorage.removeItem(LEGACY_SIDEBAR_KEY)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   return (
-    <div className="flex h-screen w-screen min-w-[900px] min-h-[600px] overflow-hidden bg-surface">
-      {/* Sidebar — surface-lit with a faint vertical gradient for depth */}
-      <aside
-        className={cn(
-          'shrink-0 flex flex-col border-r border-edge/60 relative z-30',
-          'bg-surface-alt',
-          // Faint gradient: lighter at top, darker at bottom — gives the
-          // sidebar a subtle "stood up" feel against the flatter main pane.
-          'bg-gradient-to-b from-[rgba(255,255,255,0.014)] to-transparent',
-          'transition-[width] duration-200 ease-[var(--ease-osmosis)]',
-          collapsed ? 'w-[72px]' : 'w-[224px]'
-        )}
-      >
-        {/* Brand row — drag region for the frameless window */}
-        <div
-          className={cn(
-            'drag-region flex items-center shrink-0 h-[52px] border-b border-edge/40',
-            collapsed ? 'justify-center px-0' : 'gap-3 px-4'
-          )}
+    <div className="flex flex-col h-screen w-screen min-w-[900px] min-h-[600px] overflow-hidden bg-background">
+      <TopBar onOpenPalette={showPalette} onOpenShortcuts={showShortcuts} />
+
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <LeftRail runningCount={runningCount} />
+
+        {/* Keyed by pathname so route transitions get a clean fade. */}
+        <main
+          key={location.pathname}
+          className="flex-1 min-w-0 overflow-y-auto bg-background flex flex-col animate-fadeIn relative"
         >
-          <div className={cn(
-            'no-drag h-9 w-9 rounded-[--radius-md] flex items-center justify-center shrink-0',
-            'bg-accent/12 ring-1 ring-inset ring-accent/15',
-            'shadow-[0_0_18px_var(--color-accent-glow)]'
-          )}>
-            <Shield className="h-[18px] w-[18px] text-accent" strokeWidth={2.2} />
-          </div>
-          {!collapsed && (
-            <div className="flex flex-col leading-tight select-none">
-              <span className="text-[13px] font-bold tracking-[0.04em] text-content">LUX</span>
-              <span className="text-[9.5px] font-medium tracking-[0.18em] text-muted/70 uppercase">Antidetect</span>
-            </div>
-          )}
-        </div>
-
-        {/* Navigation */}
-        <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 py-3 flex-1">
-          {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
-            const showRunningBadge = to === '/profiles' && runningCount > 0
-            const link = (
-              <NavLink
-                key={to}
-                to={to}
-                className={({ isActive }) =>
-                  cn(
-                    'group relative flex items-center gap-3 rounded-[--radius-md] py-2 text-[13px] font-medium',
-                    'transition-[background-color,color,box-shadow] duration-150 ease-[var(--ease-osmosis)]',
-                    collapsed ? 'justify-center px-0' : 'px-3',
-                    isActive
-                      ? 'bg-accent/10 text-accent'
-                      : 'text-muted hover:bg-elevated/50 hover:text-content'
-                  )
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    {/* Active left bar — gold rod with a small glow */}
-                    {isActive && (
-                      <span
-                        aria-hidden
-                        className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-accent shadow-[0_0_8px_var(--color-accent)]"
-                      />
-                    )}
-                    <span className="relative shrink-0">
-                      <Icon
-                        className="h-[18px] w-[18px] transition-transform duration-150 ease-[var(--ease-osmosis)] group-hover:scale-105"
-                        strokeWidth={isActive ? 2.2 : 1.9}
-                      />
-                      {showRunningBadge && collapsed && (
-                        <span
-                          className={cn(
-                            'absolute -top-1.5 -right-1.5 min-w-[16px] h-4 rounded-full',
-                            'bg-ok text-[#0a0b0d] text-[9px] font-bold leading-none',
-                            'flex items-center justify-center px-1 ring-2 ring-surface-alt'
-                          )}
-                          aria-label={`${runningCount} running`}
-                        >
-                          {runningCount > 9 ? '9+' : runningCount}
-                        </span>
-                      )}
-                    </span>
-                    {!collapsed && (
-                      <span className="flex-1 flex items-center justify-between">
-                        {label}
-                        {showRunningBadge && (
-                          <span
-                            className="flex items-center gap-1 text-[10px] font-semibold text-ok bg-ok/10 ring-1 ring-inset ring-ok/15 rounded-full px-1.5 py-0.5"
-                            aria-label={`${runningCount} running`}
-                          >
-                            <span className="h-1.5 w-1.5 rounded-full bg-ok" aria-hidden />
-                            {runningCount}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </>
-                )}
-              </NavLink>
-            )
-            return collapsed ? (
-              <Tooltip key={to} content={label} side="right">{link}</Tooltip>
-            ) : link
-          })}
-        </nav>
-
-        {/* Bottom controls */}
-        <div className="flex flex-col gap-1 px-2 pb-2">
-          <div className={collapsed ? 'flex justify-center' : ''}>
-            <NotificationCenter />
-          </div>
-
-          {/* Quick find — opens command palette */}
-          {(() => {
-            const btn = (
-              <button
-                onClick={showPalette}
-                className={cn(
-                  'rounded-[--radius-md] p-2.5 text-muted hover:text-content hover:bg-elevated/50',
-                  'transition-[background-color,color] duration-150 ease-[var(--ease-osmosis)]',
-                  'flex items-center gap-2',
-                  collapsed ? 'justify-center' : ''
-                )}
-                aria-label="Open command palette"
-              >
-                <Search className="h-4 w-4" strokeWidth={1.9} />
-                {!collapsed && (
-                  <span className="flex-1 flex items-center justify-between text-xs">
-                    Quick find
-                    <span className="flex items-center gap-0.5 text-muted/70">
-                      <kbd className="px-1 py-0.5 rounded-[--radius-sm] border border-edge bg-surface/60 text-[10px] font-mono">Ctrl</kbd>
-                      <kbd className="px-1 py-0.5 rounded-[--radius-sm] border border-edge bg-surface/60 text-[10px] font-mono">K</kbd>
-                    </span>
-                  </span>
-                )}
-              </button>
-            )
-            return collapsed ? (
-              <Tooltip content="Quick find (Ctrl+K)" side="right">{btn}</Tooltip>
-            ) : btn
-          })()}
-
-          {/* Keyboard shortcuts discovery */}
-          {(() => {
-            const hint = (
-              <button
-                onClick={showShortcuts}
-                className={cn(
-                  'rounded-[--radius-md] p-2.5 text-muted hover:text-content hover:bg-elevated/50',
-                  'transition-[background-color,color] duration-150 ease-[var(--ease-osmosis)]',
-                  'flex items-center gap-2',
-                  collapsed ? 'justify-center' : ''
-                )}
-                aria-label="Show keyboard shortcuts"
-              >
-                <Keyboard className="h-4 w-4" strokeWidth={1.9} />
-                {!collapsed && (
-                  <span className="flex-1 flex items-center justify-between text-xs">
-                    Shortcuts
-                    <kbd className="px-1.5 py-0.5 rounded-[--radius-sm] border border-edge bg-surface/60 text-[10px] font-mono">?</kbd>
-                  </span>
-                )}
-              </button>
-            )
-            return collapsed ? (
-              <Tooltip content="Keyboard shortcuts (?)" side="right">{hint}</Tooltip>
-            ) : hint
-          })()}
-
-          {/* Collapse toggle */}
-          <button
-            onClick={toggleCollapsed}
-            className={cn(
-              'rounded-[--radius-md] p-2.5 text-muted hover:text-content hover:bg-elevated/50',
-              'transition-[background-color,color] duration-150 ease-[var(--ease-osmosis)]',
-              'flex items-center gap-2',
-              collapsed ? 'justify-center' : ''
-            )}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? (
-              <ChevronRight className="h-4 w-4" strokeWidth={1.9} />
-            ) : (
-              <>
-                <ChevronLeft className="h-4 w-4" strokeWidth={1.9} />
-                <span className="text-xs">Collapse</span>
-              </>
-            )}
-          </button>
-
-          {/* Version badge */}
-          {!collapsed && (
-            <div className="mt-1 pt-2 px-3 border-t border-edge/30 flex items-center gap-2 text-[10px] text-muted/60 font-mono tracking-wide">
-              <span className="h-1.5 w-1.5 rounded-full bg-ok shadow-[0_0_6px_var(--color-ok)]" aria-hidden />
-              <span>LUX v{__APP_VERSION__}</span>
-            </div>
-          )}
-        </div>
-      </aside>
-
-      {/* Main pane — keyed by pathname so route transitions get a clean
-          fade-in. Slight bottom-right ambient highlight gives the canvas
-          a feel of being lit from the corner. */}
-      <main
-        key={location.pathname}
-        className="flex-1 min-w-0 overflow-y-auto bg-surface flex flex-col animate-fadeIn relative"
-      >
-        <Outlet />
-      </main>
+          <Outlet />
+        </main>
+      </div>
 
       <UpdateNotification />
+      <Toaster />
     </div>
   )
 }

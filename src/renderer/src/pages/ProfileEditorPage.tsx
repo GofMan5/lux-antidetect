@@ -27,7 +27,6 @@ import {
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useProxiesStore } from '../stores/proxies'
-import { useProfilesStore } from '../stores/profiles'
 import { useToastStore } from '../components/Toast'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { cn } from '../lib/utils'
@@ -425,19 +424,6 @@ export function ProfileEditorPanel({
     validationWarnings.length > 3 && !showAllWarnings
       ? validationWarnings.slice(0, 3)
       : validationWarnings
-
-  // Auto-expand the consistency banner when the user arrived by clicking a
-  // profile-list health dot. The flag lives on the profiles store so the
-  // click-through survives the store-driven editor remount; we clear it
-  // immediately to avoid stale triggers on a later re-open.
-  const pendingHealthBannerExpand = useProfilesStore((s) => s.pendingHealthBannerExpand)
-  const setPendingHealthBannerExpand = useProfilesStore((s) => s.setPendingHealthBannerExpand)
-  useEffect(() => {
-    if (pendingHealthBannerExpand && pendingHealthBannerExpand === profileId) {
-      setShowAllWarnings(true)
-      setPendingHealthBannerExpand(null)
-    }
-  }, [profileId, pendingHealthBannerExpand, setPendingHealthBannerExpand])
 
   // -- Effects ------------------------------------------------------------
 

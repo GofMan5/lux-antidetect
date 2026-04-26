@@ -12,12 +12,6 @@ interface ProfilesStore {
   editorMode: 'edit' | 'create' | null
   editorProfileId: string | null
   /**
-   * Transient flag set when the profile-list health dot is clicked.
-   * The editor reads it on mount (matching id) to auto-expand the
-   * fingerprint-consistency banner, then clears it. Not persisted.
-   */
-  pendingHealthBannerExpand: string | null
-  /**
    * IDs of profiles that are scheduled for deletion but not yet deleted —
    * the row is hidden from the UI and a timer will finalize the delete
    * unless `undoDelete` is called first. Enables Undo-toast pattern.
@@ -35,7 +29,6 @@ interface ProfilesStore {
   clearProfileError: (id: string) => void
   openEditor: (mode: 'edit' | 'create', profileId?: string | null) => void
   closeEditor: () => void
-  setPendingHealthBannerExpand: (id: string | null) => void
 }
 
 // Deletion timers kept outside the store state (non-serializable).
@@ -59,7 +52,6 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   profileErrors: {},
   editorMode: null,
   editorProfileId: null,
-  pendingHealthBannerExpand: null,
   pendingDeletes: new Set<string>(),
 
   fetchProfiles: async () => {
@@ -243,11 +235,7 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   },
 
   openEditor: (mode, profileId = null) => set({ editorMode: mode, editorProfileId: profileId }),
-  // Clearing `pendingHealthBannerExpand` alongside editor state ensures the
-  // auto-expand flag cannot survive a close-before-mount (e.g. user clicks the
-  // health dot, then dismisses the panel, then opens an unrelated profile).
-  closeEditor: () => set({ editorMode: null, editorProfileId: null, pendingHealthBannerExpand: null }),
-  setPendingHealthBannerExpand: (id) => set({ pendingHealthBannerExpand: id })
+  closeEditor: () => set({ editorMode: null, editorProfileId: null })
 }))
 
 // Reactive session event subscriptions — instant UI updates when browsers start/stop.

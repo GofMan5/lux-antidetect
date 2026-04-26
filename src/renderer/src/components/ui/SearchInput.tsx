@@ -3,6 +3,9 @@ import { Search, X } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { INPUT } from '@renderer/lib/ui'
 
+// Vault SearchInput — graphite chrome that matches the new `Input`. Same
+// behavior as before: inline match-count chip when searching, Esc clears.
+
 export interface SearchInputProps {
   value: string
   onChange: (value: string) => void
@@ -22,7 +25,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
 
   return (
     <div className={cn('relative', className)}>
-      <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
+      <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
       <input
         ref={ref}
         id={id}
@@ -49,8 +52,8 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
             'absolute right-9 top-1/2 -translate-y-1/2 rounded-full px-1.5 py-0.5 text-[10px] font-mono tabular-nums',
             'ring-1 ring-inset',
             matchCount === 0
-              ? 'bg-err/10 text-err ring-err/20'
-              : 'bg-elevated text-muted ring-edge/80'
+              ? 'bg-destructive/10 text-destructive ring-destructive/20'
+              : 'bg-elevated text-muted-foreground ring-border'
           )}
           aria-label={`${matchCount} match${matchCount === 1 ? '' : 'es'}`}
         >
@@ -61,7 +64,11 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
         <button
           type="button"
           onClick={() => onChange('')}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-[--radius-sm] p-0.5 text-muted hover:text-content hover:bg-elevated transition-colors duration-150 ease-[var(--ease-osmosis)]"
+          className={cn(
+            'absolute right-2 top-1/2 -translate-y-1/2 rounded-[--radius-sm] p-0.5',
+            'text-muted-foreground hover:text-foreground hover:bg-elevated',
+            'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+          )}
           aria-label="Clear search"
           title="Clear (Esc)"
         >

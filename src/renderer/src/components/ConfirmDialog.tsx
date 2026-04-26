@@ -1,8 +1,15 @@
-import { useEffect } from 'react'
 import { create } from 'zustand'
 import { AlertTriangle, Trash2 } from 'lucide-react'
-import { Modal } from '@renderer/components/ui/Modal'
-import { Button } from '@renderer/components/ui/Button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@renderer/components/ui/AlertDialog'
 
 interface ConfirmState {
   open: boolean
@@ -42,55 +49,46 @@ export const useConfirmStore = create<ConfirmState>((set, get) => ({
   }
 }))
 
-export function ConfirmDialog(): React.JSX.Element | null {
+export function ConfirmDialog(): React.JSX.Element {
   const { open, title, message, confirmLabel, danger, close } = useConfirmStore()
-
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') close(false)
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [open, close])
-
   const IconComponent = danger ? Trash2 : AlertTriangle
 
   return (
-    <Modal
-      open={open}
-      onClose={() => close(false)}
-      size="sm"
-      elevated
-      actions={
-        <>
-          <Button variant="secondary" onClick={() => close(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant={danger ? 'danger' : 'primary'}
+    <AlertDialog open={open} onOpenChange={(v) => { if (!v) close(false) }}>
+      <AlertDialogContent>
+        <div className="flex flex-col items-center text-center pt-1 pb-1">
+          <div
+            className={`h-14 w-14 rounded-full flex items-center justify-center mb-4 ring-1 ring-inset ${
+              danger ? 'bg-destructive/10 ring-destructive/25' : 'bg-warn/10 ring-warn/25'
+            }`}
+          >
+            <IconComponent
+              className={`h-6 w-6 ${danger ? 'text-destructive' : 'text-warn'}`}
+              strokeWidth={1.9}
+            />
+          </div>
+          <AlertDialogHeader className="text-center">
+            <AlertDialogTitle>{title}</AlertDialogTitle>
+            <AlertDialogDescription className="max-w-[320px] mx-auto">
+              {message}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={() => close(false)}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
             onClick={() => close(true)}
             autoFocus
+            className={
+              danger
+                ? 'bg-destructive/10 text-destructive border border-destructive/25 hover:bg-destructive/15 hover:border-destructive/40 shadow-none'
+                : ''
+            }
           >
             {confirmLabel}
-          </Button>
-        </>
-      }
-    >
-      <div className="flex flex-col items-center text-center pt-1 pb-1">
-        <div
-          className={`h-14 w-14 rounded-full flex items-center justify-center mb-4 ring-1 ring-inset ${
-            danger ? 'bg-err/10 ring-err/25' : 'bg-warn/10 ring-warn/25'
-          }`}
-        >
-          <IconComponent
-            className={`h-6 w-6 ${danger ? 'text-err' : 'text-warn'}`}
-            strokeWidth={1.9}
-          />
-        </div>
-        <h2 className="text-[15px] font-semibold text-content tracking-tight mb-2">{title}</h2>
-        <p className="text-[13px] text-muted leading-relaxed max-w-[320px]">{message}</p>
-      </div>
-    </Modal>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
