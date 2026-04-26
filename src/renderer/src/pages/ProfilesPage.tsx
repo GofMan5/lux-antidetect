@@ -2191,7 +2191,7 @@ export function ProfilesPage(): React.JSX.Element {
       {/* ── Filter strip ──────────────────────────────────────────────── */}
       <div
         className={cn(
-          'sticky top-0 z-10 shrink-0 flex items-center gap-2 px-4 h-12 min-w-0',
+          'sticky top-0 z-10 shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 py-1.5 min-h-12 min-w-0',
           'bg-card/85 backdrop-blur-sm border-b border-border/50'
         )}
       >
@@ -2200,11 +2200,11 @@ export function ProfilesPage(): React.JSX.Element {
           value={searchQuery}
           onChange={setSearchQuery}
           placeholder="Search profiles…"
-          className="w-[280px] shrink-0"
+          className="w-full sm:w-[260px] md:w-[280px] shrink-0"
           matchCount={filteredProfiles.length}
         />
 
-        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto scrollbar-hide">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 min-w-0 flex-1">
           <FilterChip active={statusFilter === 'running'} onClick={setStatusRunning} onClear={clearStatusFilter} dotClass="bg-ok">
             Running
           </FilterChip>
@@ -2259,7 +2259,7 @@ export function ProfilesPage(): React.JSX.Element {
           )}
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex flex-wrap items-center gap-1 shrink-0">
 
         {/* Density toggle — 2-segment pill so both options are visible at once */}
         <div
@@ -2353,8 +2353,13 @@ export function ProfilesPage(): React.JSX.Element {
           </button>
         </Tooltip>
 
-        <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={handleNewProfile}>
-          New profile
+        <Button
+          size="sm"
+          icon={<Plus className="h-3.5 w-3.5" />}
+          onClick={handleNewProfile}
+          aria-label="New profile"
+        >
+          <span className="hidden md:inline">New profile</span>
         </Button>
         <DropdownMenu
           align="right"

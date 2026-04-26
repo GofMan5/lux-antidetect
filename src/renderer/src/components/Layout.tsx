@@ -29,13 +29,15 @@ import { useProfilesStore } from '../stores/profiles'
 // ─── Constants ─────────────────────────────────────────────────────────────
 
 const TOPBAR_HEIGHT_PX = 56
-// Rail width — 72px gives icon items a 48×48 hit area with 12px breathing
-// room on each side. Anything narrower (we previously shipped 56) makes the
-// items feel cramped and visually inconsistent across icons whose intrinsic
-// glyphs have slightly different stroke weight (Lucide FileText / Settings).
-const LEFTRAIL_WIDTH_PX = 72
-const LEFTRAIL_ITEM_SIZE_PX = 48
-const LEFTRAIL_ICON_SIZE_PX = 20
+// Sidebar width — 216px holds the icon column (a 48-wide brand zone on the
+// top bar) plus a label column wide enough for "Templates" without truncation
+// at the default font scale. Brand row is locked to this same width so the
+// shield sits flush with the rail's icon column underneath.
+const SIDEBAR_WIDTH_PX = 216
+// Width of the icon column inside the sidebar — also drives BrandMark's
+// shield zone so the shield is vertically centered on the rail icons below.
+const SIDEBAR_ICON_COL_PX = 48
+const LEFTRAIL_ICON_SIZE_PX = 18
 
 // LocalStorage key from the previous collapsible-sidebar design. Kept here
 // only so we can clear it on mount — the new shell isn't collapsible.
@@ -84,15 +86,12 @@ function BrandMark(): React.JSX.Element {
       aria-label="Lux home"
     >
       {/*
-       * Shield zone — width is locked to the LeftRail column width so the
-       * shield icon center sits on the same vertical axis as the rail nav
-       * icons directly below. Without this snap the brand text pulls the
-       * shield ~8px off-center vs the rail, which reads as crooked in the
-       * top-left corner.
+       * Shield zone — width matches the sidebar's icon column so the shield
+       * is vertically centered on the rail icons directly below.
        */}
       <div
         className="flex items-center justify-center shrink-0"
-        style={{ width: LEFTRAIL_WIDTH_PX }}
+        style={{ width: SIDEBAR_ICON_COL_PX }}
       >
         <div
           className={cn(
@@ -104,7 +103,7 @@ function BrandMark(): React.JSX.Element {
           <Shield className="h-4 w-4 text-primary" strokeWidth={2.2} />
         </div>
       </div>
-      {/* Wordmark — sits to the right of the rail-aligned shield zone. */}
+      {/* Wordmark — sits to the right of the icon-column-aligned shield zone. */}
       <div className="flex flex-col leading-none pr-3">
         <span className="text-[13px] font-bold tracking-[0.04em] text-foreground">LUX</span>
         <span className="text-[9px] font-medium tracking-[0.18em] text-muted-foreground/70 uppercase mt-0.5">
@@ -272,8 +271,8 @@ function TopBar({ onOpenPalette, onOpenShortcuts }: TopBarProps): React.JSX.Elem
       )}
       style={{ height: TOPBAR_HEIGHT_PX }}
     >
-      {/* Brand sits flush against screen-left so the shield zone (LEFTRAIL_WIDTH_PX wide)
-          aligns vertically with the LeftRail icons below. */}
+      {/* Brand sits flush against screen-left so the shield zone (SIDEBAR_ICON_COL_PX wide)
+          aligns vertically with the sidebar's icon column below. */}
       <div className="no-drag flex items-center shrink-0">
         <BrandMark />
       </div>
@@ -305,41 +304,34 @@ interface LeftRailItemProps {
   runningCount: number
 }
 
-// Inner wrapper used by every rail item so the icon + optional running-count
-// badge composition is structurally identical across items. Mounted both for
-// navigable and coming-soon entries to guarantee identical DOM dimensions
-// (some lucide icons have intrinsic optical asymmetry — FileText leans left
-// of its bounding box; symmetric wrappers absorb the difference).
+// Renders icon column (fixed width = SIDEBAR_ICON_COL_PX) + label + optional
+// trailing element (running-count pill or shortcut hint). Same shell across
+// nav links, coming-soon buttons, so every row has the same bounding box.
 function LeftRailItemBody({
   Icon,
   active,
-  showRunningBadge,
-  runningCount
+  label,
+  trailing
 }: {
   Icon: typeof LayoutGrid
   active: boolean
-  showRunningBadge: boolean
-  runningCount: number
+  label: string
+  trailing?: React.ReactNode
 }): React.JSX.Element {
   return (
-    <span className="relative inline-flex">
-      <Icon
-        style={{ width: LEFTRAIL_ICON_SIZE_PX, height: LEFTRAIL_ICON_SIZE_PX }}
-        strokeWidth={active ? 2.1 : 1.85}
-      />
-      {showRunningBadge && (
-        <span
-          className={cn(
-            'absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full px-1',
-            'bg-ok text-background text-[9px] font-bold leading-none',
-            'inline-flex items-center justify-center ring-2 ring-card'
-          )}
-          aria-label={`${runningCount} running`}
-        >
-          {runningCount > 9 ? '9+' : runningCount}
-        </span>
-      )}
-    </span>
+    <>
+      <span
+        className="flex items-center justify-center shrink-0"
+        style={{ width: SIDEBAR_ICON_COL_PX - 12 /* row uses px-1.5 */ }}
+      >
+        <Icon
+          style={{ width: LEFTRAIL_ICON_SIZE_PX, height: LEFTRAIL_ICON_SIZE_PX }}
+          strokeWidth={active ? 2.1 : 1.85}
+        />
+      </span>
+      <span className="flex-1 truncate text-[13px] font-medium leading-none">{label}</span>
+      {trailing && <span className="shrink-0">{trailing}</span>}
+    </>
   )
 }
 
@@ -348,17 +340,13 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
   const isProfiles = item.to === '/profiles'
   const showRunningBadge = isProfiles && runningCount > 0
 
-  // The shared item shell — same dimensions, same centering, same rounded
-  // chrome — so all four entries produce identical bounding boxes.
+  // Shared row shell — fixed height so rows align and active-rail strip on
+  // the left has a known length.
   const itemBaseClass = cn(
-    'group relative inline-flex items-center justify-center mx-auto',
+    'group relative flex items-center gap-1 h-10 mx-2 px-1.5',
     'rounded-[--radius-md] transition-colors duration-150 ease-[var(--ease-osmosis)]',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
   )
-  const itemSizeStyle: React.CSSProperties = {
-    width: LEFTRAIL_ITEM_SIZE_PX,
-    height: LEFTRAIL_ITEM_SIZE_PX
-  }
 
   // Coming-soon — non-navigating button using the same shell as the NavLinks.
   if (item.comingSoon) {
@@ -369,7 +357,6 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
           aria-disabled="true"
           aria-label={item.label}
           tabIndex={0}
-          style={itemSizeStyle}
           className={cn(
             itemBaseClass,
             'text-muted-foreground/40 cursor-not-allowed'
@@ -378,57 +365,66 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
           <LeftRailItemBody
             Icon={Icon}
             active={false}
-            showRunningBadge={false}
-            runningCount={0}
+            label={item.label}
+            trailing={
+              <span className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground/50 mr-1">
+                soon
+              </span>
+            }
           />
         </button>
       </Tooltip>
     )
   }
 
-  return (
-    <Tooltip
-      content={
-        <span className="flex items-center gap-2">
-          <span>{item.label}</span>
-          {item.shortcut && (
-            <span className="font-mono text-[10px] text-muted-foreground/80">{item.shortcut}</span>
-          )}
-        </span>
-      }
-      side="right"
+  const runningPill = showRunningBadge ? (
+    <span
+      className={cn(
+        'mr-0.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5',
+        'bg-ok/10 ring-1 ring-inset ring-ok/20',
+        'text-[10px] font-semibold text-ok leading-none'
+      )}
+      aria-label={`${runningCount} running`}
     >
-      <NavLink
-        to={item.to}
-        style={itemSizeStyle}
-        className={({ isActive }) =>
-          cn(
-            itemBaseClass,
-            isActive
-              ? 'bg-primary/10 text-primary'
-              : 'text-muted-foreground hover:bg-elevated/40 hover:text-foreground'
-          )
-        }
-        aria-label={item.label}
-      >
-        {({ isActive }) => (
-          <>
-            {isActive && (
-              <span
-                aria-hidden
-                className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-primary"
-              />
-            )}
-            <LeftRailItemBody
-              Icon={Icon}
-              active={isActive}
-              showRunningBadge={showRunningBadge}
-              runningCount={runningCount}
+      <span className="h-1.5 w-1.5 rounded-full bg-ok" aria-hidden />
+      {runningCount > 99 ? '99+' : runningCount}
+    </span>
+  ) : null
+
+  const shortcutHint = !showRunningBadge && item.shortcut ? (
+    <span className="mr-1 font-mono text-[10px] text-muted-foreground/60">{item.shortcut}</span>
+  ) : null
+
+  return (
+    <NavLink
+      to={item.to}
+      className={({ isActive }) =>
+        cn(
+          itemBaseClass,
+          isActive
+            ? 'bg-primary/10 text-primary'
+            : 'text-muted-foreground hover:bg-elevated/40 hover:text-foreground'
+        )
+      }
+      aria-label={item.label}
+    >
+      {({ isActive }) => (
+        <>
+          {isActive && (
+            <span
+              aria-hidden
+              className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-primary"
             />
-          </>
-        )}
-      </NavLink>
-    </Tooltip>
+          )}
+          <LeftRailItemBody
+            Icon={Icon}
+            active={isActive}
+            label={item.label}
+            trailing={runningPill ?? shortcutHint}
+          />
+        </>
+      )}
+    </NavLink>
   )
 }
 
@@ -444,9 +440,9 @@ function LeftRail({ runningCount }: LeftRailProps): React.JSX.Element {
         'shrink-0 flex flex-col bg-card/60 border-r border-border/50',
         'relative z-20'
       )}
-      style={{ width: LEFTRAIL_WIDTH_PX }}
+      style={{ width: SIDEBAR_WIDTH_PX }}
     >
-      <div className="flex flex-col gap-1.5 py-3 flex-1">
+      <div className="flex flex-col gap-0.5 py-3 flex-1">
         {RAIL_ITEMS.map((item) => (
           <LeftRailItem key={item.to} item={item} runningCount={runningCount} />
         ))}
