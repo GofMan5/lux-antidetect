@@ -286,6 +286,66 @@ function updateChromeProfileIdentity(
   } catch { /* Chrome will regenerate on launch */ }
 }
 
+/**
+ * Auto-translate page content via Chrome's built-in Translate. Writes:
+ *   - translate.enabled                — master switch
+ *   - translate_recent_target          — preferred target language for the
+ *     Translate prompt
+ *   - translate_blocked_languages      — never offer to translate FROM these
+ *   - translate_whitelists             — auto-translate FROM each common
+ *     foreign language TO the target without prompting; this is what makes
+ *     the feature feel automatic instead of "click Translate every page"
+ *
+ * Read more: chromium/src/chrome/browser/translate/translate_pref_names.h
+ *
+ * Caveat: Translate uses translate.googleapis.com under the hood, so it
+ * works on system Chrome / Edge but is best-effort on Chromium-for-testing
+ * builds where Google service URLs may be missing.
+ */
+function applyTranslatePreferences(
+  profileDir: string,
+  enabled: boolean,
+  targetLang: string
+): void {
+  const defaultDir = join(profileDir, 'Default')
+  const preferencesPath = join(defaultDir, 'Preferences')
+  mkdirSync(defaultDir, { recursive: true })
+
+  const preferences = readJsonSafe(preferencesPath)
+  const translate = ensureObject(preferences, 'translate')
+
+  if (enabled) {
+    translate.enabled = true
+    preferences.translate_recent_target = targetLang
+    preferences.translate_blocked_languages = [targetLang]
+    // Auto-translate FROM each common foreign language TO the target without
+    // showing the bubble. Covers the languages most users encounter; users
+    // can still hit "Show original" in the toolbar to bypass per-page.
+    const COMMON_SRC = [
+      'en', 'ru', 'es', 'fr', 'de', 'it', 'pt', 'zh', 'zh-CN', 'zh-TW',
+      'ja', 'ko', 'tr', 'pl', 'nl', 'ar', 'hi', 'vi', 'th', 'id', 'uk', 'sv', 'cs'
+    ]
+    const whitelist: Record<string, string> = {}
+    for (const lang of COMMON_SRC) {
+      if (lang === targetLang) continue
+      whitelist[lang] = targetLang
+    }
+    preferences.translate_whitelists = whitelist
+  } else {
+    // Soft cleanup so toggling off restores Chrome's default Translate
+    // behaviour (offer-only, no auto-translate). Leaves user-curated
+    // per-site rules alone.
+    translate.enabled = true
+    delete preferences.translate_recent_target
+    delete preferences.translate_blocked_languages
+    delete preferences.translate_whitelists
+  }
+
+  try {
+    writeFileSync(preferencesPath, JSON.stringify(preferences), { mode: 0o600 })
+  } catch { /* Chrome will regenerate on launch */ }
+}
+
 function writeProxyAuthExtension(extDir: string, proxy: Proxy): string | null {
   if (!proxy.username || !proxy.password) return null
 
@@ -1593,6 +1653,26 @@ async function launchBrowserInner(
         profile.name,
         avatarIndexForProfile(profileId)
       )
+
+      // Auto-translate target language. Both keys are app-wide settings (not
+      // per-profile) — the user picks one target globally and it applies to
+      // every Chromium profile they launch. Defaults: enabled=false (opt-in),
+      // target='en'. Reads + applies before launch so Chrome reads the values
+      // when it cold-starts the renderer process.
+      const translateEnabledRow = db
+        .prepare("SELECT value FROM settings WHERE key = 'translation_enabled'")
+        .get() as { value: string } | undefined
+      const translateEnabled = translateEnabledRow
+        ? JSON.parse(translateEnabledRow.value) === true
+        : false
+      const translateTargetRow = db
+        .prepare("SELECT value FROM settings WHERE key = 'translation_target_lang'")
+        .get() as { value: string } | undefined
+      const translateTarget =
+        translateTargetRow && typeof JSON.parse(translateTargetRow.value) === 'string'
+          ? (JSON.parse(translateTargetRow.value) as string)
+          : 'en'
+      applyTranslatePreferences(profileDir, translateEnabled, translateTarget)
 
       args.push(`--user-data-dir=${profileDir}`)
       args.push('--no-first-run')

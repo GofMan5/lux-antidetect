@@ -938,6 +938,18 @@ export function ProxiesPage(): React.JSX.Element {
     }
   }, [fetchProxies])
 
+  // ── Unmount: abort any in-flight per-row loops ─────────────────────────
+  // Without this, navigating away while the import / bulk-recheck loop is
+  // running leaves the loop bumping setState on a torn-down component
+  // (React swallows the warning in production, but the API calls keep
+  // firing and creating proxies the user no longer expects).
+  useEffect(() => {
+    return () => {
+      importAbortRef.current?.abort()
+      bulkRecheckAbortRef.current?.abort()
+    }
+  }, [])
+
   // ── Derived: groups / filtered / sorted ───────────────────────────────
   const allGroups = useMemo(() => {
     const set = new Set<string>()
@@ -1410,9 +1422,21 @@ export function ProxiesPage(): React.JSX.Element {
     setBulkTesting(false)
   }, [selected, fetchProxies, addToast])
 
+  // Recheck-reputation loop is sequential (one IP-api lookup per row through
+  // each proxy, ~1s each). If the user clicks the bulk button a second time
+  // while the loop is in flight, treat it as a Cancel signal — the button
+  // visibly flips to Cancel via the floater UI below.
+  const bulkRecheckAbortRef = useRef<AbortController | null>(null)
   const bulkRecheckFraud = useCallback(async (): Promise<void> => {
+    if (bulkRecheckingFraud) {
+      bulkRecheckAbortRef.current?.abort()
+      return
+    }
     const ids = [...selected]
     if (ids.length === 0) return
+    bulkRecheckAbortRef.current?.abort()
+    const ctrl = new AbortController()
+    bulkRecheckAbortRef.current = ctrl
     setBulkRecheckingFraud(true)
     addToast(`Rechecking reputation for ${ids.length} prox${ids.length === 1 ? 'y' : 'ies'}…`, 'info', {
       duration: 2000,
@@ -1420,20 +1444,45 @@ export function ProxiesPage(): React.JSX.Element {
     })
     let ok = 0
     let fail = 0
-    for (const id of ids) {
-      try {
-        const r = await api.lookupProxyGeo(id)
-        if (r) ok++
-        else fail++
-      } catch {
-        fail++
+    let aborted = false
+    try {
+      for (const id of ids) {
+        if (ctrl.signal.aborted) {
+          aborted = true
+          break
+        }
+        try {
+          const r = await api.lookupProxyGeo(id)
+          if (ctrl.signal.aborted) {
+            aborted = true
+            break
+          }
+          if (r) ok++
+          else fail++
+        } catch {
+          fail++
+        }
       }
+      try {
+        await fetchProxies()
+      } catch {
+        /* ignore */
+      }
+      if (aborted) {
+        addToast(
+          ok > 0 ? `Recheck cancelled — ${ok} refreshed` : 'Recheck cancelled',
+          'info'
+        )
+      } else if (fail === 0) {
+        addToast(`Reputation refreshed for ${ok}`, 'success')
+      } else {
+        addToast(`${ok} refreshed, ${fail} failed`, 'warning')
+      }
+    } finally {
+      if (bulkRecheckAbortRef.current === ctrl) bulkRecheckAbortRef.current = null
+      setBulkRecheckingFraud(false)
     }
-    await fetchProxies()
-    if (fail === 0) addToast(`Reputation refreshed for ${ok}`, 'success')
-    else addToast(`${ok} refreshed, ${fail} failed`, 'warning')
-    setBulkRecheckingFraud(false)
-  }, [selected, fetchProxies, addToast])
+  }, [bulkRecheckingFraud, selected, fetchProxies, addToast])
 
   const bulkDeleteSelected = useCallback(async (): Promise<void> => {
     const ids = [...selected]
@@ -1459,11 +1508,27 @@ export function ProxiesPage(): React.JSX.Element {
   }, [selected, confirm, deleteProxy, addToast])
 
   // ── Import flow ───────────────────────────────────────────────────────
+  // Single AbortController across `parseImport` and `executeImport`. Used
+  // both by the explicit Cancel button (button doubles as Cancel while the
+  // import loop is in flight) and by `closeImport` so closing the sheet
+  // halts any per-row reputation probe in flight. The reputation-filtered
+  // executeImport branch hits ip-api once per row sequentially (~1s each)
+  // and would otherwise keep running invisibly after the sheet closes —
+  // creating proxies the user thought they cancelled.
+  const importAbortRef = useRef<AbortController | null>(null)
+
+  const cancelImport = useCallback((): void => {
+    importAbortRef.current?.abort()
+  }, [])
+
   const closeImport = useCallback((): void => {
+    importAbortRef.current?.abort()
+    importAbortRef.current = null
     setImportOpen(false)
     setImportText('')
     setImportParsed(null)
     setImportProgress(null)
+    setImportLoading(false)
   }, [])
 
   // Dirty-state-aware close paths used by the Sheet ESC handler / overlay
@@ -1493,6 +1558,13 @@ export function ProxiesPage(): React.JSX.Element {
     [importText, importParsed]
   )
   const requestCloseImport = useCallback(async (): Promise<void> => {
+    // Active reputation-check / persist loop in flight: closing IS the cancel
+    // signal. Don't prompt — the user already clicked close. Forward straight
+    // to closeImport which aborts the controller and clears state.
+    if (importLoading) {
+      closeImport()
+      return
+    }
     if (!importHasPendingWork()) {
       closeImport()
       return
@@ -1504,7 +1576,7 @@ export function ProxiesPage(): React.JSX.Element {
       danger: true
     })
     if (ok) closeImport()
-  }, [importHasPendingWork, closeImport, confirm])
+  }, [importLoading, importHasPendingWork, closeImport, confirm])
 
   // Route multi-line paste from the editor's quick-paste into the bulk import sheet.
   const openBulkImportWithText = useCallback(
@@ -1530,77 +1602,123 @@ export function ProxiesPage(): React.JSX.Element {
 
   const parseImport = async (): Promise<void> => {
     if (!importText.trim()) return
+    importAbortRef.current?.abort()
+    const ctrl = new AbortController()
+    importAbortRef.current = ctrl
     setImportLoading(true)
     try {
       const parsed = await api.parseProxyString(importText)
+      // Sheet may have been closed while the IPC roundtrip was in flight —
+      // dropping the result avoids stamping state onto a dismissed sheet.
+      if (ctrl.signal.aborted) return
       setImportParsed(parsed)
     } catch {
-      addToast('Failed to parse proxies', 'error')
+      if (!ctrl.signal.aborted) addToast('Failed to parse proxies', 'error')
+    } finally {
+      if (importAbortRef.current === ctrl) importAbortRef.current = null
+      setImportLoading(false)
     }
-    setImportLoading(false)
   }
 
   const executeImport = async (): Promise<void> => {
     if (!importParsed) return
+    importAbortRef.current?.abort()
+    const ctrl = new AbortController()
+    importAbortRef.current = ctrl
     setImportLoading(true)
 
     const validRows = importParsed.filter((r) => r.ok && r.data)
     let created = 0
     let skippedRisky = 0
     let skippedError = 0
+    let aborted = false
 
-    if (importFilterFraud) {
-      // Reputation-filtered path: dry-run each candidate first; sequential to
-      // stay under ip-api's 45 req/min free-tier ceiling and to keep the
-      // progress counter monotonic for the user.
-      setImportProgress({ checked: 0, total: validRows.length, risky: 0 })
-      for (let i = 0; i < validRows.length; i++) {
-        const row = validRows[i]
-        if (!row.data) continue
-        try {
-          const probe = await api.dryRunFraudCheck(
-            row.data as Parameters<typeof api.dryRunFraudCheck>[0]
-          )
-          // Drop high / critical / unknown / null. Keep clean / low / medium.
-          const verdict = probe?.fraud_risk
-          const keep = verdict === 'clean' || verdict === 'low' || verdict === 'medium'
-          if (!keep) {
-            skippedRisky++
-          } else {
-            await api.createProxy(row.data as Parameters<typeof api.createProxy>[0])
-            created++
+    try {
+      if (importFilterFraud) {
+        // Reputation-filtered path: dry-run each candidate first; sequential
+        // to stay under ip-api's 45 req/min free-tier ceiling and to keep the
+        // progress counter monotonic for the user. The signal is checked at
+        // both iteration boundaries so a close mid-await halts no later than
+        // the next probe completion.
+        setImportProgress({ checked: 0, total: validRows.length, risky: 0 })
+        for (let i = 0; i < validRows.length; i++) {
+          if (ctrl.signal.aborted) {
+            aborted = true
+            break
           }
-        } catch {
-          skippedError++
+          const row = validRows[i]
+          if (!row.data) continue
+          try {
+            const probe = await api.dryRunFraudCheck(
+              row.data as Parameters<typeof api.dryRunFraudCheck>[0]
+            )
+            if (ctrl.signal.aborted) {
+              aborted = true
+              break
+            }
+            // Drop high / critical / unknown / null. Keep clean / low / medium.
+            const verdict = probe?.fraud_risk
+            const keep = verdict === 'clean' || verdict === 'low' || verdict === 'medium'
+            if (!keep) {
+              skippedRisky++
+            } else {
+              await api.createProxy(row.data as Parameters<typeof api.createProxy>[0])
+              created++
+            }
+          } catch {
+            skippedError++
+          }
+          setImportProgress({ checked: i + 1, total: validRows.length, risky: skippedRisky })
         }
-        setImportProgress({ checked: i + 1, total: validRows.length, risky: skippedRisky })
-      }
-    } else {
-      // Unfiltered path: persist every parsed line; the auto-fraud-check still
-      // fires per row but doesn't gate creation.
-      for (const r of validRows) {
-        if (!r.data) continue
-        try {
-          await api.createProxy(r.data as Parameters<typeof api.createProxy>[0])
-          created++
-        } catch {
-          skippedError++
+      } else {
+        // Unfiltered path: persist every parsed line; the auto-fraud-check
+        // still fires per row in the main process but doesn't gate creation.
+        for (const r of validRows) {
+          if (ctrl.signal.aborted) {
+            aborted = true
+            break
+          }
+          if (!r.data) continue
+          try {
+            await api.createProxy(r.data as Parameters<typeof api.createProxy>[0])
+            created++
+          } catch {
+            skippedError++
+          }
         }
       }
-    }
 
-    await fetchProxies()
-    if (skippedRisky > 0 || skippedError > 0) {
-      const parts = [`Imported ${created}`]
-      if (skippedRisky > 0) parts.push(`${skippedRisky} risky skipped`)
-      if (skippedError > 0) parts.push(`${skippedError} errors`)
-      addToast(parts.join(' • '), skippedRisky > 0 ? 'warning' : 'success')
-    } else {
-      addToast(`Imported ${created} prox${created === 1 ? 'y' : 'ies'}`, 'success')
+      // Refresh the list so the user sees whatever made it in (even on abort).
+      try {
+        await fetchProxies()
+      } catch {
+        /* ignore — partial state is still better than stale state */
+      }
+
+      if (aborted) {
+        addToast(
+          created > 0
+            ? `Import cancelled — ${created} prox${created === 1 ? 'y' : 'ies'} imported`
+            : 'Import cancelled',
+          'info'
+        )
+      } else if (skippedRisky > 0 || skippedError > 0) {
+        const parts = [`Imported ${created}`]
+        if (skippedRisky > 0) parts.push(`${skippedRisky} risky skipped`)
+        if (skippedError > 0) parts.push(`${skippedError} errors`)
+        addToast(parts.join(' • '), skippedRisky > 0 ? 'warning' : 'success')
+      } else {
+        addToast(`Imported ${created} prox${created === 1 ? 'y' : 'ies'}`, 'success')
+      }
+    } finally {
+      if (importAbortRef.current === ctrl) importAbortRef.current = null
+      setImportLoading(false)
+      setImportProgress(null)
+      // On natural completion: close the sheet so the user lands back in
+      // the list. On user-initiated abort: keep the sheet open so they can
+      // tweak the toggle / set and re-run without re-pasting.
+      if (!aborted) closeImport()
     }
-    setImportProgress(null)
-    closeImport()
-    setImportLoading(false)
   }
 
   const handleFileUpload = (): void => {
@@ -2269,12 +2387,17 @@ export function ProxiesPage(): React.JSX.Element {
           <Button
             variant="ghost"
             size="sm"
-            icon={<RefreshCw className="h-3.5 w-3.5" />}
+            icon={
+              bulkRecheckingFraud ? (
+                <X className="h-3.5 w-3.5" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )
+            }
             onClick={bulkRecheckFraud}
-            loading={bulkRecheckingFraud}
-            disabled={bulkRecheckingFraud}
+            className={bulkRecheckingFraud ? 'text-warn hover:text-warn hover:bg-warn/10' : undefined}
           >
-            Recheck reputation
+            {bulkRecheckingFraud ? 'Cancel recheck' : 'Recheck reputation'}
           </Button>
           <Button
             variant="ghost"
@@ -2741,18 +2864,39 @@ export function ProxiesPage(): React.JSX.Element {
           <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border/60 shrink-0">
             {importParsed ? (
               <>
-                <Button variant="secondary" size="md" onClick={() => setImportParsed(null)}>
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={() => setImportParsed(null)}
+                  disabled={importLoading}
+                >
                   Back
                 </Button>
-                <Button
-                  size="md"
-                  icon={<CheckSquare className="h-4 w-4" />}
-                  onClick={executeImport}
-                  loading={importLoading}
-                  disabled={importLoading || importParsed.filter((r) => r.ok).length === 0}
-                >
-                  Import {importParsed.filter((r) => r.ok).length} Proxies
-                </Button>
+                {importLoading ? (
+                  // While the per-row reputation loop is running, the primary
+                  // CTA flips to Cancel. Aborts the loop in place but keeps
+                  // the sheet open so the user can tweak the filter toggle
+                  // and re-run without re-pasting.
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    icon={<X className="h-4 w-4" />}
+                    onClick={cancelImport}
+                  >
+                    {importProgress
+                      ? `Cancel (${importProgress.checked}/${importProgress.total})`
+                      : 'Cancel'}
+                  </Button>
+                ) : (
+                  <Button
+                    size="md"
+                    icon={<CheckSquare className="h-4 w-4" />}
+                    onClick={executeImport}
+                    disabled={importParsed.filter((r) => r.ok).length === 0}
+                  >
+                    Import {importParsed.filter((r) => r.ok).length} Proxies
+                  </Button>
+                )}
               </>
             ) : (
               <>

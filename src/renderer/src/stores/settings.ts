@@ -3,11 +3,19 @@ import { applyTheme, findTheme, getDefaultTheme, DEFAULT_THEME_ID } from '../lib
 import type { Theme } from '../lib/themes'
 import { api } from '../lib/api'
 
+// Languages offered by the in-browser auto-translator. Kept aligned with
+// Chrome's Translate language codes; the underlying preferences write uses
+// these as `translate_recent_target` / whitelist values.
+export type TranslationTargetLang =
+  | 'en' | 'ru' | 'es' | 'fr' | 'de' | 'it' | 'pt' | 'zh-CN' | 'ja' | 'ko' | 'tr' | 'uk' | 'pl'
+
 interface SettingsStore {
   activeThemeId: string
   customThemes: Theme[]
   autoRegenFingerprint: boolean
   blockWebAuthn: boolean
+  translationEnabled: boolean
+  translationTargetLang: TranslationTargetLang
   initialized: boolean
 
   initSettings: () => Promise<void>
@@ -17,34 +25,57 @@ interface SettingsStore {
   deleteCustomTheme: (themeId: string) => Promise<void>
   setAutoRegenFingerprint: (val: boolean) => Promise<void>
   setBlockWebAuthn: (val: boolean) => Promise<void>
+  setTranslationEnabled: (val: boolean) => Promise<void>
+  setTranslationTargetLang: (val: TranslationTargetLang) => Promise<void>
 }
+
+const VALID_LANGS: ReadonlySet<TranslationTargetLang> = new Set([
+  'en', 'ru', 'es', 'fr', 'de', 'it', 'pt', 'zh-CN', 'ja', 'ko', 'tr', 'uk', 'pl'
+])
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   activeThemeId: DEFAULT_THEME_ID,
   customThemes: [],
   autoRegenFingerprint: true,
   blockWebAuthn: true,
+  translationEnabled: false,
+  translationTargetLang: 'en',
   initialized: false,
 
   initSettings: async () => {
     if (get().initialized) return
     try {
-      const [themeId, customs, autoRegen, blockWa] = await Promise.all([
+      const [themeId, customs, autoRegen, blockWa, transOn, transTarget] = await Promise.all([
         api.getSetting('active_theme_id'),
         api.getSetting('custom_themes'),
         api.getSetting('auto_regenerate_fingerprint'),
-        api.getSetting('hardware_identity_lockdown')
+        api.getSetting('hardware_identity_lockdown'),
+        api.getSetting('translation_enabled'),
+        api.getSetting('translation_target_lang')
       ])
 
       const customThemes = Array.isArray(customs) ? (customs as Theme[]) : []
       const activeThemeId = typeof themeId === 'string' ? themeId : DEFAULT_THEME_ID
       const autoRegenFingerprint = autoRegen !== false
       const blockWebAuthn = blockWa !== false
+      const translationEnabled = transOn === true
+      const translationTargetLang: TranslationTargetLang =
+        typeof transTarget === 'string' && VALID_LANGS.has(transTarget as TranslationTargetLang)
+          ? (transTarget as TranslationTargetLang)
+          : 'en'
 
       const theme = findTheme(activeThemeId, customThemes) || getDefaultTheme()
       applyTheme(theme)
 
-      set({ activeThemeId, customThemes, autoRegenFingerprint, blockWebAuthn, initialized: true })
+      set({
+        activeThemeId,
+        customThemes,
+        autoRegenFingerprint,
+        blockWebAuthn,
+        translationEnabled,
+        translationTargetLang,
+        initialized: true
+      })
     } catch {
       const theme = getDefaultTheme()
       applyTheme(theme)
@@ -96,5 +127,15 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   setBlockWebAuthn: async (val: boolean) => {
     set({ blockWebAuthn: val })
     await api.setSetting('hardware_identity_lockdown', val)
+  },
+
+  setTranslationEnabled: async (val: boolean) => {
+    set({ translationEnabled: val })
+    await api.setSetting('translation_enabled', val)
+  },
+
+  setTranslationTargetLang: async (val: TranslationTargetLang) => {
+    set({ translationTargetLang: val })
+    await api.setSetting('translation_target_lang', val)
   }
 }))

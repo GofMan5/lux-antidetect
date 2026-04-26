@@ -40,7 +40,8 @@ import {
   Monitor,
   Database,
   Info,
-  ShieldCheck
+  ShieldCheck,
+  Languages
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
@@ -1155,12 +1156,39 @@ interface FingerprintTabProps {
   setBlockWebAuthn: (val: boolean) => Promise<void>
 }
 
+// Static reference list. Codes match Chrome's Translate language identifiers
+// (`translate_recent_target` / whitelist values), which is what the main
+// process writes to Default/Preferences.
+const TRANSLATION_LANGS: ReadonlyArray<{ code: string; label: string }> = [
+  { code: 'en', label: 'English' },
+  { code: 'ru', label: 'Russian' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+  { code: 'it', label: 'Italian' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'zh-CN', label: 'Chinese (Simplified)' },
+  { code: 'ja', label: 'Japanese' },
+  { code: 'ko', label: 'Korean' },
+  { code: 'tr', label: 'Turkish' },
+  { code: 'uk', label: 'Ukrainian' },
+  { code: 'pl', label: 'Polish' }
+]
+
 function FingerprintTab({
   autoRegenFingerprint,
   setAutoRegenFingerprint,
   blockWebAuthn,
   setBlockWebAuthn
 }: FingerprintTabProps): React.JSX.Element {
+  // Pull translation state directly from the store — keeps the prop list of
+  // FingerprintTab from ballooning and matches the in-component subscription
+  // pattern used in the page-level SettingsPage state for theme + browsers.
+  const translationEnabled = useSettingsStore((s) => s.translationEnabled)
+  const translationTargetLang = useSettingsStore((s) => s.translationTargetLang)
+  const setTranslationEnabled = useSettingsStore((s) => s.setTranslationEnabled)
+  const setTranslationTargetLang = useSettingsStore((s) => s.setTranslationTargetLang)
+
   return (
     <>
       <CardRoot>
@@ -1207,6 +1235,60 @@ function FingerprintTab({
             }
             description="Blocks passkeys, FedCM, Digital Credentials, DBSC, payment-instrument probes, Storage Access, Privacy Sandbox Topics, and DevTools / CDP detection. Password autofill and standard federated logins are unaffected."
           />
+        </CardContent>
+      </CardRoot>
+
+      <CardRoot>
+        <CardHeader>
+          <CardTitle className="inline-flex items-center gap-2">
+            <Languages className="h-4 w-4 text-primary" />
+            Auto-translate pages
+          </CardTitle>
+          <CardDescription>
+            Translates foreign-language pages to your chosen language automatically. Uses
+            Chromium&apos;s built-in Translate (works on system Chrome / Edge; best-effort on
+            unbranded Chromium builds).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Toggle
+            checked={translationEnabled}
+            onChange={(val) => void setTranslationEnabled(val)}
+            label="Auto-translate foreign-language pages"
+            description="Sets Chrome's translate.enabled flag and pre-populates the auto-translate whitelist for every common source language. Applied on every Chromium profile launch."
+          />
+          <div
+            className={cn(
+              'flex items-center justify-between gap-3 transition-opacity',
+              !translationEnabled && 'opacity-50 pointer-events-none'
+            )}
+          >
+            <div className="min-w-0">
+              <Label className="text-[13px] font-medium text-foreground">
+                Target language
+              </Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Pages get translated <em>into</em> this language without showing the prompt.
+              </p>
+            </div>
+            <SelectRoot
+              value={translationTargetLang}
+              onValueChange={(v) =>
+                void setTranslationTargetLang(v as typeof translationTargetLang)
+              }
+            >
+              <SelectTrigger className="!h-8 !text-[12px] w-[200px] shrink-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRANSLATION_LANGS.map((lang) => (
+                  <SelectItem key={lang.code} value={lang.code}>
+                    {lang.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </SelectRoot>
+          </div>
         </CardContent>
       </CardRoot>
     </>
