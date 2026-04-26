@@ -14,6 +14,7 @@ const PROXY_TEST_TARGET_PORT = 80
 const PROXY_TEST_TARGET_PATH = '/generate_204'
 const PROXY_TEST_EXPECTED_STATUS = 204
 const HTTP_PROXY_AUTH_REQUIRED = 407
+const INTERNAL_CHECK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36'
 
 const SOCKS5_VERSION = 0x05
 const SOCKS5_AUTH_NONE = 0x00
@@ -478,7 +479,7 @@ function buildHttpProxyRequest(proxy: Proxy): string {
   const lines = [
     `GET http://${PROXY_TEST_TARGET_HOST}${PROXY_TEST_TARGET_PATH} HTTP/1.1`,
     `Host: ${PROXY_TEST_TARGET_HOST}`,
-    'User-Agent: lux-antidetect-proxy-check/1',
+    `User-Agent: ${INTERNAL_CHECK_USER_AGENT}`,
     'Accept: */*',
     'Proxy-Connection: close',
     'Connection: close'
@@ -493,7 +494,7 @@ function buildTunnelledHttpRequest(): string {
   return [
     `GET ${PROXY_TEST_TARGET_PATH} HTTP/1.1`,
     `Host: ${PROXY_TEST_TARGET_HOST}`,
-    'User-Agent: lux-antidetect-proxy-check/1',
+    `User-Agent: ${INTERNAL_CHECK_USER_AGENT}`,
     'Accept: */*',
     'Connection: close'
   ].join('\r\n') + '\r\n\r\n'
@@ -786,7 +787,7 @@ function buildAbsoluteUriGetRequest(
   const lines = [
     `GET http://${hostHeader}${path} HTTP/1.0`,
     `Host: ${hostHeader}`,
-    'User-Agent: lux-antidetect-geo/1',
+    `User-Agent: ${INTERNAL_CHECK_USER_AGENT}`,
     'Accept: */*',
     'Connection: close'
   ]
@@ -801,7 +802,7 @@ function buildRelativeGetRequest(targetHost: string, targetPort: number, path: s
   return [
     `GET ${path} HTTP/1.0`,
     `Host: ${hostHeader}`,
-    'User-Agent: lux-antidetect-geo/1',
+    `User-Agent: ${INTERNAL_CHECK_USER_AGENT}`,
     'Accept: */*',
     'Connection: close'
   ].join('\r\n') + '\r\n\r\n'
@@ -933,7 +934,7 @@ function buildConnectRequest(proxy: Proxy, targetHost: string, targetPort: numbe
   const lines = [
     `CONNECT ${hostHeader} HTTP/1.1`,
     `Host: ${hostHeader}`,
-    'User-Agent: lux-antidetect-fraud/1',
+    `User-Agent: ${INTERNAL_CHECK_USER_AGENT}`,
     'Proxy-Connection: close'
   ]
   if (proxy.username && proxy.password) {
@@ -1028,7 +1029,7 @@ export async function httpsGetThroughProxy(
       const req = [
         `GET ${path} HTTP/1.0`,
         `Host: ${targetHost}`,
-        'User-Agent: lux-antidetect-fraud/1',
+        `User-Agent: ${INTERNAL_CHECK_USER_AGENT}`,
         'Accept: */*',
         'Connection: close'
       ].join('\r\n') + '\r\n\r\n'

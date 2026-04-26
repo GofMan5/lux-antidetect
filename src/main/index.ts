@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, copyFileSync, openSync, readSync, closeSync } fr
 import { initDatabase } from './db'
 import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
-import { killAllBrowsers } from './browser'
+import { killAllBrowsers, refreshAllProfileIdentities } from './browser'
 import { initAutoUpdater } from './updater'
 import { initBrowserManager, setMainWindow as setBrowserManagerMainWindow } from './browser-manager'
 import { initLogger, installCrashHandlers, logger, getLogFilePath } from './logger'
@@ -132,6 +132,12 @@ app.whenReady().then(async () => {
 
   // Crash recovery: reset profiles stuck in non-ready states from a previous crash
   db.prepare("UPDATE profiles SET status = 'ready' WHERE status IN ('running', 'starting', 'stopping', 'error')").run()
+
+  // Make sure every Chrome-based profile on disk has its identity files
+  // (Local State + Default/Preferences) populated with the per-profile name
+  // and avatar. Covers legacy profiles created before the feature shipped
+  // and any profile whose identity was clobbered by Chrome on a prior exit.
+  refreshAllProfileIdentities(db, profilesDir)
 
   // Read settings
   minimizeToTray = getSetting(db, 'minimize_to_tray') === true

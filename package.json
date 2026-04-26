@@ -1,6 +1,6 @@
 {
   "name": "lux-antidetect",
-  "version": "1.0.62",
+  "version": "1.0.63",
   "description": "Lux Antidetect Browser",
   "main": "./out/main/index.js",
   "author": "example.com",

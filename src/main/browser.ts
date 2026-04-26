@@ -287,6 +287,38 @@ function updateChromeProfileIdentity(
 }
 
 /**
+ * Walk every profile in the DB and (re)write its Chrome identity files so
+ * the profile-switcher avatar + name are guaranteed to be set, including for
+ * legacy profiles that were created before the identity feature shipped or
+ * for profiles whose Local State was rewritten by Chrome on shutdown.
+ *
+ * Writes to disk only — no effect on a currently-running Chrome (it holds
+ * Local State in memory and overwrites on exit), but guarantees the avatar
+ * and name are present on the next launch of every profile.
+ */
+export function refreshAllProfileIdentities(
+  db: Database.Database,
+  profilesDir: string
+): void {
+  let rows: { id: string; name: string; browser_type: BrowserType }[]
+  try {
+    rows = db.prepare('SELECT id, name, browser_type FROM profiles').all() as typeof rows
+  } catch {
+    return
+  }
+  for (const row of rows) {
+    if (row.browser_type === 'firefox') continue
+    const profileDir = join(profilesDir, row.id)
+    if (!existsSync(profileDir)) continue
+    try {
+      updateChromeProfileIdentity(profileDir, row.name, avatarIndexForProfile(row.id))
+    } catch {
+      /* best effort — Chrome will still recreate identity on next launch */
+    }
+  }
+}
+
+/**
  * Auto-translate page content via Chrome's built-in Translate. Writes:
  *   - translate.enabled                — master switch
  *   - translate_recent_target          — preferred target language for the
@@ -355,7 +387,7 @@ function writeProxyAuthExtension(extDir: string, proxy: Proxy): string | null {
 
   const manifest = {
     manifest_version: 3,
-    name: 'Lux Proxy Auth',
+    name: 'Proxy Auth',
     version: '1.0',
     permissions: ['webRequest', 'webRequestAuthProvider'],
     host_permissions: ['<all_urls>'],
@@ -518,30 +550,32 @@ async function cdpCommand(port: number, targetId: string, method: string, params
       let accum = Buffer.alloc(0)
       socket.on('data', (chunk: Buffer) => {
         accum = Buffer.concat([accum, chunk])
-        // Try to parse a complete frame
-        if (accum.length < 2) return
-        const payloadLen = accum[1] & 0x7f
-        let offset = 2
-        let msgLen = payloadLen
-        if (payloadLen === 126) {
-          if (accum.length < 4) return
-          msgLen = accum.readUInt16BE(2)
-          offset = 4
-        } else if (payloadLen === 127) {
-          if (accum.length < 10) return
-          msgLen = Number(accum.readBigUInt64BE(2))
-          offset = 10
-        }
-        if (accum.length < offset + msgLen) return
-        const msgBuf = accum.subarray(offset, offset + msgLen)
-        try {
-          const msg = JSON.parse(msgBuf.toString('utf-8'))
-          if (msg.id === 1) {
-            socket.destroy()
-            if (msg.error) finish(new Error(msg.error.message))
-            else finish(null, msg.result)
+        while (accum.length >= 2) {
+          const payloadLen = accum[1] & 0x7f
+          let offset = 2
+          let msgLen = payloadLen
+          if (payloadLen === 126) {
+            if (accum.length < 4) break
+            msgLen = accum.readUInt16BE(2)
+            offset = 4
+          } else if (payloadLen === 127) {
+            if (accum.length < 10) break
+            msgLen = Number(accum.readBigUInt64BE(2))
+            offset = 10
           }
-        } catch { /* partial frame, wait for more */ }
+          if (accum.length < offset + msgLen) break
+          const msgBuf = accum.subarray(offset, offset + msgLen)
+          accum = accum.subarray(offset + msgLen)
+          try {
+            const msg = JSON.parse(msgBuf.toString('utf-8'))
+            if (msg.id === 1) {
+              socket.destroy()
+              if (msg.error) finish(new Error(msg.error.message))
+              else finish(null, msg.result)
+              return
+            }
+          } catch { /* partial frame, wait for more */ }
+        }
       })
       socket.on('error', (e: Error) => finish(e))
       socket.on('close', () => finish(new Error('socket closed')))
@@ -603,8 +637,9 @@ function buildUserAgentMetadata(fp: Fingerprint): Record<string, unknown> {
     architecture: isMobile ? 'arm' : 'x86',
     model: isMobile ? fp.user_agent.match(/Android[^;]*;\s*([^)]+)\)/)?.[1]?.trim() ?? '' : '',
     mobile: isMobile,
-    bitness: isMobile ? '' : '64',
-    wow64: false
+    bitness: '64',
+    wow64: false,
+    formFactors: isMobile ? ['Mobile'] : ['Desktop']
   }
 }
 
@@ -657,6 +692,7 @@ function startCDPInjection(
   let stopped = false
   let port = 0
   const injectedTargets = new Set<string>()
+  const injectingTargets = new Set<string>()
   const authListeners = new Map<string, { stop: () => void }>()
 
   function attachAuthListener(targetId: string): void {
@@ -666,8 +702,8 @@ function startCDPInjection(
   }
 
   async function injectTarget(targetId: string): Promise<void> {
-    if (injectedTargets.has(targetId)) return
-    injectedTargets.add(targetId)
+    if (injectedTargets.has(targetId) || injectingTargets.has(targetId)) return
+    injectingTargets.add(targetId)
     // Attach auth listener BEFORE any navigation-triggering command so the
     // listener is live when the first page request hits the proxy.
     attachAuthListener(targetId)
@@ -682,7 +718,11 @@ function startCDPInjection(
         expression: script,
         allowUnsafeEvalBlockedByCSP: true
       })
+      injectedTargets.add(targetId)
     } catch { /* target may have been destroyed */ }
+    finally {
+      injectingTargets.delete(targetId)
+    }
   }
 
   const run = async (): Promise<void> => {
@@ -703,11 +743,11 @@ function startCDPInjection(
       const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
       for (const t of targets) {
         if (t.type === 'page') {
-          injectedTargets.add(t.id)
           attachAuthListener(t.id)
         }
       }
-      await injectViaCDP(port, script, fp, geoOverride)
+      const processedTargets = await injectViaCDP(port, script, fp, geoOverride)
+      for (const targetId of processedTargets) injectedTargets.add(targetId)
     } catch { /* best effort */ }
 
     // Use browser-level WebSocket to listen for new targets in real-time.
@@ -719,7 +759,7 @@ function startCDPInjection(
       if (wsUrl) {
         // Extract path from ws://127.0.0.1:PORT/devtools/browser/UUID
         const wsPath = new URL(wsUrl).pathname
-        startBrowserWsListener(port, wsPath, script, workerScript, injectedTargets, injectTarget, () => stopped)
+        startBrowserWsListener(port, wsPath, script, workerScript, fp, geoOverride, injectedTargets, injectTarget, () => stopped)
       }
     } catch { /* fall back to polling */ }
 
@@ -773,10 +813,14 @@ function startBrowserWsListener(
   wsPath: string,
   mainScript: string,
   workerScript: string,
+  fp: Fingerprint,
+  geoOverride: GeoOverride | undefined,
   injectedTargets: Set<string>,
   injectTarget: (targetId: string) => Promise<void>,
   isStopped: () => boolean
 ): void {
+  const { languages, primaryLanguage } = getFingerprintLocale(fp)
+  const userAgentMetadata = buildUserAgentMetadata(fp)
   const key = randomBytes(16).toString('base64')
   const req = httpRequest({
     hostname: '127.0.0.1',
@@ -917,6 +961,25 @@ function startBrowserWsListener(
               // skipped here for the same reason.
               if (type === 'iframe') {
                 sendWsMsg('Page.enable', {}, sessionId)
+                sendWsMsg('Emulation.setUserAgentOverride', {
+                  userAgent: fp.user_agent,
+                  acceptLanguage: languages.join(','),
+                  platform: fp.platform,
+                  userAgentMetadata
+                }, sessionId)
+                sendWsMsg('Emulation.setTimezoneOverride', {
+                  timezoneId: fp.timezone
+                }, sessionId)
+                sendWsMsg('Emulation.setLocaleOverride', {
+                  locale: primaryLanguage
+                }, sessionId)
+                if (geoOverride) {
+                  sendWsMsg('Emulation.setGeolocationOverride', {
+                    latitude: geoOverride.latitude,
+                    longitude: geoOverride.longitude,
+                    accuracy: geoOverride.accuracy
+                  }, sessionId)
+                }
                 sendWsMsg('Page.addScriptToEvaluateOnNewDocument', {
                   source: mainScript,
                   runImmediately: true
@@ -2024,7 +2087,7 @@ async function launchBrowserInner(
         proxy?.username && proxy?.password && !isSocksProxy
           ? { username: proxy.username, password: proxy.password }
           : undefined
-      const workerScript = buildWorkerInjectionScript(activeFp)
+      const workerScript = buildWorkerInjectionScript(activeFp, { blockWebAuthn })
       const injector = startCDPInjection(
         profileId,
         profileDir,

@@ -851,6 +851,30 @@ function buildWorkerInjectionFromNormalized(
   const languages = parseFingerprintLanguages(fp.languages, fp.timezone)
   const languagesJson = JSON.stringify(languages)
   const blockWebAuthn = options.blockWebAuthn !== false
+  const uaFullVersion = fp.user_agent.match(/Chrome\/([\d.]+)/)?.[1] ?? '120.0.0.0'
+  const uaMajor = Number.parseInt(uaFullVersion.split('.')[0] ?? '120', 10) || 120
+  const uaNotBrand = ['Not_A Brand', 'Not/A)Brand', 'Not)A;Brand', 'Not A;Brand'][uaMajor % 4]
+  const uaBrandsJson = JSON.stringify([
+    { brand: 'Google Chrome', version: String(uaMajor) },
+    { brand: 'Chromium', version: String(uaMajor) },
+    { brand: uaNotBrand, version: '24' }
+  ])
+  const uaFullBrandsJson = JSON.stringify([
+    { brand: 'Google Chrome', version: uaFullVersion },
+    { brand: 'Chromium', version: uaFullVersion },
+    { brand: uaNotBrand, version: '24.0.0.0' }
+  ])
+  const uaIsMobile = fp.device_type === 'mobile'
+  const uaIsAndroid = uaIsMobile || fp.user_agent.includes('Android') || fp.platform.startsWith('Linux arm')
+  const uaPlatform = fp.platform === 'Win32' ? 'Windows' : fp.platform === 'MacIntel' ? 'macOS' : uaIsAndroid ? 'Android' : 'Linux'
+  const uaPlatformVersion = fp.platform === 'Win32'
+    ? (fp.canvas_noise_seed % 4 === 0 ? '15.0.0' : '10.0.0')
+    : fp.platform === 'MacIntel'
+      ? '14.5.0'
+      : uaIsAndroid
+        ? '14.0.0'
+        : '6.5.0'
+  const uaModel = uaIsMobile ? fp.user_agent.match(/Android[^;]*;\s*([^)]+)\)/)?.[1]?.trim() ?? '' : ''
   // The worker-scope CDP probe vector (anti-bot scripts pass an object with
   // a `toString`/property getter to console.debug to detect that DevTools
   // or a CDP listener formatted it). Workers have console.* and inherit the
@@ -882,6 +906,7 @@ function buildWorkerInjectionFromNormalized(
     `Function.prototype.toString=function(){var v=_tsMap.get(this);return (v!==undefined)?v:_origFTS.call(this);};` +
     `_tsMap.set(Function.prototype.toString,_origFTSStr);` +
     `var _wrap=function(orig,fn){try{_tsMap.set(fn,_origFTS.call(orig));}catch(e){_tsMap.set(fn,'function () { [native code] }');}return fn;};` +
+    `var _uaBrands=${uaBrandsJson};var _uaFullBrands=${uaFullBrandsJson};var _uaMobile=${uaIsMobile};var _uaPlatform=${JSON.stringify(uaPlatform)};var _uaPlatformVersion=${JSON.stringify(uaPlatformVersion)};var _uaModel=${JSON.stringify(uaModel)};var _uaArch=${JSON.stringify(uaIsAndroid ? 'arm' : 'x86')};var _uaData={brands:_uaBrands,mobile:_uaMobile,platform:_uaPlatform,toJSON:function(){return{brands:this.brands,mobile:this.mobile,platform:this.platform};}};if(typeof Symbol!=='undefined'&&Symbol.toStringTag)Object.defineProperty(_uaData,Symbol.toStringTag,{value:'NavigatorUAData',configurable:true});_uaData.getHighEntropyValues=function(hints){var r={brands:_uaBrands,mobile:_uaMobile,platform:_uaPlatform};for(var i=0;i<hints.length;i++){var h=hints[i];if(h==='architecture')r.architecture=_uaArch;if(h==='bitness')r.bitness='64';if(h==='fullVersionList')r.fullVersionList=_uaFullBrands;if(h==='model')r.model=_uaModel;if(h==='platformVersion')r.platformVersion=_uaPlatformVersion;if(h==='uaFullVersion')r.uaFullVersion=${JSON.stringify(uaFullVersion)};if(h==='wow64')r.wow64=false;if(h==='formFactors')r.formFactors=_uaMobile?['Mobile']:['Desktop'];}return Promise.resolve(r);};_tsMap.set(_uaData.toJSON,'function toJSON() { [native code] }');_tsMap.set(_uaData.getHighEntropyValues,'function getHighEntropyValues() { [native code] }');var _uaGetter=function(){return _uaData;};_tsMap.set(_uaGetter,'function get userAgentData() { [native code] }');try{Object.defineProperty(navigator,'userAgentData',{get:_uaGetter,configurable:true});}catch(e){}` +
     // Per-call seeding mirrors the main-world canvas hook, so a probe that
     // hashes getImageData(0,0,w,h) twice on the same canvas gets the same
     // bytes both times — a shared module-level _rng would advance state
@@ -908,7 +933,7 @@ function buildWorkerInjectionFromNormalized(
     `}` +
     // WebGL UNMASKED_VENDOR (0x9245) / UNMASKED_RENDERER (0x9246) / VENDOR (0x1F00) / RENDERER (0x1F01)
     `var _wglV=${wglVendorJson};var _wglR=${wglRendererJson};` +
-    `var _hookWGL=function(proto){if(!proto||!proto.getParameter)return;var _ogp=proto.getParameter;proto.getParameter=_wrap(_ogp,function(p){if(p===0x9245||p===0x1F00)return _wglV;if(p===0x9246||p===0x1F01)return _wglR;return _ogp.call(this,p);});};` +
+    `var _hookWGL=function(proto){if(!proto||!proto.getParameter)return;var _ogp=proto.getParameter;proto.getParameter=_wrap(_ogp,function(p){if(p===0x9245)return _wglV;if(p===0x9246)return _wglR;if(p===0x1F00)return 'WebKit';if(p===0x1F01)return 'WebKit WebGL';return _ogp.call(this,p);});};` +
     `if(typeof WebGLRenderingContext!=='undefined')_hookWGL(WebGLRenderingContext.prototype);` +
     `if(typeof WebGL2RenderingContext!=='undefined')_hookWGL(WebGL2RenderingContext.prototype);` +
     // AudioBuffer.getChannelData — workers using OfflineAudioContext for
@@ -1025,6 +1050,7 @@ export function buildInjectionScript(
   // neutralization as the main world (workers have `console.*` and the
   // CDP getter-probe vector applies identically there).
   const workerSpoofCode = JSON.stringify(buildWorkerInjectionFromNormalized(fp, { blockWebAuthn }))
+  const orientationType = fp.screen_width >= fp.screen_height ? 'landscape-primary' : 'portrait-primary'
 
   // Per-build sentinel name — randomized so detection scripts can't probe
   // a fixed brand string (e.g. \`'__lux_injected__' in window\`) to identify
@@ -1128,6 +1154,12 @@ var _scrProps={
 for(var _sk in _scrProps){
   (function(k,v){_defProp(Screen.prototype,k,function(){return v;});}(_sk,_scrProps[_sk]));
 }
+try{
+  if(typeof ScreenOrientation!=='undefined'&&ScreenOrientation.prototype){
+    _defProp(ScreenOrientation.prototype,'type',function(){return ${JSON.stringify(orientationType)};});
+    _defProp(ScreenOrientation.prototype,'angle',function(){return 0;});
+  }
+}catch(e){}
 _defProp(window,'devicePixelRatio',function(){return ${fp.pixel_ratio};});
 // outerWidth/outerHeight: real Chrome reports the OS-window outer size,
 // which is innerWidth + minor borders and innerHeight + ~88px chrome
@@ -1272,8 +1304,8 @@ _wgl1Params[0x1F02]='WebGL 1.0 (OpenGL ES 2.0 Chromium)';                      /
 // Fold vendor/renderer into the params table so the hook is a single-lookup path.
 _wgl1Params[0x9245]=_wglVendor;                                                // UNMASKED_VENDOR_WEBGL
 _wgl1Params[0x9246]=_wglRenderer;                                              // UNMASKED_RENDERER_WEBGL
-_wgl1Params[0x1F00]=_wglVendor;                                                // VENDOR
-_wgl1Params[0x1F01]=_wglRenderer;                                              // RENDERER
+_wgl1Params[0x1F00]='WebKit';                                                   // VENDOR
+_wgl1Params[0x1F01]='WebKit WebGL';                                             // RENDERER
 
 var _wgl2Params={};
 for(var _wgp1 in _wgl1Params)_wgl2Params[_wgp1]=_wgl1Params[_wgp1];
@@ -1343,7 +1375,8 @@ function _hookWebGL(proto,exts,params){
 
   var origGetSupported=proto.getSupportedExtensions;
   _cloak(proto,'getSupportedExtensions',function(){
-    return exts.slice();
+    var nativeExts=origGetSupported.call(this)||[];
+    return exts.filter(function(e){return nativeExts.indexOf(e)!==-1;});
   });
 }
 if(typeof WebGLRenderingContext!=='undefined')_hookWebGL(WebGLRenderingContext.prototype,_baseExts,_wgl1Params);
@@ -1364,9 +1397,9 @@ try{
           _cloak(adapter,'requestAdapterInfo',function(){
             return _origAdapterInfo().then(function(info){
               // Create a new object with spoofed values
-              var desc=_wglRenderer.match(/NVIDIA|AMD|Intel|Apple/i);
+              var desc=_wglRenderer.match(/NVIDIA|AMD|Intel|Apple|Qualcomm|ARM/i);
               var spoofedVendor=desc?desc[0]:'';
-              var gpuMatch=_wglRenderer.match(/(?:NVIDIA|AMD|Intel|Apple)[^,)]*/);
+              var gpuMatch=_wglRenderer.match(/(?:NVIDIA|AMD|Intel|Apple|Qualcomm|ARM)[^,)]*/);
               var spoofedDesc=gpuMatch?gpuMatch[0].trim():_wglRenderer;
               return{
                 vendor:spoofedVendor,
@@ -1381,9 +1414,9 @@ try{
         // Also override the info property if it exists (newer Chrome)
         if(adapter.info){
           try{
-            var desc2=_wglRenderer.match(/NVIDIA|AMD|Intel|Apple/i);
+            var desc2=_wglRenderer.match(/NVIDIA|AMD|Intel|Apple|Qualcomm|ARM/i);
             var sv=desc2?desc2[0]:'';
-            var gm=_wglRenderer.match(/(?:NVIDIA|AMD|Intel|Apple)[^,)]*/);
+            var gm=_wglRenderer.match(/(?:NVIDIA|AMD|Intel|Apple|Qualcomm|ARM)[^,)]*/);
             var sd=gm?gm[0].trim():_wglRenderer;
             Object.defineProperty(adapter,'info',{get:function(){
               return{vendor:sv,architecture:'',device:sd,description:sd};
@@ -1413,7 +1446,8 @@ if(typeof AudioBuffer!=='undefined'){
       for(var c=0;c<this.numberOfChannels;c++){
         var d=_origGetCD.call(this,c);
         for(var i=0;i<d.length;i+=100){
-          d[i]=d[i]+_audioNoise*(rng()-0.5);
+          var v=d[i]+_audioNoise*(rng()-0.5);
+          d[i]=v>1?1:(v<-1?-1:v);
         }
       }
     }
@@ -1464,7 +1498,8 @@ if(typeof OfflineAudioContext!=='undefined'){
         for(var ch=0;ch<buf.numberOfChannels;ch++){
           var data=_origGetCD.call(buf,ch);
           for(var i=0;i<data.length;i+=100){
-            data[i]=data[i]+_audioNoise*(rng()-0.5);
+            var v=data[i]+_audioNoise*(rng()-0.5);
+            data[i]=v>1?1:(v<-1?-1:v);
           }
         }
       }catch(e){}
@@ -1485,16 +1520,22 @@ if(typeof OffscreenCanvas!=='undefined'){
       return id;
     });
   }
-  if(OffscreenCanvas.prototype.convertToBlob){
+  if(OffscreenCanvas.prototype.convertToBlob&&typeof _origOSCGetID==='function'){
     var _origOSCToBlob=OffscreenCanvas.prototype.convertToBlob;
     _cloak(OffscreenCanvas.prototype,'convertToBlob',function(opts){
-      var rng=_m32(_seed^(this.width*this.height&0x7FFFFFFF));
       try{
-        var ctx=this.getContext('2d');
-        if(ctx){
-          var id=ctx.getImageData(0,0,this.width,this.height);
-          _addCanvasNoise(id,rng);
-          ctx.putImageData(id,0,0);
+        var w=this.width,h=this.height;
+        if(w>0&&h>0&&w*h<=65536){
+          var scratch=new OffscreenCanvas(w,h);
+          var sctx=scratch.getContext('2d');
+          if(sctx){
+            sctx.drawImage(this,0,0);
+            var id=_origOSCGetID.call(sctx,0,0,w,h);
+            var rng=_m32(_seed^(w*h&0x7FFFFFFF));
+            _addCanvasNoise(id,rng);
+            sctx.putImageData(id,0,0);
+            return _origOSCToBlob.call(scratch,opts);
+          }
         }
       }catch(e){}
       return _origOSCToBlob.call(this,opts);
@@ -1974,7 +2015,9 @@ try{
   if('connection' in Navigator.prototype||navigator.connection){
     var _connTarget=navigator.connection||{};
     for(var _ck in _connProps){
-      (function(k,v){try{Object.defineProperty(_connTarget,k,{get:function(){return v;},configurable:true,enumerable:true});}catch(e){}}(_ck,_connProps[_ck]));
+      if(_ck!=='type'||_ck in _connTarget){
+        (function(k,v){try{Object.defineProperty(_connTarget,k,{get:function(){return v;},configurable:true,enumerable:true});}catch(e){}}(_ck,_connProps[_ck]));
+      }
     }
     if(!navigator.connection){
       _defProp(Navigator.prototype,'connection',function(){return _connTarget;});
@@ -2329,11 +2372,12 @@ try{
     Object.freeze({brand:'Chromium',version:_fVer}),
     Object.freeze({brand:_nb,version:'24.0.0.0'})
   ]);
-  var _uaPlatform=_isWinUA?'Windows':_isMacUA?'macOS':'Linux';
+  var _isMobile=${fp.device_type === 'mobile'};
+  var _isAndroidUA=_isMobile||/Android/.test(_navProps.userAgent)||_navProps.platform.indexOf('Linux arm')===0;
+  var _uaPlatform=_isWinUA?'Windows':_isMacUA?'macOS':(_isAndroidUA?'Android':'Linux');
   // Derive platformVersion deterministically from seed (no DB field needed)
   var _isW11=(_seed%4===0);
-  var _isMobile=${fp.device_type === 'mobile'};
-  var _platVer=_isWinUA?(_isW11?'15.0.0':'10.0.0'):_isMacUA?'14.5.0':_isMobile?'14.0.0':'6.5.0';
+  var _platVer=_isWinUA?(_isW11?'15.0.0':'10.0.0'):_isMacUA?'14.5.0':_isAndroidUA?'14.0.0':'6.5.0';
   var _uaData={
     brands:_brands,
     mobile:_isMobile,
@@ -2344,14 +2388,14 @@ try{
     var r={brands:_brands,mobile:_isMobile,platform:_uaPlatform};
     for(var _hi=0;_hi<hints.length;_hi++){
       var h=hints[_hi];
-      if(h==='architecture')r.architecture='x86';
+      if(h==='architecture')r.architecture=_isAndroidUA?'arm':'x86';
       if(h==='bitness')r.bitness='64';
       if(h==='fullVersionList')r.fullVersionList=_fullBrands;
       if(h==='model')r.model=_isMobile?${JSON.stringify(fp.user_agent.match(/Android[^;]*;\s*([^)]+)\)/)?.[1] ?? '')}:'';
       if(h==='platformVersion')r.platformVersion=_platVer;
       if(h==='uaFullVersion')r.uaFullVersion=_fVer;
       if(h==='wow64')r.wow64=false;
-      if(h==='formFactors')r.formFactors=['Desktop'];
+      if(h==='formFactors')r.formFactors=_isMobile?['Mobile']:['Desktop'];
     }
     return Promise.resolve(r);
   };
