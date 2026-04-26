@@ -2251,7 +2251,9 @@ export function ProfilesPage(): React.JSX.Element {
                 setGroupFilter(v === NO_GROUP_SENTINEL ? NO_GROUP_KEY : v)
               }
             >
-              <SelectTrigger className="ml-1 !h-7 !text-[11.5px] min-w-[120px] shrink-0">
+              {/* w-[150px] overrides SelectTrigger's baked-in w-full so the
+                  trigger doesn't stretch to fill the wrapped row. */}
+              <SelectTrigger className="ml-1 !h-7 !text-[11.5px] w-[150px] shrink-0">
                 <SelectValue placeholder="Group" />
               </SelectTrigger>
               <SelectContent>
@@ -2267,7 +2269,10 @@ export function ProfilesPage(): React.JSX.Element {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 shrink-0 ml-auto">
+        {/* Right block stays as a single row so density/sort/actions don't
+            split apart vertically. Whole block wraps as one unit when the
+            outer flex-wrap can't fit it alongside chips. */}
+        <div className="flex flex-nowrap items-center gap-1 shrink-0 ml-auto">
 
         {/* Density toggle — 2-segment pill so both options are visible at once */}
         <div
@@ -2320,7 +2325,7 @@ export function ProfilesPage(): React.JSX.Element {
             setSortDir(d)
           }}
         >
-          <SelectTrigger className="!h-7 !text-[11.5px] min-w-[130px]">
+          <SelectTrigger className="!h-7 !text-[11.5px] w-[130px] shrink-0">
             <SelectValue placeholder="Sort by..." />
           </SelectTrigger>
           <SelectContent>
