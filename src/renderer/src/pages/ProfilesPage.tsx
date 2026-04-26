@@ -1,3 +1,13 @@
+/**
+ * ProfilesPage — Vault iter-2.
+ *
+ * Rewritten on canonical shadcn/Radix primitives + Vault tokens. The editor
+ * surface moved from a heavyweight Modal to a viewport-responsive `Sheet`,
+ * the row table dropped `role="grid"` in favour of a flat virtualized list,
+ * and all density / sort / group filter chrome runs through the canonical
+ * `SelectRoot` family. ESC and overlay-click on the editor Sheet now defer
+ * to the in-panel dirty-state confirm via a parent-held `isDirty` ref.
+ */
 import {
   memo,
   useEffect,
@@ -56,7 +66,11 @@ import {
   DropdownMenu,
   EmptyState,
   Tooltip,
-  Select,
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
   ContextMenu,
   Sheet,
   SheetContent,
@@ -67,6 +81,8 @@ import { cn } from '../lib/utils'
 import { api } from '../lib/api'
 import { formatRelativeTime } from '../lib/formatRelativeTime'
 import { useGroupCollapsedState } from '../hooks/useGroupCollapsedState'
+import { useViewportWidth } from '../hooks/useViewportWidth'
+import { useReducedMotion } from '../hooks/useReducedMotion'
 import {
   PRESET_BROWSER_MAP,
   buildPresetMenuItems
@@ -114,8 +130,22 @@ const TEST_SITE_PIXELSCAN = 'https://pixelscan.net'
 const NO_GROUP_KEY = ''
 const NO_GROUP_LABEL = 'Ungrouped'
 
+// Sentinel value for the "Ungrouped" item inside the canonical Select family.
+// Radix forbids an empty-string `value` on `<SelectItem>` (it throws at mount
+// because empty string is reserved for "no selection"), so we map our internal
+// NO_GROUP_KEY ('') to a non-empty token at the SelectItem boundary only.
+const NO_GROUP_SENTINEL = '__nogroup__'
+
 // Editor Sheet width (px). Spec says 640.
 const EDITOR_SHEET_WIDTH_PX = 640
+// Floor for the editor Sheet width on cramped viewports. Below this the
+// editor's two-column form starts wrapping in awkward ways, so we'd rather
+// let the user scroll the list under it than crush the form.
+const EDITOR_SHEET_MIN_WIDTH_PX = 420
+// Pixels of list / chrome the user should still see behind the editor on
+// small windows. 360px keeps the sticky filter strip + a slice of the
+// left rail visible so the user retains spatial context.
+const EDITOR_SHEET_CONTEXT_RESERVE_PX = 360
 
 // Vertical clearance reserved at the bottom of the virtualized scroll surface
 // while the bulk-action floater is visible. Floater height (~48px) + the 16px
@@ -216,24 +246,6 @@ function lowerBound(arr: number[], target: number): number {
     else hi = mid
   }
   return lo
-}
-
-// Reactive `prefers-reduced-motion: reduce` watcher. Returns the live
-// match value so smooth-scroll branches can flip back to instant when the
-// user changes their OS-level preference without a page reload.
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  })
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-    const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const handler = (e: MediaQueryListEvent): void => setReduced(e.matches)
-    mql.addEventListener('change', handler)
-    return () => mql.removeEventListener('change', handler)
-  }, [])
-  return reduced
 }
 
 // Comparators tuned for the ProfilesPage's three sortable columns. `name`
@@ -344,7 +356,17 @@ interface FilterChipProps {
   dotClass?: string
 }
 
-function FilterChip({ active, onClick, onClear, children, dotClass }: FilterChipProps): React.JSX.Element {
+// Memoized so it skips re-renders on unrelated parent updates (filter
+// typing, scroll, selection drift). Memo only pays off when the parent
+// passes stable handler identities — see the `clear*Filter` /
+// `setStatusFilter*` `useCallback`s in the page below.
+const FilterChip = memo(function FilterChip({
+  active,
+  onClick,
+  onClear,
+  children,
+  dotClass
+}: FilterChipProps): React.JSX.Element {
   // Active chip pairs the toggle action with an inline "clear" button. Two
   // sibling <button>s inside a flex container avoid nesting <button> inside
   // <button> (invalid HTML) while keeping the cluster visually unified.
@@ -371,7 +393,7 @@ function FilterChip({ active, onClick, onClear, children, dotClass }: FilterChip
             e.stopPropagation()
             onClear()
           }}
-          aria-label="Clear filter"
+          aria-label={typeof children === 'string' ? `Clear ${children} filter` : 'Clear filter'}
           className="inline-flex items-center justify-center h-4 w-4 rounded-full hover:bg-white/15"
         >
           <X className="h-2.5 w-2.5" />
@@ -396,7 +418,7 @@ function FilterChip({ active, onClick, onClear, children, dotClass }: FilterChip
       <span>{children}</span>
     </button>
   )
-}
+})
 
 function RunningTimer({ startedAt }: { startedAt: string }): React.JSX.Element {
   const [elapsed, setElapsed] = useState('')
@@ -1008,6 +1030,25 @@ export function ProfilesPage(): React.JSX.Element {
   // Automation modal target
   const [automationFor, setAutomationFor] = useState<{ id: string; name: string } | null>(null)
 
+  // ── Stable filter-chip handlers ───────────────────────────────────────
+  // Each chip wires through stable callbacks so `React.memo` on FilterChip
+  // can short-circuit on unrelated parent updates (search keystrokes,
+  // scroll, focus drift). Per-value handlers are clearer than a higher-
+  // order factory at this scale (<20 chips).
+  const setStatusRunning = useCallback(() => setStatusFilter('running'), [])
+  const setStatusReady = useCallback(() => setStatusFilter('ready'), [])
+  const setStatusError = useCallback(() => setStatusFilter('error'), [])
+  const clearStatusFilter = useCallback(() => setStatusFilter('all'), [])
+
+  const setBrowserChromium = useCallback(() => setBrowserFilter('chromium'), [])
+  const setBrowserFirefox = useCallback(() => setBrowserFilter('firefox'), [])
+  const setBrowserEdge = useCallback(() => setBrowserFilter('edge'), [])
+  const clearBrowserFilter = useCallback(() => setBrowserFilter('all'), [])
+
+  const setProxyWith = useCallback(() => setProxyFilter('with-proxy'), [])
+  const setProxyWithout = useCallback(() => setProxyFilter('no-proxy'), [])
+  const clearProxyFilter = useCallback(() => setProxyFilter('all'), [])
+
   // ── Persist density / sort preferences ────────────────────────────────
   useEffect(() => {
     try {
@@ -1032,14 +1073,16 @@ export function ProfilesPage(): React.JSX.Element {
     fetchProxies()
   }, [fetchProfiles, fetchSessions, fetchProxies])
 
-  // Title reflects running count (left untouched from prior behaviour).
+  // Title reflects running count. Reads the derived `runningCount` from the
+  // store (kept in sync alongside every profiles mutation) so it doesn't
+  // re-scan the list per notification.
+  const runningCount = useProfilesStore((s) => s.runningCount)
   useEffect(() => {
-    const running = profiles.filter((p) => p.status === 'running').length
-    document.title = running > 0 ? `Lux (${running} running)` : 'Lux Antidetect'
+    document.title = runningCount > 0 ? `Lux (${runningCount} running)` : 'Lux Antidetect'
     return () => {
       document.title = 'Lux Antidetect'
     }
-  }, [profiles])
+  }, [runningCount])
 
   // ── Auto-refresh proxies when fraud metadata updates server-side ───────
   // ProxiesPage already listens; the profiles list also benefits because the
@@ -1916,8 +1959,12 @@ export function ProfilesPage(): React.JSX.Element {
         return
       }
       if (e.key === 'Escape') {
-        if (editorMode) handleEditorCancel()
-        else if (selectedIds.size > 0) setSelectedIds(new Set())
+        // Editor Sheet ESC is owned by Radix via `onEscapeKeyDown` (which
+        // routes through `requestCloseEditor` and the dirty-state confirm).
+        // The global listener only handles ESC for non-Sheet UI so it
+        // doesn't double-close the Sheet.
+        if (editorMode) return
+        if (selectedIds.size > 0) setSelectedIds(new Set())
         else if (focusedProfileIdx !== null) setFocusedProfileIdx(null)
       }
     }
@@ -1928,7 +1975,6 @@ export function ProfilesPage(): React.JSX.Element {
     selectedIds.size,
     focusedProfileIdx,
     handleNewProfile,
-    handleEditorCancel,
     handleSelectAllVisible
   ])
 
@@ -2064,11 +2110,54 @@ export function ProfilesPage(): React.JSX.Element {
 
   // ── Editor Sheet open/close handler ───────────────────────────────────
 
+  // Latched by `ProfileEditorPanel` whenever `react-hook-form.formState.isDirty`
+  // flips (panel→parent callback). Read on ESC / overlay-click so the close
+  // routes through the Discard-changes confirm instead of dropping edits.
+  const panelDirtyRef = useRef(false)
+  const handlePanelDirtyChange = useCallback((isDirty: boolean) => {
+    panelDirtyRef.current = isDirty
+  }, [])
+
+  // Close path that respects the panel's dirty state. Used by Sheet's ESC
+  // handler (`onEscapeKeyDown`) and overlay click (`onPointerDownOutside`).
+  // The in-panel Cancel/X buttons keep using `handleEditorCancel` directly
+  // (they own their own confirm flow inside ProfileEditorPanel.handleCancel).
+  const requestCloseEditor = useCallback(async (): Promise<void> => {
+    if (!panelDirtyRef.current) {
+      handleEditorCancel()
+      return
+    }
+    const ok = await confirm({
+      title: 'Discard unsaved changes?',
+      message: 'You have edits in this profile that will be lost if you continue.',
+      confirmLabel: 'Discard',
+      danger: true
+    })
+    if (ok) handleEditorCancel()
+  }, [confirm, handleEditorCancel])
+
   const handleEditorOpenChange = useCallback(
     (open: boolean) => {
-      if (!open) handleEditorCancel()
+      if (open) return
+      void requestCloseEditor()
     },
-    [handleEditorCancel]
+    [requestCloseEditor]
+  )
+
+  // Reset the dirty latch each time the editor closes (Sheet unmounts the
+  // panel, which means a fresh mount reports its own initial false anyway,
+  // but clearing here removes one frame of stale state).
+  useEffect(() => {
+    if (editorMode === null) panelDirtyRef.current = false
+  }, [editorMode])
+
+  // Editor Sheet width: shrink with the viewport so the user keeps a sliver
+  // of list visible behind the panel on the layout's hard 900px minimum.
+  // Floored at EDITOR_SHEET_MIN_WIDTH_PX so the form doesn't crush.
+  const viewportWidth = useViewportWidth()
+  const editorSheetWidth = Math.min(
+    EDITOR_SHEET_WIDTH_PX,
+    Math.max(EDITOR_SHEET_MIN_WIDTH_PX, viewportWidth - EDITOR_SHEET_CONTEXT_RESERVE_PX)
   )
 
   // ── Render ────────────────────────────────────────────────────────────
@@ -2116,88 +2205,124 @@ export function ProfilesPage(): React.JSX.Element {
         />
 
         <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto scrollbar-hide">
-          <FilterChip active={statusFilter === 'running'} onClick={() => setStatusFilter('running')} onClear={() => setStatusFilter('all')} dotClass="bg-ok">
+          <FilterChip active={statusFilter === 'running'} onClick={setStatusRunning} onClear={clearStatusFilter} dotClass="bg-ok">
             Running
           </FilterChip>
-          <FilterChip active={statusFilter === 'ready'} onClick={() => setStatusFilter('ready')} onClear={() => setStatusFilter('all')} dotClass="bg-muted-foreground/60">
+          <FilterChip active={statusFilter === 'ready'} onClick={setStatusReady} onClear={clearStatusFilter} dotClass="bg-muted-foreground/60">
             Ready
           </FilterChip>
-          <FilterChip active={statusFilter === 'error'} onClick={() => setStatusFilter('error')} onClear={() => setStatusFilter('all')} dotClass="bg-destructive">
+          <FilterChip active={statusFilter === 'error'} onClick={setStatusError} onClear={clearStatusFilter} dotClass="bg-destructive">
             Error
           </FilterChip>
 
           <div className="h-5 w-px bg-border/60 mx-1" />
 
-          <FilterChip active={browserFilter === 'chromium'} onClick={() => setBrowserFilter('chromium')} onClear={() => setBrowserFilter('all')}>
+          <FilterChip active={browserFilter === 'chromium'} onClick={setBrowserChromium} onClear={clearBrowserFilter}>
             Chromium
           </FilterChip>
-          <FilterChip active={browserFilter === 'firefox'} onClick={() => setBrowserFilter('firefox')} onClear={() => setBrowserFilter('all')}>
+          <FilterChip active={browserFilter === 'firefox'} onClick={setBrowserFirefox} onClear={clearBrowserFilter}>
             Firefox
           </FilterChip>
-          <FilterChip active={browserFilter === 'edge'} onClick={() => setBrowserFilter('edge')} onClear={() => setBrowserFilter('all')}>
+          <FilterChip active={browserFilter === 'edge'} onClick={setBrowserEdge} onClear={clearBrowserFilter}>
             Edge
           </FilterChip>
 
           <div className="h-5 w-px bg-border/60 mx-1" />
 
-          <FilterChip active={proxyFilter === 'with-proxy'} onClick={() => setProxyFilter('with-proxy')} onClear={() => setProxyFilter('all')}>
+          <FilterChip active={proxyFilter === 'with-proxy'} onClick={setProxyWith} onClear={clearProxyFilter}>
             With proxy
           </FilterChip>
-          <FilterChip active={proxyFilter === 'no-proxy'} onClick={() => setProxyFilter('no-proxy')} onClear={() => setProxyFilter('all')}>
+          <FilterChip active={proxyFilter === 'no-proxy'} onClick={setProxyWithout} onClear={clearProxyFilter}>
             No proxy
           </FilterChip>
 
           {allGroups.length > 0 && (
-            <Select
-              options={[
-                { value: 'all', label: 'All groups' },
-                { value: NO_GROUP_KEY, label: NO_GROUP_LABEL },
-                ...allGroups.map((g) => ({ value: g, label: g }))
-              ]}
-              value={groupFilter}
-              onChange={(e) => setGroupFilter(e.target.value)}
-              className="ml-1 !h-7 !text-[11.5px] min-w-[120px] shrink-0"
-            />
+            <SelectRoot
+              value={groupFilter === NO_GROUP_KEY ? NO_GROUP_SENTINEL : groupFilter}
+              onValueChange={(v) =>
+                setGroupFilter(v === NO_GROUP_SENTINEL ? NO_GROUP_KEY : v)
+              }
+            >
+              <SelectTrigger className="ml-1 !h-7 !text-[11.5px] min-w-[120px] shrink-0">
+                <SelectValue placeholder="Group" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All groups</SelectItem>
+                <SelectItem value={NO_GROUP_SENTINEL}>{NO_GROUP_LABEL}</SelectItem>
+                {allGroups.map((g) => (
+                  <SelectItem key={g} value={g}>
+                    {g}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </SelectRoot>
           )}
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
 
-        {/* Density toggle */}
-        <Tooltip
-          content={density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'}
+        {/* Density toggle — 2-segment pill so both options are visible at once */}
+        <div
+          className="inline-flex items-center rounded-[--radius-md] bg-elevated/40 p-0.5"
+          role="group"
+          aria-label="Row density"
         >
           <button
             type="button"
-            onClick={() => setDensity(density === 'compact' ? 'comfortable' : 'compact')}
+            aria-pressed={density === 'compact'}
+            aria-label="Compact density"
+            onClick={() => setDensity('compact')}
             className={cn(
-              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
-              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
-              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+              'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+              density === 'compact'
+                ? 'bg-card text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
             )}
-            aria-label="Toggle row density"
           >
-            {density === 'compact' ? <Rows3 className="h-3.5 w-3.5" /> : <Rows2 className="h-3.5 w-3.5" />}
+            <Rows3 className="h-3 w-3" aria-hidden="true" />
+            <span className="hidden md:inline">Compact</span>
           </button>
-        </Tooltip>
+          <button
+            type="button"
+            aria-pressed={density === 'comfortable'}
+            aria-label="Comfortable density"
+            onClick={() => setDensity('comfortable')}
+            className={cn(
+              'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+              density === 'comfortable'
+                ? 'bg-card text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Rows2 className="h-3 w-3" aria-hidden="true" />
+            <span className="hidden md:inline">Comfortable</span>
+          </button>
+        </div>
 
         {/* Sort */}
-        <Select
-          options={[
-            { value: 'last_used:desc', label: 'Last used' },
-            { value: 'name:asc', label: 'Name (A→Z)' },
-            { value: 'name:desc', label: 'Name (Z→A)' },
-            { value: 'created_at:desc', label: 'Newest' },
-            { value: 'created_at:asc', label: 'Oldest' }
-          ]}
+        <SelectRoot
           value={`${sortKey}:${sortDir}`}
-          onChange={(e) => {
-            const [k, d] = e.target.value.split(':') as [SortKey, SortDir]
+          onValueChange={(v) => {
+            const [k, d] = v.split(':') as [SortKey, SortDir]
             setSortKey(k)
             setSortDir(d)
           }}
-          className="!h-7 !text-[11.5px] min-w-[130px]"
-        />
+        >
+          <SelectTrigger className="!h-7 !text-[11.5px] min-w-[130px]">
+            <SelectValue placeholder="Sort by..." />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="last_used:desc">Last used</SelectItem>
+            <SelectItem value="name:asc">Name (A→Z)</SelectItem>
+            <SelectItem value="name:desc">Name (Z→A)</SelectItem>
+            <SelectItem value="created_at:desc">Newest</SelectItem>
+            <SelectItem value="created_at:asc">Oldest</SelectItem>
+          </SelectContent>
+        </SelectRoot>
 
         <Tooltip content="Import profiles from JSON">
           <button
@@ -2453,10 +2578,22 @@ export function ProfilesPage(): React.JSX.Element {
       <Sheet open={editorMode !== null} onOpenChange={handleEditorOpenChange}>
         <SheetContent
           side="right"
-          width={EDITOR_SHEET_WIDTH_PX}
+          width={editorSheetWidth}
           hideClose
           className="p-0 gap-0"
           aria-describedby={undefined}
+          onEscapeKeyDown={(e) => {
+            if (panelDirtyRef.current) {
+              e.preventDefault()
+              void requestCloseEditor()
+            }
+          }}
+          onPointerDownOutside={(e) => {
+            if (panelDirtyRef.current) {
+              e.preventDefault()
+              void requestCloseEditor()
+            }
+          }}
         >
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/60 shrink-0">
             <SheetTitle>
@@ -2464,7 +2601,7 @@ export function ProfilesPage(): React.JSX.Element {
             </SheetTitle>
             <button
               type="button"
-              onClick={handleEditorCancel}
+              onClick={() => void requestCloseEditor()}
               className={cn(
                 'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
                 'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
@@ -2488,6 +2625,7 @@ export function ProfilesPage(): React.JSX.Element {
                 initialBrowser={editorMode === 'create' ? pendingBrowser : null}
                 onSave={handleEditorSave}
                 onCancel={handleEditorCancel}
+                onDirtyChange={handlePanelDirtyChange}
               />
             )}
           </div>

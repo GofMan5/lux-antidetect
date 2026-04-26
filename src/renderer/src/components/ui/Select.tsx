@@ -1,4 +1,4 @@
-import { forwardRef } from 'react'
+import { forwardRef, useId } from 'react'
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { Check, ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
@@ -11,6 +11,14 @@ import { SELECT } from '@renderer/lib/ui'
 //      <SelectContent><SelectItem value="...">Label</SelectItem></SelectContent>
 //    </SelectRoot>`
 
+// Concatenates a generated error id with any user-supplied `aria-describedby`
+// so screen readers announce the error message AND any pre-existing helper
+// text rather than overwriting one with the other.
+function joinDescribedBy(...ids: Array<string | undefined>): string | undefined {
+  const filtered = ids.filter((id): id is string => Boolean(id))
+  return filtered.length > 0 ? filtered.join(' ') : undefined
+}
+
 // ─── Legacy flat native API (existing pages) ──────────────────────────────
 
 export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
@@ -19,12 +27,21 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
 }
 
 const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ options, error, className, ...props }, ref) => {
+  ({ options, error, className, id, ...props }, ref) => {
+    // Stable error-message id so screen readers can read both the select and
+    // the error via aria-describedby. Prefer an id derived from the
+    // user-supplied `id`; fall back to a generated one otherwise.
+    const generatedId = useId()
+    const errorId = error ? (id ? `${id}-error` : `${generatedId}-error`) : undefined
+    const describedBy = joinDescribedBy(props['aria-describedby'], errorId)
+
     return (
       <div className="space-y-1">
         <select
           ref={ref}
+          id={id}
           aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
           className={cn(
             SELECT,
             error && 'border-destructive/50 focus:border-destructive/50 focus:ring-destructive/20',
@@ -38,7 +55,11 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
             </option>
           ))}
         </select>
-        {error && <p className="text-xs text-destructive">{error}</p>}
+        {error && (
+          <p id={errorId} className="text-xs text-destructive">
+            {error}
+          </p>
+        )}
       </div>
     )
   }

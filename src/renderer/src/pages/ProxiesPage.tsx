@@ -1,4 +1,25 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+/**
+ * ProxiesPage — Vault iter-2.
+ *
+ * Rewritten on canonical shadcn/Radix primitives + Vault tokens. The proxy
+ * editor and bulk-import surfaces are viewport-responsive `Sheet`s with
+ * dirty-state-aware ESC / overlay-click handling, the table dropped
+ * `role="grid"` for a flat virtualized list, and density / sort / group
+ * filter chrome runs through canonical `SelectRoot`. The standalone IP
+ * fraud-check stays in a centred `Dialog` since it's transactional, not an
+ * editor.
+ */
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type Ref
+} from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -12,38 +33,63 @@ import {
   Globe,
   MoreHorizontal,
   Copy,
-  Download,
-  FileUp,
-  CheckSquare,
   ClipboardPaste,
   Check,
   ShieldCheck,
   ShieldAlert,
   Shield,
-  RefreshCw
+  RefreshCw,
+  Filter,
+  Rows3,
+  Rows2,
+  X,
+  FileUp,
+  CheckSquare
 } from 'lucide-react'
 import { useProxiesStore } from '../stores/proxies'
 import { useConfirmStore } from '../components/ConfirmDialog'
 import { useToastStore } from '../components/Toast'
 import { api } from '../lib/api'
 import { cn } from '../lib/utils'
-import { CHECKBOX, TEXTAREA, LABEL } from '../lib/ui'
 import {
   Button,
   Input,
+  Label,
   Badge,
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  Switch,
   Select,
-  Modal,
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
   EmptyState,
   SearchInput,
   DropdownMenu,
-  Tooltip
+  Tooltip,
+  ContextMenu
 } from '../components/ui'
-import type { ProxyProtocol, ProxyResponse, ProxyInput, FraudRisk, IpFraudReport } from '../lib/types'
+import { useViewportWidth } from '../hooks/useViewportWidth'
+import { useReducedMotion } from '../hooks/useReducedMotion'
+import type { DropdownMenuItem } from '../components/ui'
+import type {
+  ProxyProtocol,
+  ProxyResponse,
+  ProxyInput,
+  FraudRisk,
+  IpFraudReport
+} from '../lib/types'
 
-// ---------------------------------------------------------------------------
+// ──────────────────────────────────────────────────────────────────────────
 // Schema & defaults
-// ---------------------------------------------------------------------------
+// ──────────────────────────────────────────────────────────────────────────
 
 const proxySchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -69,14 +115,17 @@ const DEFAULT_PROXY: ProxyFormData = {
   group_tag: ''
 }
 
-const PROTOCOL_OPTIONS = [
+const PROTOCOL_OPTIONS: { value: ProxyProtocol; label: string }[] = [
   { value: 'http', label: 'HTTP' },
   { value: 'https', label: 'HTTPS' },
   { value: 'socks4', label: 'SOCKS4' },
   { value: 'socks5', label: 'SOCKS5' }
 ]
 
-const PROTOCOL_BADGE: Record<ProxyProtocol, 'default' | 'success' | 'warning' | 'error' | 'accent'> = {
+const PROTOCOL_BADGE: Record<
+  ProxyProtocol,
+  'default' | 'success' | 'warning' | 'destructive' | 'accent'
+> = {
   http: 'default',
   https: 'success',
   socks4: 'accent',
@@ -115,15 +164,48 @@ const PROXY_CHECK_ERROR_MESSAGES: Record<string, string> = {
   unknown_error: 'Unknown proxy error'
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ── Layout ────────────────────────────────────────────────────────────────
 
-function statusBadge(proxy: ProxyResponse): { variant: 'success' | 'error' | 'default'; label: string } {
-  if (proxy.last_check === null) return { variant: 'default', label: 'Untested' }
+type Density = 'compact' | 'comfortable'
+type StatusFilterValue = 'all' | 'working' | 'failed' | 'untested'
+type ProtocolFilterValue = 'all' | ProxyProtocol
+type ReputationFilterValue = 'all' | NonNullable<FraudRisk> | 'unchecked'
+type SortKey = 'name' | 'last_check' | 'created_at' | 'fraud_score'
+type SortDir = 'asc' | 'desc'
+
+const ROW_HEIGHT_BY_DENSITY: Record<Density, number> = {
+  compact: 40,
+  comfortable: 56
+}
+
+const DENSITY_STORAGE_KEY = 'lux.proxies.density'
+const SORT_STORAGE_KEY = 'lux.proxies.sort'
+const EDITOR_SHEET_WIDTH_PX = 640
+const IMPORT_SHEET_WIDTH_PX = 640
+// Floor for the editor / import Sheets on cramped viewports — below this
+// the two-column form starts wrapping in awkward ways.
+const EDITOR_SHEET_MIN_WIDTH_PX = 420
+// Pixels of list / chrome the user should still see behind the Sheet so
+// they retain spatial context on the layout's hard 900px minimum.
+const EDITOR_SHEET_CONTEXT_RESERVE_PX = 360
+const BULK_FLOATER_CLEARANCE_PX = 64
+
+// Speed thresholds (ms). Anything faster than `fast` is green;
+// `fast..slow` is amber; ≥ `slow` is red.
+const SPEED_FAST_MS = 500
+const SPEED_SLOW_MS = 1500
+
+// ──────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────
+
+function statusBadge(
+  proxy: ProxyResponse
+): { variant: 'success' | 'destructive' | 'muted'; label: string } {
+  if (proxy.last_check === null) return { variant: 'muted', label: 'Untested' }
   return proxy.check_ok
     ? { variant: 'success', label: 'Working' }
-    : { variant: 'error', label: 'Failed' }
+    : { variant: 'destructive', label: 'Failed' }
 }
 
 function countryFlag(code: string): string {
@@ -139,14 +221,28 @@ function countryFlag(code: string): string {
 // the precise number; the tooltip lists per-flag detail.
 const FRAUD_BUCKET_META: Record<
   Exclude<FraudRisk, never>,
-  { variant: 'success' | 'error' | 'warning' | 'default'; label: string; icon: 'check' | 'alert' | 'shield' }
+  {
+    variant: 'success' | 'destructive' | 'warning' | 'outline'
+    label: string
+    icon: 'check' | 'alert' | 'shield'
+  }
 > = {
-  clean:    { variant: 'success', label: 'Clean',    icon: 'check' },
-  low:      { variant: 'success', label: 'Low',      icon: 'check' },
-  medium:   { variant: 'warning', label: 'Medium',   icon: 'alert' },
-  high:     { variant: 'error',   label: 'High',     icon: 'alert' },
-  critical: { variant: 'error',   label: 'Critical', icon: 'alert' },
-  unknown:  { variant: 'default', label: 'Unknown',  icon: 'shield' }
+  clean: { variant: 'success', label: 'Clean', icon: 'check' },
+  low: { variant: 'success', label: 'Low', icon: 'check' },
+  medium: { variant: 'warning', label: 'Medium', icon: 'alert' },
+  high: { variant: 'destructive', label: 'High', icon: 'alert' },
+  critical: { variant: 'destructive', label: 'Critical', icon: 'alert' },
+  unknown: { variant: 'outline', label: 'Unknown', icon: 'shield' }
+}
+
+// Bucket → dot tone for the row's reputation indicator (matches ProfilesPage).
+const FRAUD_DOT_CLASS: Record<NonNullable<FraudRisk>, string> = {
+  clean: 'bg-ok',
+  low: 'bg-ok',
+  medium: 'bg-warn',
+  high: 'bg-destructive',
+  critical: 'bg-destructive',
+  unknown: 'bg-muted-foreground/60'
 }
 
 function fraudBucketIcon(name: 'check' | 'alert' | 'shield'): React.ReactNode {
@@ -155,22 +251,26 @@ function fraudBucketIcon(name: 'check' | 'alert' | 'shield'): React.ReactNode {
   return <Shield className="h-3 w-3" />
 }
 
-function reputationBadge(proxy: ProxyResponse): {
-  variant: 'success' | 'error' | 'warning' | 'default'
+interface ReputationDescriptor {
+  variant: 'success' | 'destructive' | 'warning' | 'outline'
   label: string
   icon: React.ReactNode
   tooltip: React.ReactNode
   ariaLabel: string
-} {
+  dotClass: string
+}
+
+function reputationBadge(proxy: ProxyResponse): ReputationDescriptor {
   // Pre-lookup state.
   if (proxy.fraud_risk === null || proxy.last_fraud_check === null) {
     const note = 'Reputation not checked yet — click to refresh or wait for the auto-lookup to finish.'
     return {
-      variant: 'default',
+      variant: 'outline',
       label: 'Unknown',
       icon: fraudBucketIcon('shield'),
       tooltip: <div>{note}</div>,
-      ariaLabel: `Reputation: unknown. ${note}`
+      ariaLabel: `Reputation: unknown. ${note}`,
+      dotClass: FRAUD_DOT_CLASS.unknown
     }
   }
 
@@ -183,39 +283,509 @@ function reputationBadge(proxy: ProxyResponse): {
   if (proxy.is_mobile) flags.push('mobile carrier (low-risk)')
 
   const lines: React.ReactNode[] = []
-  if (proxy.external_ip) lines.push(<div key="ip"><span className="text-muted">IP</span> <span className="font-mono">{proxy.external_ip}</span></div>)
-  if (proxy.isp) lines.push(<div key="isp"><span className="text-muted">ISP</span> {proxy.isp}</div>)
-  if (proxy.asn) lines.push(<div key="asn"><span className="text-muted">ASN</span> <span className="font-mono">{proxy.asn}</span>{proxy.asn_type ? ` (${proxy.asn_type})` : ''}</div>)
-  if (proxy.abuse_score !== null) lines.push(
-    <div key="abuse"><span className="text-muted">Abuse</span> {(proxy.abuse_score * 100).toFixed(1)}%</div>
-  )
+  if (proxy.external_ip)
+    lines.push(
+      <div key="ip">
+        <span className="text-muted-foreground">IP</span>{' '}
+        <span className="font-mono">{proxy.external_ip}</span>
+      </div>
+    )
+  if (proxy.isp)
+    lines.push(
+      <div key="isp">
+        <span className="text-muted-foreground">ISP</span> {proxy.isp}
+      </div>
+    )
+  if (proxy.asn)
+    lines.push(
+      <div key="asn">
+        <span className="text-muted-foreground">ASN</span>{' '}
+        <span className="font-mono">{proxy.asn}</span>
+        {proxy.asn_type ? ` (${proxy.asn_type})` : ''}
+      </div>
+    )
+  if (proxy.abuse_score !== null)
+    lines.push(
+      <div key="abuse">
+        <span className="text-muted-foreground">Abuse</span> {(proxy.abuse_score * 100).toFixed(1)}%
+      </div>
+    )
   lines.push(
-    <div key="flags"><span className="text-muted">Flags</span> {flags.length > 0 ? flags.join(', ') : 'none'}</div>
+    <div key="flags">
+      <span className="text-muted-foreground">Flags</span>{' '}
+      {flags.length > 0 ? flags.join(', ') : 'none'}
+    </div>
   )
-  if (proxy.fraud_providers.length > 0) lines.push(
-    <div key="src" className="text-muted/70 text-[11px]">via {proxy.fraud_providers.join(' + ')}</div>
-  )
+  if (proxy.fraud_providers.length > 0)
+    lines.push(
+      <div key="src" className="text-muted-foreground/70 text-[11px]">
+        via {proxy.fraud_providers.join(' + ')}
+      </div>
+    )
 
   const meta = FRAUD_BUCKET_META[proxy.fraud_risk]
   const score = proxy.fraud_score ?? 0
   const tooltip = <div className="space-y-0.5 leading-snug">{lines}</div>
-  const ariaLabel = `Reputation: ${meta.label}, score ${score} of 100. Flags: ${flags.length > 0 ? flags.join(', ') : 'none'}.`
+  const ariaLabel = `Reputation: ${meta.label}, score ${score} of 100. Flags: ${
+    flags.length > 0 ? flags.join(', ') : 'none'
+  }.`
 
   return {
     variant: meta.variant,
-    label: proxy.fraud_risk === 'unknown' ? 'Unknown' : `${meta.label} ${score}`,
+    label:
+      proxy.fraud_risk === 'unknown'
+        ? 'Unknown'
+        : `${meta.label} ${score}`,
     icon: fraudBucketIcon(meta.icon),
     tooltip,
-    ariaLabel
+    ariaLabel,
+    dotClass: FRAUD_DOT_CLASS[proxy.fraud_risk]
   }
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+function readDensityFromStorage(): Density {
+  try {
+    const raw = localStorage.getItem(DENSITY_STORAGE_KEY)
+    if (raw === 'compact' || raw === 'comfortable') return raw
+  } catch {
+    /* ignore */
+  }
+  return 'compact'
+}
+
+function readSortFromStorage(): { key: SortKey; dir: SortDir } {
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as { key?: string; dir?: string }
+      const key: SortKey =
+        parsed.key === 'name' ||
+        parsed.key === 'last_check' ||
+        parsed.key === 'created_at' ||
+        parsed.key === 'fraud_score'
+          ? parsed.key
+          : 'created_at'
+      const dir: SortDir = parsed.dir === 'asc' ? 'asc' : 'desc'
+      return { key, dir }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { key: 'created_at', dir: 'desc' }
+}
+
+function compareProxies(a: ProxyResponse, b: ProxyResponse, key: SortKey, dir: SortDir): number {
+  const sign = dir === 'asc' ? 1 : -1
+  if (key === 'name') {
+    return sign * a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  }
+  if (key === 'fraud_score') {
+    const av = a.fraud_score
+    const bv = b.fraud_score
+    if (av === null && bv === null) return 0
+    if (av === null) return 1
+    if (bv === null) return -1
+    return av < bv ? -sign : av > bv ? sign : 0
+  }
+  // last_check is nullable — null sorts to end regardless of direction.
+  if (key === 'last_check') {
+    const av = a.last_check ?? ''
+    const bv = b.last_check ?? ''
+    if (!av && !bv) return 0
+    if (!av) return 1
+    if (!bv) return -1
+    return av < bv ? -sign : av > bv ? sign : 0
+  }
+  // created_at
+  const av = a.created_at ?? ''
+  const bv = b.created_at ?? ''
+  return av < bv ? -sign : av > bv ? sign : 0
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// FilterChip — same visual contract as ProfilesPage
+// ──────────────────────────────────────────────────────────────────────────
+
+interface FilterChipProps {
+  active: boolean
+  onClick: () => void
+  onClear?: () => void
+  children: React.ReactNode
+  dotClass?: string
+}
+
+// Memoized so it skips re-renders on unrelated parent updates (filter
+// typing, scroll, selection drift). Memo only pays off when the parent
+// passes stable handler identities — see the page's `clear*Filter` /
+// `set*Filter*` `useCallback`s.
+const FilterChip = memo(function FilterChip({
+  active,
+  onClick,
+  onClear,
+  children,
+  dotClass
+}: FilterChipProps): React.JSX.Element {
+  if (active && onClear) {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
+          'bg-primary text-primary-foreground pl-2.5 pr-1'
+        )}
+      >
+        {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
+        <button type="button" onClick={onClick} className="leading-none" aria-pressed="true">
+          {children}
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onClear()
+          }}
+          aria-label={typeof children === 'string' ? `Clear ${children} filter` : 'Clear filter'}
+          className="inline-flex items-center justify-center h-4 w-4 rounded-full hover:bg-white/15"
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
+        'transition-colors duration-150 ease-[var(--ease-osmosis)] px-2.5',
+        active
+          ? 'bg-primary text-primary-foreground'
+          : 'bg-transparent border border-border text-muted-foreground hover:text-foreground hover:border-edge'
+      )}
+    >
+      {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
+      <span>{children}</span>
+    </button>
+  )
+})
+
+// ──────────────────────────────────────────────────────────────────────────
+// ProxyRow — memoized row body
+// ──────────────────────────────────────────────────────────────────────────
+
+interface ProxyRowProps {
+  proxy: ProxyResponse
+  index: number
+  selected: boolean
+  focused: boolean
+  density: Density
+  isTesting: boolean
+  isCheckingFraud: boolean
+  errorTooltip: string | null
+  /**
+   * Lazy resolver: invoked when the dropdown / context menu actually opens.
+   * Stable identity from the parent so the memoized row doesn't re-render
+   * on every keystroke. The row memoizes its own resolved action list
+   * keyed by (proxy.id, isTesting, isCheckingFraud) to keep the menu fresh.
+   */
+  getActionsForProxy: (
+    proxy: ProxyResponse,
+    isTesting: boolean,
+    isCheckingFraud: boolean
+  ) => DropdownMenuItem[]
+  onToggleSelect: (id: string, index: number, shiftKey: boolean) => void
+  onClickRow: (proxy: ProxyResponse) => void
+  onContextMenu: (e: ReactMouseEvent, proxy: ProxyResponse) => void
+  onRecheckFraud: (id: string) => void
+  registerRef: (id: string, el: HTMLDivElement | null) => void
+}
+
+function ProxyRowComponent({
+  proxy,
+  index,
+  selected,
+  focused,
+  density,
+  isTesting,
+  isCheckingFraud,
+  errorTooltip,
+  getActionsForProxy,
+  onToggleSelect,
+  onClickRow,
+  onContextMenu,
+  onRecheckFraud,
+  registerRef
+}: ProxyRowProps): React.JSX.Element {
+  const status = statusBadge(proxy)
+  const reputation = reputationBadge(proxy)
+  const isComfortable = density === 'comfortable'
+
+  // Lazy resolution: only built when something materially affecting menu
+  // contents changes. The dropdown only renders its trigger upfront — the
+  // menu items are forwarded to Radix and only mounted on open.
+  const rowActions = useMemo(
+    () => getActionsForProxy(proxy, isTesting, isCheckingFraud),
+    [getActionsForProxy, proxy, isTesting, isCheckingFraud]
+  )
+
+  const refCallback = useCallback(
+    (el: HTMLDivElement | null) => registerRef(proxy.id, el),
+    [registerRef, proxy.id]
+  )
+
+  const speedClass =
+    proxy.check_latency_ms == null
+      ? 'bg-muted-foreground/60'
+      : proxy.check_latency_ms < SPEED_FAST_MS
+        ? 'bg-ok'
+        : proxy.check_latency_ms < SPEED_SLOW_MS
+          ? 'bg-warn'
+          : 'bg-destructive'
+
+  return (
+    <div
+      ref={refCallback}
+      role="option"
+      tabIndex={focused ? 0 : -1}
+      aria-selected={selected}
+      data-proxy-id={proxy.id}
+      onClick={() => onClickRow(proxy)}
+      onContextMenu={(e) => onContextMenu(e, proxy)}
+      className={cn(
+        'group/row relative flex items-center gap-3 pl-4 pr-2 cursor-pointer select-none',
+        'border-b border-border/40 transition-colors duration-150',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
+        focused ? 'bg-elevated/55' : selected ? 'bg-primary/[0.05]' : 'hover:bg-elevated/30'
+      )}
+      style={{ height: ROW_HEIGHT_BY_DENSITY[density] }}
+    >
+      {focused && (
+        <span
+          aria-hidden
+          className="absolute left-0 top-0 bottom-0 w-[3px] bg-primary shadow-[0_0_8px_var(--color-primary)]"
+        />
+      )}
+
+      {/* Selection toggle */}
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={selected}
+        aria-label={`${selected ? 'Deselect' : 'Select'} proxy ${proxy.name}`}
+        tabIndex={-1}
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggleSelect(proxy.id, index, e.shiftKey)
+        }}
+        className={cn(
+          'shrink-0 inline-flex items-center justify-center h-4 w-4 rounded-[--radius-sm]',
+          'border bg-input transition-colors duration-150',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+          selected ? 'bg-primary border-primary' : 'border-edge hover:border-primary/60'
+        )}
+      >
+        {selected && (
+          <svg aria-hidden viewBox="0 0 12 12" className="h-3 w-3 text-primary-foreground">
+            <path
+              d="M2.5 6.5l2.5 2.5 4.5-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+      </button>
+
+      {/* Status pill */}
+      {isTesting ? (
+        <Badge variant="muted" dot className="h-5 shrink-0 min-w-[68px] justify-start tabular-nums">
+          <Loader2 className="h-3 w-3 animate-spin -mr-0.5" />
+          Testing
+        </Badge>
+      ) : errorTooltip ? (
+        <Tooltip content={errorTooltip}>
+          <Badge
+            variant={status.variant}
+            dot
+            className="h-5 shrink-0 min-w-[68px] justify-start tabular-nums cursor-help"
+          >
+            {status.label}
+          </Badge>
+        </Tooltip>
+      ) : (
+        <Badge
+          variant={status.variant}
+          dot
+          className="h-5 shrink-0 min-w-[68px] justify-start tabular-nums"
+        >
+          {status.label}
+        </Badge>
+      )}
+
+      {/* Name + host (host stacks below name in comfortable; sits inline in compact) */}
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5 leading-tight">
+        <span className="font-medium text-foreground truncate">{proxy.name}</span>
+        {isComfortable && (
+          <span className="text-[11px] text-muted-foreground font-mono truncate">
+            {proxy.host}:{proxy.port}
+            {proxy.external_ip && proxy.external_ip !== proxy.host && (
+              <span className="text-muted-foreground/60"> → {proxy.external_ip}</span>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* Compact-density inline host:port — stays in name col when comfortable
+          mode already stacks it. Hidden on narrow viewports. */}
+      {!isComfortable && (
+        <span className="hidden md:inline-flex items-center text-[11px] text-muted-foreground/80 font-mono shrink-0 max-w-[200px] truncate">
+          {proxy.host}:{proxy.port}
+          {proxy.external_ip && proxy.external_ip !== proxy.host && (
+            <span className="text-muted-foreground/60"> → {proxy.external_ip}</span>
+          )}
+        </span>
+      )}
+
+      {/* Protocol badge */}
+      <Badge
+        variant={PROTOCOL_BADGE[proxy.protocol]}
+        className="h-5 px-1.5 text-[10px] shrink-0 hidden sm:inline-flex"
+      >
+        {proxy.protocol.toUpperCase()}
+      </Badge>
+
+      {/* Country chip */}
+      {proxy.country ? (
+        <span
+          role="img"
+          aria-label={`Country ${proxy.country.toUpperCase()}`}
+          className="hidden md:inline-flex items-center gap-1 text-[11px] text-muted-foreground shrink-0 w-[52px]"
+        >
+          <span aria-hidden>{countryFlag(proxy.country)}</span>
+          <span className="font-medium uppercase">{proxy.country.toUpperCase()}</span>
+        </span>
+      ) : (
+        <span className="hidden md:inline-block w-[52px] text-[11px] text-muted-foreground/40 shrink-0">
+          —
+        </span>
+      )}
+
+      {/* Reputation — focusable trigger */}
+      {isCheckingFraud ? (
+        <Badge variant="muted" dot className="h-5 shrink-0 inline-flex items-center gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Checking
+        </Badge>
+      ) : (
+        <Tooltip content={reputation.tooltip}>
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation()
+              onRecheckFraud(proxy.id)
+            }}
+            disabled={isCheckingFraud}
+            aria-label={reputation.ariaLabel}
+            className={cn(
+              'rounded-full shrink-0',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
+            )}
+          >
+            <Badge
+              variant={reputation.variant}
+              className="h-5 px-1.5 cursor-pointer inline-flex items-center gap-1 hover:opacity-80 transition-opacity"
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', reputation.dotClass)} aria-hidden />
+              {reputation.icon}
+              {reputation.label}
+            </Badge>
+          </button>
+        </Tooltip>
+      )}
+
+      {/* Speed */}
+      <span className="hidden md:inline-flex items-center gap-1.5 text-[11px] font-mono tabular-nums shrink-0 w-[60px]">
+        {proxy.check_ok && proxy.check_latency_ms != null ? (
+          <>
+            <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', speedClass)} aria-hidden />
+            <span className="text-foreground">{proxy.check_latency_ms}ms</span>
+          </>
+        ) : (
+          <span className="text-muted-foreground/40">—</span>
+        )}
+      </span>
+
+      {/* Last-check timestamp */}
+      <Tooltip
+        content={
+          proxy.last_check ? new Date(proxy.last_check).toLocaleString() : 'Never tested'
+        }
+      >
+        <time
+          dateTime={proxy.last_check ?? undefined}
+          aria-label={
+            proxy.last_check
+              ? `Last checked ${new Date(proxy.last_check).toLocaleString()}`
+              : 'Never tested'
+          }
+          tabIndex={0}
+          className="hidden lg:inline text-[11px] text-muted-foreground tabular-nums shrink-0 w-[64px] text-right"
+        >
+          {proxy.last_check ? formatShortRelative(proxy.last_check) : '—'}
+        </time>
+      </Tooltip>
+
+      {/* Row dropdown */}
+      <div className="flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenu
+          align="right"
+          items={rowActions}
+          trigger={
+            <button
+              type="button"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm] text-muted-foreground hover:text-foreground hover:bg-elevated transition-colors"
+              aria-label="Proxy actions"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          }
+        />
+      </div>
+    </div>
+  )
+}
+
+const ProxyRow = memo(ProxyRowComponent)
+
+// Compact relative time — keeps the column narrow enough for the dense layout.
+function formatShortRelative(iso: string): string {
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return '—'
+  const diff = Math.max(0, Date.now() - t)
+  const sec = Math.floor(diff / 1000)
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h`
+  const days = Math.floor(hr / 24)
+  if (days < 30) return `${days}d`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months}mo`
+  const years = Math.floor(days / 365)
+  return `${years}y`
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Main page
+// ──────────────────────────────────────────────────────────────────────────
 
 export function ProxiesPage(): React.JSX.Element {
-  // Store
+  // ── Stores ────────────────────────────────────────────────────────────
   const proxies = useProxiesStore((s) => s.proxies)
   const loading = useProxiesStore((s) => s.loading)
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
@@ -224,31 +794,51 @@ export function ProxiesPage(): React.JSX.Element {
   const confirm = useConfirmStore((s) => s.show)
   const addToast = useToastStore((s) => s.addToast)
 
-  // Local state
-  const [modalOpen, setModalOpen] = useState(false)
+  // ── Editor / import / IP-check state ──────────────────────────────────
+  const [editorOpen, setEditorOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [modalError, setModalError] = useState<string | null>(null)
-  const [modalSaving, setModalSaving] = useState(false)
-  const [modalTesting, setModalTesting] = useState(false)
+  const [editorError, setEditorError] = useState<string | null>(null)
+  const [editorSaving, setEditorSaving] = useState(false)
+  const [editorTesting, setEditorTesting] = useState(false)
+
   const [testingIds, setTestingIds] = useState<Set<string>>(new Set())
   const [checkingFraudIds, setCheckingFraudIds] = useState<Set<string>>(new Set())
+
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [importFilterFraud, setImportFilterFraud] = useState(true)
-  const [importProgress, setImportProgress] = useState<{ checked: number; total: number; risky: number } | null>(null)
-  // Standalone "Check IP" tool state
+  const [importProgress, setImportProgress] = useState<
+    { checked: number; total: number; risky: number } | null
+  >(null)
+  const [importParsed, setImportParsed] = useState<
+    { ok: boolean; data?: { name: string; host: string; port: number; protocol: string } }[] | null
+  >(null)
+
   const [ipCheckOpen, setIpCheckOpen] = useState(false)
   const [ipCheckInput, setIpCheckInput] = useState('')
   const [ipCheckLoading, setIpCheckLoading] = useState(false)
   const [ipCheckReport, setIpCheckReport] = useState<IpFraudReport | null>(null)
   const [ipCheckError, setIpCheckError] = useState<string | null>(null)
-  const [importParsed, setImportParsed] = useState<
-    { ok: boolean; data?: { name: string; host: string; port: number; protocol: string } }[] | null
-  >(null)
+
   const [bulkTesting, setBulkTesting] = useState(false)
+  const [bulkRecheckingFraud, setBulkRecheckingFraud] = useState(false)
+
   const [searchQuery, setSearchQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all')
+  const [protocolFilter, setProtocolFilter] = useState<ProtocolFilterValue>('all')
+  const [reputationFilter, setReputationFilter] = useState<ReputationFilterValue>('all')
+  const [groupFilter, setGroupFilter] = useState<string>('all')
+  const [density, setDensity] = useState<Density>(readDensityFromStorage)
+  const initialSort = useMemo(readSortFromStorage, [])
+  const [sortKey, setSortKey] = useState<SortKey>(initialSort.key)
+  const [sortDir, setSortDir] = useState<SortDir>(initialSort.dir)
+
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [focusedIdx, setFocusedIdx] = useState<number | null>(null)
+  const lastCheckedIdx = useRef<number | null>(null)
+
+  // Quick-paste / clear-creds (in editor sheet)
   const [quickPaste, setQuickPaste] = useState('')
   const [quickPasteHint, setQuickPasteHint] = useState<string | null>(null)
   const [quickPasteMultiline, setQuickPasteMultiline] = useState(false)
@@ -261,7 +851,32 @@ export function ProxiesPage(): React.JSX.Element {
   const prevProtocolRef = useRef<ProxyProtocol>('http')
   const quickPasteInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Form
+  // Right-click context menu
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    proxy: ProxyResponse
+  } | null>(null)
+
+  // Row refs (roving tabindex) + bulk floater focus
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const focusedIdRef = useRef<string | null>(null)
+  const registerRowRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (el) {
+      rowRefs.current.set(id, el)
+      if (focusedIdRef.current === id && document.activeElement !== el) {
+        el.focus({ preventScroll: true })
+      }
+    } else {
+      rowRefs.current.delete(id)
+    }
+  }, [])
+  const bulkFirstActionRef = useRef<HTMLButtonElement | null>(null)
+  const previousSelectionSize = useRef(0)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+
+  // ── Form ──────────────────────────────────────────────────────────────
   const {
     register,
     handleSubmit,
@@ -269,20 +884,42 @@ export function ProxiesPage(): React.JSX.Element {
     getValues,
     setValue,
     watch,
-    formState: { errors }
+    formState: { errors, isDirty: editorIsDirty }
   } = useForm<ProxyFormData>({
     resolver: zodResolver(proxySchema),
     defaultValues: DEFAULT_PROXY
   })
 
+  // Honor `prefers-reduced-motion: reduce` on imperative smooth scrolls so
+  // keyboard focus jumps don't animate when the user has motion turned off.
+  const prefersReducedMotion = useReducedMotion()
+
+  // ── Persist density / sort ────────────────────────────────────────────
+  useEffect(() => {
+    try {
+      localStorage.setItem(DENSITY_STORAGE_KEY, density)
+    } catch {
+      /* ignore */
+    }
+  }, [density])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: sortKey, dir: sortDir }))
+    } catch {
+      /* ignore */
+    }
+  }, [sortKey, sortDir])
+
+  // ── Initial fetch ─────────────────────────────────────────────────────
   useEffect(() => {
     fetchProxies()
   }, [fetchProxies])
 
-  // Auto-fraud-check fires after createProxy in the main process. Two events:
-  //   - 'metadata-checking' — lookup started; toggle the row's Checking spinner
-  //   - 'metadata-updated'  — lookup finished; refresh the list so the
-  //                           Reputation badge populates and clear the spinner.
+  // ── Auto-fraud-check events ───────────────────────────────────────────
+  // Fires after createProxy in the main process. Two events:
+  //   - 'metadata-checking' — toggle the row's Checking spinner
+  //   - 'metadata-updated'  — refresh list and clear the spinner
   useEffect(() => {
     const offChecking = api.onProxyMetadataChecking((data) => {
       setCheckingFraudIds((prev) => new Set(prev).add(data.proxy_id))
@@ -301,61 +938,123 @@ export function ProxiesPage(): React.JSX.Element {
     }
   }, [fetchProxies])
 
-  // Filtered list
-  const filteredProxies = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase()
-    if (!q) return proxies
-    return proxies.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.host.toLowerCase().includes(q) ||
-        p.protocol.includes(q)
-    )
-  }, [proxies, searchQuery])
-
-  const editingProxyHasPassword = useMemo(
-    () => (editingId ? proxies.find((p) => p.id === editingId)?.has_password ?? false : false),
-    [proxies, editingId]
-  )
-
-  const editingProxyHasUsername = useMemo(
-    () =>
-      editingId
-        ? Boolean(proxies.find((p) => p.id === editingId)?.username)
-        : false,
-    [proxies, editingId]
-  )
-
-  // Selection helpers
-  const allSelected = filteredProxies.length > 0 && filteredProxies.every((p) => selected.has(p.id))
-  const someSelected = selected.size > 0
-
-  const toggleAll = (): void => {
-    if (allSelected) {
-      setSelected(new Set())
-    } else {
-      setSelected(new Set(filteredProxies.map((p) => p.id)))
+  // ── Derived: groups / filtered / sorted ───────────────────────────────
+  const allGroups = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of proxies) {
+      if (p.group_tag) set.add(p.group_tag)
     }
-  }
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [proxies])
 
-  const toggleOne = (id: string): void => {
+  const filteredProxies = useMemo(() => {
+    let result = proxies
+
+    if (statusFilter !== 'all') {
+      result = result.filter((p) => {
+        if (statusFilter === 'untested') return p.last_check === null
+        if (statusFilter === 'working') return p.last_check !== null && p.check_ok
+        return p.last_check !== null && !p.check_ok
+      })
+    }
+
+    if (protocolFilter !== 'all') {
+      result = result.filter((p) => p.protocol === protocolFilter)
+    }
+
+    if (reputationFilter !== 'all') {
+      if (reputationFilter === 'unchecked') {
+        result = result.filter((p) => p.fraud_risk === null || p.last_fraud_check === null)
+      } else {
+        result = result.filter(
+          (p) => p.fraud_risk === reputationFilter && p.last_fraud_check !== null
+        )
+      }
+    }
+
+    if (groupFilter !== 'all') {
+      result = result.filter((p) => (p.group_tag ?? '') === groupFilter)
+    }
+
+    const q = searchQuery.trim().toLowerCase()
+    if (q) {
+      result = result.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.host.toLowerCase().includes(q) ||
+          p.protocol.includes(q) ||
+          (p.external_ip?.toLowerCase().includes(q) ?? false) ||
+          (p.country?.toLowerCase().includes(q) ?? false) ||
+          (p.group_tag?.toLowerCase().includes(q) ?? false)
+      )
+    }
+
+    return [...result].sort((a, b) => compareProxies(a, b, sortKey, sortDir))
+  }, [proxies, statusFilter, protocolFilter, reputationFilter, groupFilter, searchQuery, sortKey, sortDir])
+
+  // Clamp focused index when the filtered list shrinks below it.
+  useEffect(() => {
+    if (focusedIdx === null) return
+    if (focusedIdx >= filteredProxies.length) {
+      setFocusedIdx(filteredProxies.length > 0 ? filteredProxies.length - 1 : null)
+    }
+  }, [filteredProxies.length, focusedIdx])
+
+  const editingProxy = useMemo(
+    () => (editingId ? proxies.find((p) => p.id === editingId) ?? null : null),
+    [proxies, editingId]
+  )
+  const editingProxyHasPassword = editingProxy?.has_password ?? false
+  const editingProxyHasUsername = Boolean(editingProxy?.username)
+
+  // ── Selection ─────────────────────────────────────────────────────────
+  const handleToggleSelect = useCallback(
+    (id: string, index: number, shiftKey: boolean) => {
+      setSelected((prev) => {
+        const next = new Set(prev)
+        if (shiftKey && lastCheckedIdx.current !== null) {
+          const start = Math.min(lastCheckedIdx.current, index)
+          const end = Math.max(lastCheckedIdx.current, index)
+          for (let i = start; i <= end; i++) {
+            const p = filteredProxies[i]
+            if (p) next.add(p.id)
+          }
+        } else {
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+        }
+        lastCheckedIdx.current = index
+        return next
+      })
+    },
+    [filteredProxies]
+  )
+
+  const handleSelectAllVisible = useCallback(() => {
     setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
+      const allIds = filteredProxies.map((p) => p.id)
+      const allSelected = allIds.every((id) => prev.has(id))
+      if (allSelected) return new Set()
+      return new Set(allIds)
     })
-  }
+  }, [filteredProxies])
 
-  // ---------------------------------------------------------------------------
-  // Modal open/close
-  // ---------------------------------------------------------------------------
+  // ── Focus the first bulk action on 0→>0 selection edge ────────────────
+  useEffect(() => {
+    const prev = previousSelectionSize.current
+    const current = selected.size
+    if (prev === 0 && current > 0) {
+      bulkFirstActionRef.current?.focus()
+    }
+    previousSelectionSize.current = current
+  }, [selected])
 
-  const closeModal = useCallback(() => {
-    setModalOpen(false)
+  // ── Editor open/close ─────────────────────────────────────────────────
+  const closeEditor = useCallback(() => {
+    setEditorOpen(false)
     setEditingId(null)
-    setModalError(null)
-    setModalTesting(false)
+    setEditorError(null)
+    setEditorTesting(false)
     setQuickPaste('')
     setQuickPasteHint(null)
     setQuickPasteMultiline(false)
@@ -365,10 +1064,10 @@ export function ProxiesPage(): React.JSX.Element {
     reset(DEFAULT_PROXY)
   }, [reset])
 
-  const openAdd = (): void => {
+  const openAdd = useCallback((): void => {
     reset(DEFAULT_PROXY)
     setEditingId(null)
-    setModalError(null)
+    setEditorError(null)
     setQuickPaste('')
     setQuickPasteHint(null)
     setQuickPasteMultiline(false)
@@ -376,41 +1075,41 @@ export function ProxiesPage(): React.JSX.Element {
     setQuickPasteFilled(false)
     setClearCreds({ username: false, password: false })
     prevProtocolRef.current = DEFAULT_PROXY.protocol
-    setModalOpen(true)
-  }
+    setEditorOpen(true)
+  }, [reset])
 
-  const openEdit = (proxy: ProxyResponse): void => {
-    reset({
-      name: proxy.name,
-      protocol: proxy.protocol,
-      host: proxy.host,
-      port: proxy.port,
-      username: proxy.username ?? '',
-      password: '',
-      country: proxy.country ?? '',
-      group_tag: proxy.group_tag ?? ''
-    })
-    setEditingId(proxy.id)
-    setModalError(null)
-    setQuickPaste('')
-    setQuickPasteHint(null)
-    setQuickPasteMultiline(false)
-    setQuickPasteParsing(false)
-    setQuickPasteFilled(false)
-    setClearCreds({ username: false, password: false })
-    prevProtocolRef.current = proxy.protocol
-    setModalOpen(true)
-  }
+  const openEdit = useCallback(
+    (proxy: ProxyResponse): void => {
+      reset({
+        name: proxy.name,
+        protocol: proxy.protocol,
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.username ?? '',
+        password: '',
+        country: proxy.country ?? '',
+        group_tag: proxy.group_tag ?? ''
+      })
+      setEditingId(proxy.id)
+      setEditorError(null)
+      setQuickPaste('')
+      setQuickPasteHint(null)
+      setQuickPasteMultiline(false)
+      setQuickPasteParsing(false)
+      setQuickPasteFilled(false)
+      setClearCreds({ username: false, password: false })
+      prevProtocolRef.current = proxy.protocol
+      setEditorOpen(true)
+    },
+    [reset]
+  )
 
-  // ---------------------------------------------------------------------------
-  // Protocol → default port auto-swap (only when current port is a known default)
-  // ---------------------------------------------------------------------------
-
+  // ── Protocol → default port auto-swap ─────────────────────────────────
   const watchedProtocol = watch('protocol')
   const watchedUsername = watch('username')
   const watchedPassword = watch('password')
   useEffect(() => {
-    if (!modalOpen) return
+    if (!editorOpen) return
     const prev = prevProtocolRef.current
     if (prev === watchedProtocol) return
     prevProtocolRef.current = watchedProtocol
@@ -418,12 +1117,9 @@ export function ProxiesPage(): React.JSX.Element {
     if (KNOWN_DEFAULT_PORTS.has(currentPort)) {
       setValue('port', PROTOCOL_DEFAULT_PORT[watchedProtocol], { shouldDirty: true })
     }
-  }, [watchedProtocol, modalOpen, getValues, setValue])
+  }, [watchedProtocol, editorOpen, getValues, setValue])
 
-  // ---------------------------------------------------------------------------
-  // Quick-paste: parse a single proxy string and auto-fill the form
-  // ---------------------------------------------------------------------------
-
+  // ── Quick-paste parser ────────────────────────────────────────────────
   const applyParsedProxy = useCallback(
     (data: ProxyInput): void => {
       setValue('protocol', data.protocol, { shouldDirty: true, shouldValidate: true })
@@ -481,43 +1177,32 @@ export function ProxiesPage(): React.JSX.Element {
   )
 
   useEffect(() => {
-    if (!modalOpen) return
+    if (!editorOpen) return
     const timer = setTimeout(() => {
       void runQuickPasteParse(quickPaste)
     }, QUICK_PASTE_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [quickPaste, modalOpen, runQuickPasteParse])
+  }, [quickPaste, editorOpen, runQuickPasteParse])
 
-  // Clear the transient "✓ Filled" success hint after a short delay.
   useEffect(() => {
     if (!quickPasteFilled) return
     const t = setTimeout(() => setQuickPasteFilled(false), QUICK_PASTE_FILLED_MS)
     return () => clearTimeout(t)
   }, [quickPasteFilled])
 
-  // Autofocus the quick-paste input when the modal opens for faster workflows.
-  // Only in Add mode — in Edit mode a stray paste would overwrite saved fields.
   useEffect(() => {
-    if (!modalOpen || editingId) return
+    if (!editorOpen || editingId) return
     const id = window.setTimeout(() => quickPasteInputRef.current?.focus(), 50)
     return () => window.clearTimeout(id)
-  }, [modalOpen, editingId])
+  }, [editorOpen, editingId])
 
-  // ---------------------------------------------------------------------------
-  // CRUD / test handlers
-  // ---------------------------------------------------------------------------
-
+  // ── CRUD / test handlers ──────────────────────────────────────────────
   const buildProxyInput = (data: ProxyFormData, isUpdate: boolean): ProxyInput => {
     const country = data.country.trim().toUpperCase()
     const groupTag = data.group_tag.trim()
     const username = data.username
     const password = data.password
 
-    // Tri-state rules (update):
-    //   non-empty input       → send value (set)
-    //   empty + clear flag    → send null  (clear)
-    //   empty + no clear flag → send undefined (keep)
-    // Create: keep legacy behavior (empty → undefined means "no credential").
     const resolveCred = (
       value: string,
       clearFlag: boolean
@@ -541,8 +1226,8 @@ export function ProxiesPage(): React.JSX.Element {
 
   const onSubmitProxy = async (data: ProxyFormData): Promise<void> => {
     try {
-      setModalSaving(true)
-      setModalError(null)
+      setEditorSaving(true)
+      setEditorError(null)
       const input = buildProxyInput(data, Boolean(editingId))
       if (editingId) {
         await api.updateProxy(editingId, input)
@@ -550,23 +1235,24 @@ export function ProxiesPage(): React.JSX.Element {
         await api.createProxy(input)
       }
       await fetchProxies()
-      closeModal()
+      closeEditor()
       addToast(editingId ? 'Proxy updated' : 'Proxy created', 'success')
     } catch (err: unknown) {
-      setModalError(err instanceof Error ? err.message : 'Failed to save proxy')
+      setEditorError(err instanceof Error ? err.message : 'Failed to save proxy')
     } finally {
-      setModalSaving(false)
+      setEditorSaving(false)
     }
   }
 
-  const handleDelete = async (id: string, name: string): Promise<void> => {
-    const ok = await confirm({
-      title: 'Delete Proxy',
-      message: `Delete proxy "${name}"?`,
-      confirmLabel: 'Delete',
-      danger: true
-    })
-    if (ok) {
+  const handleDelete = useCallback(
+    async (id: string, name: string): Promise<void> => {
+      const ok = await confirm({
+        title: 'Delete Proxy',
+        message: `Delete proxy "${name}"?`,
+        confirmLabel: 'Delete',
+        danger: true
+      })
+      if (!ok) return
       try {
         await deleteProxy(id)
         setSelected((prev) => {
@@ -578,28 +1264,32 @@ export function ProxiesPage(): React.JSX.Element {
       } catch (err) {
         addToast(`Delete failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
       }
-    }
-  }
+    },
+    [confirm, deleteProxy, addToast]
+  )
 
-  const handleTest = async (id: string): Promise<void> => {
-    setTestingIds((prev) => new Set(prev).add(id))
-    try {
-      await testProxy(id)
-      await fetchProxies()
-      const updated = useProxiesStore.getState().proxies.find((p) => p.id === id)
-      addToast(
-        updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
-        updated?.check_ok ? 'success' : 'error'
-      )
-    } catch {
-      addToast('Proxy test failed', 'error')
-    }
-    setTestingIds((prev) => {
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
-  }
+  const handleTest = useCallback(
+    async (id: string): Promise<void> => {
+      setTestingIds((prev) => new Set(prev).add(id))
+      try {
+        await testProxy(id)
+        await fetchProxies()
+        const updated = useProxiesStore.getState().proxies.find((p) => p.id === id)
+        addToast(
+          updated?.check_ok ? 'Proxy test passed' : 'Proxy test failed',
+          updated?.check_ok ? 'success' : 'error'
+        )
+      } catch {
+        addToast('Proxy test failed', 'error')
+      }
+      setTestingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    },
+    [testProxy, fetchProxies, addToast]
+  )
 
   const handleStandaloneIpCheck = async (): Promise<void> => {
     const ip = ipCheckInput.trim()
@@ -620,49 +1310,56 @@ export function ProxiesPage(): React.JSX.Element {
     setIpCheckLoading(false)
   }
 
-  const handleRecheckFraud = async (id: string): Promise<void> => {
-    // Functional set update so a double-click within one render tick can't
-    // fire a duplicate ip-api request — second call sees `prev.has(id)` and
-    // bails before the network hit.
-    let alreadyChecking = false
-    setCheckingFraudIds((prev) => {
-      if (prev.has(id)) {
-        alreadyChecking = true
-        return prev
-      }
-      const next = new Set(prev)
-      next.add(id)
-      return next
-    })
-    if (alreadyChecking) return
+  const handleRecheckFraud = useCallback(
+    async (id: string): Promise<void> => {
+      let alreadyChecking = false
+      setCheckingFraudIds((prev) => {
+        if (prev.has(id)) {
+          alreadyChecking = true
+          return prev
+        }
+        const next = new Set(prev)
+        next.add(id)
+        return next
+      })
+      if (alreadyChecking) return
 
-    try {
-      const result = await api.lookupProxyGeo(id)
-      await fetchProxies()
-      if (result === null) {
-        addToast('Reputation check failed — proxy may be down or rate-limited', 'error')
-      } else if (result.fraud_risk === 'high') {
-        // The result IS the recheck succeeding — Risky is a verdict, not an
-        // error. Use 'warning' so the toast colour matches the badge meaning.
-        addToast('Proxy IP flagged as risky (datacenter / known proxy)', 'warning')
-      } else if (result.fraud_risk === 'unknown') {
-        addToast('Reputation: unknown — ip-api returned no risk signals', 'info')
-      } else {
-        addToast('Reputation: clean', 'success')
+      try {
+        const result = await api.lookupProxyGeo(id)
+        await fetchProxies()
+        if (result === null) {
+          addToast('Reputation check failed — proxy may be down or rate-limited', 'error')
+        } else if (result.fraud_risk === 'high') {
+          addToast('Proxy IP flagged as risky (datacenter / known proxy)', 'warning')
+        } else if (result.fraud_risk === 'unknown') {
+          addToast('Reputation: unknown — ip-api returned no risk signals', 'info')
+        } else {
+          addToast('Reputation: clean', 'success')
+        }
+      } catch {
+        addToast('Reputation check failed', 'error')
       }
-    } catch {
-      addToast('Reputation check failed', 'error')
-    }
-    setCheckingFraudIds((prev) => {
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
-  }
+      setCheckingFraudIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    },
+    [fetchProxies, addToast]
+  )
 
-  const handleTestInModal = async (): Promise<void> => {
+  // Stable wrapper passed down to memoized rows. Returns void so the row
+  // doesn't have to know about the underlying Promise.
+  const handleRowRecheckFraud = useCallback(
+    (id: string): void => {
+      void handleRecheckFraud(id)
+    },
+    [handleRecheckFraud]
+  )
+
+  const handleTestInEditor = async (): Promise<void> => {
     if (!editingId) return
-    setModalTesting(true)
+    setEditorTesting(true)
     try {
       await testProxy(editingId)
       const updated = useProxiesStore.getState().proxies.find((p) => p.id === editingId)
@@ -673,40 +1370,78 @@ export function ProxiesPage(): React.JSX.Element {
     } catch (err) {
       addToast(`Test failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
     } finally {
-      setModalTesting(false)
+      setEditorTesting(false)
     }
   }
 
-  const handleCopy = (proxy: ProxyResponse): void => {
-    const auth = proxy.username ? `${proxy.username}@` : ''
-    const str = `${proxy.protocol}://${auth}${proxy.host}:${proxy.port}`
-    navigator.clipboard.writeText(str)
-    addToast('Copied to clipboard', 'success')
-  }
+  const handleCopy = useCallback(
+    async (proxy: ProxyResponse): Promise<void> => {
+      try {
+        const conn = await api.getProxyConnectionString(proxy.id)
+        await navigator.clipboard.writeText(conn)
+        addToast('Connection string copied', 'success')
+      } catch {
+        // Fallback: build it client-side without password.
+        const auth = proxy.username ? `${proxy.username}@` : ''
+        const str = `${proxy.protocol}://${auth}${proxy.host}:${proxy.port}`
+        try {
+          await navigator.clipboard.writeText(str)
+          addToast('Copied (without password)', 'info')
+        } catch {
+          addToast('Copy failed', 'error')
+        }
+      }
+    },
+    [addToast]
+  )
 
-  // ---------------------------------------------------------------------------
-  // Bulk actions
-  // ---------------------------------------------------------------------------
-
-  const bulkTestSelected = async (): Promise<void> => {
+  // ── Bulk actions ──────────────────────────────────────────────────────
+  const bulkTestSelected = useCallback(async (): Promise<void> => {
     const ids = [...selected]
+    if (ids.length === 0) return
     setBulkTesting(true)
     try {
       await api.bulkTestProxies(ids)
       await fetchProxies()
-      addToast(`Tested ${ids.length} proxies`, 'success')
+      addToast(`Tested ${ids.length} prox${ids.length === 1 ? 'y' : 'ies'}`, 'success')
     } catch {
       addToast('Bulk test failed', 'error')
     }
     setBulkTesting(false)
-  }
+  }, [selected, fetchProxies, addToast])
 
-  const bulkDeleteSelected = async (): Promise<void> => {
+  const bulkRecheckFraud = useCallback(async (): Promise<void> => {
     const ids = [...selected]
+    if (ids.length === 0) return
+    setBulkRecheckingFraud(true)
+    addToast(`Rechecking reputation for ${ids.length} prox${ids.length === 1 ? 'y' : 'ies'}…`, 'info', {
+      duration: 2000,
+      silent: true
+    })
+    let ok = 0
+    let fail = 0
+    for (const id of ids) {
+      try {
+        const r = await api.lookupProxyGeo(id)
+        if (r) ok++
+        else fail++
+      } catch {
+        fail++
+      }
+    }
+    await fetchProxies()
+    if (fail === 0) addToast(`Reputation refreshed for ${ok}`, 'success')
+    else addToast(`${ok} refreshed, ${fail} failed`, 'warning')
+    setBulkRecheckingFraud(false)
+  }, [selected, fetchProxies, addToast])
+
+  const bulkDeleteSelected = useCallback(async (): Promise<void> => {
+    const ids = [...selected]
+    if (ids.length === 0) return
     const ok = await confirm({
       title: 'Delete Proxies',
-      message: `Delete ${ids.length} selected proxies?`,
-      confirmLabel: 'Delete All',
+      message: `Delete ${ids.length} selected prox${ids.length === 1 ? 'y' : 'ies'}? This action cannot be undone.`,
+      confirmLabel: ids.length === 1 ? 'Delete' : 'Delete All',
       danger: true
     })
     if (!ok) return
@@ -720,39 +1455,65 @@ export function ProxiesPage(): React.JSX.Element {
       }
     }
     setSelected(new Set())
-    addToast(`Deleted ${deleted} proxies`, 'success')
-  }
+    addToast(`Deleted ${deleted} prox${deleted === 1 ? 'y' : 'ies'}`, 'success')
+  }, [selected, confirm, deleteProxy, addToast])
 
-  const bulkExportSelected = (): void => {
-    const ids = new Set(selected)
-    const lines = proxies
-      .filter((p) => ids.has(p.id))
-      .map((p) => {
-        const auth = p.username ? `${p.username}@` : ''
-        return `${p.protocol}://${auth}${p.host}:${p.port}`
-      })
-    navigator.clipboard.writeText(lines.join('\n'))
-    addToast(`Exported ${lines.length} proxies to clipboard`, 'success')
-  }
-
-  // ---------------------------------------------------------------------------
-  // Import
-  // ---------------------------------------------------------------------------
-
-  const closeImport = (): void => {
+  // ── Import flow ───────────────────────────────────────────────────────
+  const closeImport = useCallback((): void => {
     setImportOpen(false)
     setImportText('')
     setImportParsed(null)
-  }
+    setImportProgress(null)
+  }, [])
 
-  // Route multi-line paste from the quick-paste input into the bulk import modal.
+  // Dirty-state-aware close paths used by the Sheet ESC handler / overlay
+  // click. The in-panel header X / footer Cancel buttons keep using
+  // `closeEditor` / `closeImport` directly; the spec calls for a confirm
+  // ONLY when the user attempts a close that bypasses those explicit paths.
+  const requestCloseEditor = useCallback(async (): Promise<void> => {
+    if (!editorIsDirty) {
+      closeEditor()
+      return
+    }
+    const ok = await confirm({
+      title: 'Discard unsaved changes?',
+      message: 'You have edits in this proxy that will be lost if you continue.',
+      confirmLabel: 'Discard',
+      danger: true
+    })
+    if (ok) closeEditor()
+  }, [editorIsDirty, closeEditor, confirm])
+
+  // The import Sheet has two effective dirty states: the user typed/pasted
+  // proxies into the textarea (`importText`), or the parse step ran and
+  // there's a preview list (`importParsed`). Either is non-trivial work to
+  // re-do, so closing without confirm would be a regression.
+  const importHasPendingWork = useCallback(
+    (): boolean => importText.trim().length > 0 || importParsed !== null,
+    [importText, importParsed]
+  )
+  const requestCloseImport = useCallback(async (): Promise<void> => {
+    if (!importHasPendingWork()) {
+      closeImport()
+      return
+    }
+    const ok = await confirm({
+      title: 'Discard import?',
+      message: 'Your pasted proxies and any preview will be cleared.',
+      confirmLabel: 'Discard',
+      danger: true
+    })
+    if (ok) closeImport()
+  }, [importHasPendingWork, closeImport, confirm])
+
+  // Route multi-line paste from the editor's quick-paste into the bulk import sheet.
   const openBulkImportWithText = useCallback(
     (text: string): void => {
-      // Close the add/edit modal (form state is discarded — acceptable per spec).
-      setModalOpen(false)
+      // Discard editor form state — explicit per spec.
+      setEditorOpen(false)
       setEditingId(null)
-      setModalError(null)
-      setModalTesting(false)
+      setEditorError(null)
+      setEditorTesting(false)
       setQuickPaste('')
       setQuickPasteHint(null)
       setQuickPasteMultiline(false)
@@ -760,7 +1521,6 @@ export function ProxiesPage(): React.JSX.Element {
       setQuickPasteFilled(false)
       setClearCreds({ username: false, password: false })
       reset(DEFAULT_PROXY)
-      // Prefill + open the bulk-import modal.
       setImportParsed(null)
       setImportText(text)
       setImportOpen(true)
@@ -790,8 +1550,7 @@ export function ProxiesPage(): React.JSX.Element {
     let skippedError = 0
 
     if (importFilterFraud) {
-      // Reputation-filtered path: dry-run each candidate first, only persist
-      // proxies whose IP isn't on a hosting / known-proxy ASN. Sequential to
+      // Reputation-filtered path: dry-run each candidate first; sequential to
       // stay under ip-api's 45 req/min free-tier ceiling and to keep the
       // progress counter monotonic for the user.
       setImportProgress({ checked: 0, total: validRows.length, risky: 0 })
@@ -802,13 +1561,9 @@ export function ProxiesPage(): React.JSX.Element {
           const probe = await api.dryRunFraudCheck(
             row.data as Parameters<typeof api.dryRunFraudCheck>[0]
           )
-          // Drop everything that's high / critical / unknown / null. Keep
-          // clean / low / medium — medium covers residential pools that one
-          // provider tagged as proxy-listed but the other didn't, which is
-          // typical for dual-purpose IPs the user may still want.
+          // Drop high / critical / unknown / null. Keep clean / low / medium.
           const verdict = probe?.fraud_risk
-          const keep =
-            verdict === 'clean' || verdict === 'low' || verdict === 'medium'
+          const keep = verdict === 'clean' || verdict === 'low' || verdict === 'medium'
           if (!keep) {
             skippedRisky++
           } else {
@@ -821,8 +1576,8 @@ export function ProxiesPage(): React.JSX.Element {
         setImportProgress({ checked: i + 1, total: validRows.length, risky: skippedRisky })
       }
     } else {
-      // Unfiltered path: keep the original behavior — persist every parsed
-      // line; the auto-fraud-check still fires per row but doesn't gate creation.
+      // Unfiltered path: persist every parsed line; the auto-fraud-check still
+      // fires per row but doesn't gate creation.
       for (const r of validRows) {
         if (!r.data) continue
         try {
@@ -841,7 +1596,7 @@ export function ProxiesPage(): React.JSX.Element {
       if (skippedError > 0) parts.push(`${skippedError} errors`)
       addToast(parts.join(' • '), skippedRisky > 0 ? 'warning' : 'success')
     } else {
-      addToast(`Imported ${created} proxy/proxies`, 'success')
+      addToast(`Imported ${created} prox${created === 1 ? 'y' : 'ies'}`, 'success')
     }
     setImportProgress(null)
     closeImport()
@@ -862,82 +1617,646 @@ export function ProxiesPage(): React.JSX.Element {
     input.click()
   }
 
-  // ---------------------------------------------------------------------------
-  // Loading state
-  // ---------------------------------------------------------------------------
+  const openIpCheck = useCallback((): void => {
+    setIpCheckOpen(true)
+    setIpCheckInput('')
+    setIpCheckReport(null)
+    setIpCheckError(null)
+  }, [])
 
-  if (loading) {
+  // ── Row context menu / dropdown actions ───────────────────────────────
+  // Lazy builder: the row memoizes the resulting array keyed by the proxy
+  // identity + the two transient flags that alter `disabled` on individual
+  // items. This callback's identity stays stable so memoized rows aren't
+  // forced to re-render on unrelated parent updates (filter typing, scroll).
+  const getActionsForProxy = useCallback(
+    (proxy: ProxyResponse, isTesting: boolean, isCheckingFraud: boolean): DropdownMenuItem[] => [
+      {
+        label: 'Test',
+        icon: <FlaskConical className="h-4 w-4" />,
+        onClick: () => void handleTest(proxy.id),
+        disabled: isTesting
+      },
+      {
+        label: 'Recheck reputation',
+        icon: <RefreshCw className="h-4 w-4" />,
+        onClick: () => void handleRecheckFraud(proxy.id),
+        disabled: isCheckingFraud
+      },
+      {
+        label: 'Edit',
+        icon: <Pencil className="h-4 w-4" />,
+        onClick: () => openEdit(proxy)
+      },
+      {
+        label: 'Copy connection string',
+        icon: <Copy className="h-4 w-4" />,
+        onClick: () => void handleCopy(proxy)
+      },
+      {
+        label: 'Delete',
+        icon: <Trash2 className="h-4 w-4" />,
+        variant: 'danger',
+        onClick: () => void handleDelete(proxy.id, proxy.name)
+      }
+    ],
+    [handleTest, handleRecheckFraud, openEdit, handleCopy, handleDelete]
+  )
+
+  const handleClickRow = useCallback(
+    (proxy: ProxyResponse): void => {
+      openEdit(proxy)
+    },
+    [openEdit]
+  )
+
+  const handleRowContextMenu = useCallback(
+    (e: ReactMouseEvent, proxy: ProxyResponse): void => {
+      e.preventDefault()
+      setContextMenu({ x: e.clientX, y: e.clientY, proxy })
+    },
+    []
+  )
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────
+  // Global scope: Ctrl/Cmd+N|F|A, /, Esc — fire from anywhere on the page.
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      const inEditableTarget = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+
+      if (inEditableTarget) {
+        if (e.key === 'Escape') {
+          target?.blur()
+          return
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+          e.preventDefault()
+          searchInputRef.current?.focus()
+          return
+        }
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        openAdd()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        handleSelectAllVisible()
+        return
+      }
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+        return
+      }
+      if (e.key === 'Escape') {
+        // Sheet ESC is owned by Radix via `onEscapeKeyDown` (which routes
+        // through `requestClose*` and the dirty-state confirm). The global
+        // listener only handles ESC for non-Sheet UI (IP check Dialog,
+        // selection clear, focus drop) so it doesn't double-close the Sheet.
+        if (editorOpen || importOpen) return
+        if (ipCheckOpen) setIpCheckOpen(false)
+        else if (selected.size > 0) setSelected(new Set())
+        else if (focusedIdx !== null) setFocusedIdx(null)
+      }
+    }
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [
+    editorOpen,
+    importOpen,
+    ipCheckOpen,
+    selected.size,
+    focusedIdx,
+    openAdd,
+    handleSelectAllVisible
+  ])
+
+  // Listbox-scoped shortcuts.
+  const handleListboxKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>): void => {
+      if (editorOpen || importOpen || ipCheckOpen || e.altKey) return
+      if (filteredProxies.length === 0) return
+
+      const navigateTo = (next: number | null): void => {
+        e.preventDefault()
+        setFocusedIdx(next)
+      }
+
+      if (e.key === 'ArrowDown') {
+        navigateTo(
+          focusedIdx === null
+            ? 0
+            : Math.min(filteredProxies.length - 1, focusedIdx + 1)
+        )
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        navigateTo(focusedIdx === null ? 0 : Math.max(0, focusedIdx - 1))
+        return
+      }
+      if (e.key === 'Home') {
+        navigateTo(0)
+        return
+      }
+      if (e.key === 'End') {
+        navigateTo(filteredProxies.length - 1)
+        return
+      }
+      if (focusedIdx === null) return
+
+      const focused = filteredProxies[focusedIdx]
+      if (!focused) return
+
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        openEdit(focused)
+      } else if (e.key === ' ') {
+        e.preventDefault()
+        setSelected((prev) => {
+          const next = new Set(prev)
+          if (next.has(focused.id)) next.delete(focused.id)
+          else next.add(focused.id)
+          return next
+        })
+      } else if (e.key === 'Delete') {
+        e.preventDefault()
+        void handleDelete(focused.id, focused.name)
+      } else if (e.key.toLowerCase() === 't') {
+        e.preventDefault()
+        void handleTest(focused.id)
+      } else if (e.key.toLowerCase() === 'e') {
+        e.preventDefault()
+        openEdit(focused)
+      } else if (e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        openAdd()
+      }
+    },
+    [
+      editorOpen,
+      importOpen,
+      ipCheckOpen,
+      focusedIdx,
+      filteredProxies,
+      openEdit,
+      handleDelete,
+      handleTest,
+      openAdd
+    ]
+  )
+
+  // Bring focused row into view + claim DOM focus.
+  useEffect(() => {
+    if (focusedIdx === null) {
+      focusedIdRef.current = null
+      return
+    }
+    const proxy = filteredProxies[focusedIdx]
+    if (!proxy) return
+    focusedIdRef.current = proxy.id
+    const targetEl = rowRefs.current.get(proxy.id)
+    if (!targetEl) return
+    if (document.activeElement !== targetEl) {
+      targetEl.focus({ preventScroll: true })
+    }
+    // Bring into view.
+    const sc = scrollRef.current
+    if (sc) {
+      const scrollBehavior: ScrollBehavior = prefersReducedMotion ? 'auto' : 'smooth'
+      const rect = targetEl.getBoundingClientRect()
+      const scRect = sc.getBoundingClientRect()
+      if (rect.top < scRect.top) {
+        sc.scrollBy({ top: rect.top - scRect.top, behavior: scrollBehavior })
+      } else if (rect.bottom > scRect.bottom) {
+        sc.scrollBy({ top: rect.bottom - scRect.bottom, behavior: scrollBehavior })
+      }
+    }
+  }, [focusedIdx, filteredProxies, prefersReducedMotion])
+
+  // ── Misc derived ───────────────────────────────────────────────────────
+  const hasSelection = selected.size > 0
+  const hasActiveFilters =
+    statusFilter !== 'all' ||
+    protocolFilter !== 'all' ||
+    reputationFilter !== 'all' ||
+    groupFilter !== 'all' ||
+    searchQuery.trim().length > 0
+
+  const handleClearAllFilters = useCallback((): void => {
+    setSearchQuery('')
+    setStatusFilter('all')
+    setProtocolFilter('all')
+    setReputationFilter('all')
+    setGroupFilter('all')
+  }, [])
+
+  // ── Stable filter-chip handlers ───────────────────────────────────────
+  // Stable callbacks let `React.memo` on FilterChip short-circuit on
+  // unrelated parent updates (search keystrokes, scroll, focus drift).
+  // Per-value handlers are clearer than a higher-order factory at this
+  // scale (<20 chips total).
+  const setStatusWorking = useCallback(() => setStatusFilter('working'), [])
+  const setStatusFailed = useCallback(() => setStatusFilter('failed'), [])
+  const setStatusUntested = useCallback(() => setStatusFilter('untested'), [])
+  const clearStatusFilter = useCallback(() => setStatusFilter('all'), [])
+
+  const setProtocolHttp = useCallback(() => setProtocolFilter('http'), [])
+  const setProtocolHttps = useCallback(() => setProtocolFilter('https'), [])
+  const setProtocolSocks4 = useCallback(() => setProtocolFilter('socks4'), [])
+  const setProtocolSocks5 = useCallback(() => setProtocolFilter('socks5'), [])
+  const clearProtocolFilter = useCallback(() => setProtocolFilter('all'), [])
+
+  const setReputationClean = useCallback(() => setReputationFilter('clean'), [])
+  const setReputationLow = useCallback(() => setReputationFilter('low'), [])
+  const setReputationMedium = useCallback(() => setReputationFilter('medium'), [])
+  const setReputationHigh = useCallback(() => setReputationFilter('high'), [])
+  const setReputationCritical = useCallback(() => setReputationFilter('critical'), [])
+  const setReputationUnchecked = useCallback(() => setReputationFilter('unchecked'), [])
+  const clearReputationFilter = useCallback(() => setReputationFilter('all'), [])
+
+  // Editor / import Sheets shrink with the viewport so the user keeps a
+  // sliver of list visible behind the panel on the layout's hard 900px
+  // minimum. Floored at EDITOR_SHEET_MIN_WIDTH_PX so the form doesn't crush.
+  const viewportWidth = useViewportWidth()
+  const editorSheetWidth = Math.min(
+    EDITOR_SHEET_WIDTH_PX,
+    Math.max(EDITOR_SHEET_MIN_WIDTH_PX, viewportWidth - EDITOR_SHEET_CONTEXT_RESERVE_PX)
+  )
+  const importSheetWidth = Math.min(
+    IMPORT_SHEET_WIDTH_PX,
+    Math.max(EDITOR_SHEET_MIN_WIDTH_PX, viewportWidth - EDITOR_SHEET_CONTEXT_RESERVE_PX)
+  )
+
+  // ── Loading skeleton ───────────────────────────────────────────────────
+  if (loading && proxies.length === 0) {
     return (
-      <div className="p-6 flex flex-col h-full">
-        <div className="flex items-center justify-between mb-5 shrink-0">
-          <div className="flex items-center gap-3">
-            <h1 className="text-[22px] font-semibold text-content tracking-tight">Proxies</h1>
-            <div className="h-5 w-8 rounded-full shimmer" />
-          </div>
-        </div>
-        <div className="flex-1 min-h-0 bg-card rounded-[--radius-lg] border border-edge/80 surface-lit shadow-[var(--shadow-sm)] overflow-hidden">
+      <div className="flex-1 flex flex-col bg-background">
+        <div className="h-12 border-b border-border/50" />
+        <div className="flex-1 p-4 space-y-1.5">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-4 px-4 py-3 border-b border-edge/40 last:border-0">
-              <div className="h-4 w-4 rounded shimmer" />
-              <div className="h-3 w-40 rounded shimmer" />
-              <div className="h-3 w-16 rounded shimmer" />
-              <div className="h-3 w-56 rounded shimmer" />
-              <div className="ml-auto h-3 w-20 rounded shimmer" />
-            </div>
+            <div key={i} className="h-10 rounded-[--radius-md] shimmer" />
           ))}
         </div>
       </div>
     )
   }
 
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
-
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
-    <div className="p-6 flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5 shrink-0">
-        <div className="flex items-center gap-3">
-          <h1 className="text-[22px] font-semibold text-content tracking-tight">Proxies</h1>
-          <Badge variant="muted">{proxies.length}</Badge>
+    <div className="flex-1 flex flex-col min-h-0 bg-background relative">
+      {/* ── Sticky filter strip ───────────────────────────────────────── */}
+      <div
+        className={cn(
+          'sticky top-0 z-10 shrink-0 flex items-center gap-2 px-4 h-12 min-w-0',
+          'bg-card/85 backdrop-blur-sm border-b border-border/50'
+        )}
+      >
+        <SearchInput
+          ref={searchInputRef}
+          id="proxy-search"
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search proxies…"
+          className="w-[280px] shrink-0"
+          matchCount={filteredProxies.length}
+        />
+
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto scrollbar-hide">
+          {/* Status */}
+          <FilterChip
+            active={statusFilter === 'working'}
+            onClick={setStatusWorking}
+            onClear={clearStatusFilter}
+            dotClass="bg-ok"
+          >
+            Working
+          </FilterChip>
+          <FilterChip
+            active={statusFilter === 'failed'}
+            onClick={setStatusFailed}
+            onClear={clearStatusFilter}
+            dotClass="bg-destructive"
+          >
+            Failed
+          </FilterChip>
+          <FilterChip
+            active={statusFilter === 'untested'}
+            onClick={setStatusUntested}
+            onClear={clearStatusFilter}
+            dotClass="bg-muted-foreground/60"
+          >
+            Untested
+          </FilterChip>
+
+          <div className="h-5 w-px bg-border/60 mx-1" />
+
+          {/* Protocol */}
+          <FilterChip
+            active={protocolFilter === 'http'}
+            onClick={setProtocolHttp}
+            onClear={clearProtocolFilter}
+          >
+            HTTP
+          </FilterChip>
+          <FilterChip
+            active={protocolFilter === 'https'}
+            onClick={setProtocolHttps}
+            onClear={clearProtocolFilter}
+          >
+            HTTPS
+          </FilterChip>
+          <FilterChip
+            active={protocolFilter === 'socks4'}
+            onClick={setProtocolSocks4}
+            onClear={clearProtocolFilter}
+          >
+            SOCKS4
+          </FilterChip>
+          <FilterChip
+            active={protocolFilter === 'socks5'}
+            onClick={setProtocolSocks5}
+            onClear={clearProtocolFilter}
+          >
+            SOCKS5
+          </FilterChip>
+
+          <div className="h-5 w-px bg-border/60 mx-1" />
+
+          {/* Reputation */}
+          <FilterChip
+            active={reputationFilter === 'clean'}
+            onClick={setReputationClean}
+            onClear={clearReputationFilter}
+            dotClass={FRAUD_DOT_CLASS.clean}
+          >
+            Clean
+          </FilterChip>
+          <FilterChip
+            active={reputationFilter === 'low'}
+            onClick={setReputationLow}
+            onClear={clearReputationFilter}
+            dotClass={FRAUD_DOT_CLASS.low}
+          >
+            Low
+          </FilterChip>
+          <FilterChip
+            active={reputationFilter === 'medium'}
+            onClick={setReputationMedium}
+            onClear={clearReputationFilter}
+            dotClass={FRAUD_DOT_CLASS.medium}
+          >
+            Medium
+          </FilterChip>
+          <FilterChip
+            active={reputationFilter === 'high'}
+            onClick={setReputationHigh}
+            onClear={clearReputationFilter}
+            dotClass={FRAUD_DOT_CLASS.high}
+          >
+            High
+          </FilterChip>
+          <FilterChip
+            active={reputationFilter === 'critical'}
+            onClick={setReputationCritical}
+            onClear={clearReputationFilter}
+            dotClass={FRAUD_DOT_CLASS.critical}
+          >
+            Critical
+          </FilterChip>
+          <FilterChip
+            active={reputationFilter === 'unchecked'}
+            onClick={setReputationUnchecked}
+            onClear={clearReputationFilter}
+            dotClass={FRAUD_DOT_CLASS.unknown}
+          >
+            Unchecked
+          </FilterChip>
+
+          {allGroups.length > 0 && (
+            <>
+              <div className="h-5 w-px bg-border/60 mx-1" />
+              <SelectRoot value={groupFilter} onValueChange={setGroupFilter}>
+                <SelectTrigger className="ml-1 !h-7 !text-[11.5px] min-w-[120px] shrink-0">
+                  <SelectValue placeholder="Group" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All groups</SelectItem>
+                  {allGroups.map((g) => (
+                    <SelectItem key={g} value={g}>
+                      {g}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectRoot>
+            </>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          <SearchInput
-            value={searchQuery}
-            onChange={setSearchQuery}
-            placeholder="Search proxies…"
-            className="w-56"
-            matchCount={filteredProxies.length}
-          />
-          <Button variant="primary" size="md" icon={<Plus className="h-4 w-4" />} onClick={openAdd}>
-            Add Proxy
-          </Button>
-          <Button
-            variant="secondary"
-            size="md"
-            icon={<Upload className="h-4 w-4" />}
-            onClick={() => setImportOpen(true)}
+
+        <div className="flex items-center gap-1 shrink-0">
+          {/* Density toggle — 2-segment pill so both options are visible at once */}
+          <div
+            className="inline-flex items-center rounded-[--radius-md] bg-elevated/40 p-0.5"
+            role="group"
+            aria-label="Row density"
           >
-            Import
-          </Button>
-          <Button
-            variant="secondary"
-            size="md"
-            icon={<ShieldCheck className="h-4 w-4" />}
-            onClick={() => { setIpCheckOpen(true); setIpCheckInput(''); setIpCheckReport(null); setIpCheckError(null) }}
+            <button
+              type="button"
+              aria-pressed={density === 'compact'}
+              aria-label="Compact density"
+              onClick={() => setDensity('compact')}
+              className={cn(
+                'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                density === 'compact'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <Rows3 className="h-3 w-3" aria-hidden="true" />
+              <span className="hidden md:inline">Compact</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={density === 'comfortable'}
+              aria-label="Comfortable density"
+              onClick={() => setDensity('comfortable')}
+              className={cn(
+                'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                density === 'comfortable'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <Rows2 className="h-3 w-3" aria-hidden="true" />
+              <span className="hidden md:inline">Comfortable</span>
+            </button>
+          </div>
+
+          {/* Sort */}
+          <SelectRoot
+            value={`${sortKey}:${sortDir}`}
+            onValueChange={(v) => {
+              const [k, d] = v.split(':') as [SortKey, SortDir]
+              setSortKey(k)
+              setSortDir(d)
+            }}
           >
-            Check IP
+            <SelectTrigger className="!h-7 !text-[11.5px] min-w-[130px]">
+              <SelectValue placeholder="Sort by..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="created_at:desc">Newest</SelectItem>
+              <SelectItem value="created_at:asc">Oldest</SelectItem>
+              <SelectItem value="name:asc">Name (A→Z)</SelectItem>
+              <SelectItem value="name:desc">Name (Z→A)</SelectItem>
+              <SelectItem value="last_check:desc">Last check</SelectItem>
+              <SelectItem value="fraud_score:asc">Score ↑</SelectItem>
+              <SelectItem value="fraud_score:desc">Score ↓</SelectItem>
+            </SelectContent>
+          </SelectRoot>
+
+          <Tooltip content="Check IP reputation (no proxy added)">
+            <button
+              type="button"
+              onClick={openIpCheck}
+              className={cn(
+                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+                'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+              )}
+              aria-label="Check IP reputation"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+
+          <Tooltip content="Bulk import proxies">
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className={cn(
+                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+                'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+              )}
+              aria-label="Import proxies"
+            >
+              <Upload className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+
+          <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={openAdd}>
+            Add proxy
           </Button>
         </div>
       </div>
 
-      {/* Bulk Actions Bar */}
-      {someSelected && (
-        <div className="mb-3 shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-[--radius-lg] bg-accent/8 border border-accent/20 animate-fadeIn">
-          <span className="text-xs font-medium text-accent">{selected.size} selected</span>
-          <div className="h-4 w-px bg-accent/20" />
+      {/* ── Body ──────────────────────────────────────────────────────── */}
+      {filteredProxies.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <EmptyState
+            icon={<Globe />}
+            title={hasActiveFilters ? 'No matching proxies' : 'No proxies yet'}
+            description={
+              hasActiveFilters
+                ? 'Try clearing filters or adjusting your search.'
+                : 'Add HTTP, HTTPS, or SOCKS proxies — attach them to profiles from the editor to route traffic through them.'
+            }
+            action={
+              hasActiveFilters ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleClearAllFilters}
+                  icon={<Filter className="h-3.5 w-3.5" />}
+                >
+                  Clear filters
+                </Button>
+              ) : (
+                <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={openAdd}>
+                  Add proxy
+                </Button>
+              )
+            }
+          />
+        </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          onKeyDown={handleListboxKeyDown}
+          className="flex-1 min-h-0 overflow-auto focus:outline-none"
+          role="listbox"
+          aria-label="Proxies"
+          aria-multiselectable="true"
+          tabIndex={focusedIdx === null ? 0 : -1}
+          style={
+            hasSelection
+              ? ({ paddingBottom: BULK_FLOATER_CLEARANCE_PX } as CSSProperties)
+              : undefined
+          }
+        >
+          {filteredProxies.map((proxy, index) => {
+            const errorTooltip =
+              !proxy.check_ok && proxy.check_error
+                ? PROXY_CHECK_ERROR_MESSAGES[proxy.check_error] ?? proxy.check_error
+                : null
+            return (
+              <ProxyRow
+                key={proxy.id}
+                proxy={proxy}
+                index={index}
+                selected={selected.has(proxy.id)}
+                focused={focusedIdx === index}
+                density={density}
+                isTesting={testingIds.has(proxy.id)}
+                isCheckingFraud={checkingFraudIds.has(proxy.id)}
+                errorTooltip={errorTooltip}
+                getActionsForProxy={getActionsForProxy}
+                onToggleSelect={handleToggleSelect}
+                onClickRow={handleClickRow}
+                onContextMenu={handleRowContextMenu}
+                onRecheckFraud={handleRowRecheckFraud}
+                registerRef={registerRowRef}
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── Bulk action floater ──────────────────────────────────────── */}
+      {hasSelection && (
+        <div
+          role="toolbar"
+          aria-label={`Bulk actions for ${selected.size} selected prox${
+            selected.size === 1 ? 'y' : 'ies'
+          }`}
+          className={cn(
+            'absolute bottom-4 left-1/2 -translate-x-1/2 z-20',
+            'flex items-center gap-2 px-3 py-2',
+            'bg-card/85 backdrop-blur-md border border-border/60 rounded-[--radius-lg]',
+            'shadow-[var(--shadow-md)] animate-slideUp'
+          )}
+        >
+          <span className="text-[12px] font-semibold text-foreground tabular-nums px-1.5">
+            {selected.size} selected
+          </span>
+          <span className="h-4 w-px bg-border/60" />
           <Button
+            ref={bulkFirstActionRef as Ref<HTMLButtonElement>}
             variant="ghost"
             size="sm"
             icon={<FlaskConical className="h-3.5 w-3.5" />}
@@ -945,768 +2264,592 @@ export function ProxiesPage(): React.JSX.Element {
             loading={bulkTesting}
             disabled={bulkTesting}
           >
-            Test
+            Test all
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            icon={<Download className="h-3.5 w-3.5" />}
-            onClick={bulkExportSelected}
+            icon={<RefreshCw className="h-3.5 w-3.5" />}
+            onClick={bulkRecheckFraud}
+            loading={bulkRecheckingFraud}
+            disabled={bulkRecheckingFraud}
           >
-            Export
+            Recheck reputation
           </Button>
           <Button
-            variant="danger"
+            variant="ghost"
             size="sm"
             icon={<Trash2 className="h-3.5 w-3.5" />}
             onClick={bulkDeleteSelected}
+            className="text-destructive hover:text-destructive hover:bg-destructive/10"
           >
             Delete
           </Button>
-          <div className="flex-1" />
+          <span className="h-4 w-px bg-border/60" />
           <button
-            className="text-xs text-muted hover:text-content transition-colors cursor-pointer"
+            type="button"
             onClick={() => setSelected(new Set())}
+            className={cn(
+              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+            )}
+            aria-label="Clear selection"
           >
-            Clear
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
       )}
 
-      {/* Content */}
-      {proxies.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center">
-          <EmptyState
-            icon={<Globe />}
-            title="No proxies yet"
-            description="Add HTTP, HTTPS, or SOCKS proxies here — attach them to profiles from the editor to route traffic through them."
-            action={
-              <Button
-                variant="primary"
-                size="md"
-                icon={<Plus className="h-4 w-4" />}
-                onClick={openAdd}
-              >
-                Add Proxy
-              </Button>
+      {/* ── Add / Edit Sheet ─────────────────────────────────────────── */}
+      <Sheet
+        open={editorOpen}
+        onOpenChange={(open) => {
+          if (!open) void requestCloseEditor()
+        }}
+      >
+        <SheetContent
+          side="right"
+          width={editorSheetWidth}
+          hideClose
+          className="p-0 gap-0"
+          aria-describedby={undefined}
+          onEscapeKeyDown={(e) => {
+            if (editorIsDirty) {
+              e.preventDefault()
+              void requestCloseEditor()
             }
-          />
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0 bg-card rounded-[--radius-lg] border border-edge overflow-hidden flex flex-col">
-          <div className="flex-1 overflow-auto">
-            <table className="w-full text-sm">
-              <colgroup>
-                <col className="w-10" />
-                <col className="w-[20%]" />
-                <col className="w-[8%]" />
-                <col className="w-[7%]" />
-                <col className="w-[8%]" />
-                <col className="w-[11%]" />
-                <col className="w-[12%]" />
-                <col className="w-[9%]" />
-                <col className="w-12" />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-surface-alt/80 backdrop-blur-sm">
-                <tr className="border-b border-edge/80">
-                  <th className="px-3 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={toggleAll}
-                      className={CHECKBOX}
-                      aria-label="Select all"
-                    />
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
-                    Name / Host
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
-                    Type
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
-                    Port
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
-                    Country
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
-                    Reputation
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
-                    Status
-                  </th>
-                  <th className="px-3 py-3 text-left text-[10.5px] font-semibold text-muted/80 uppercase tracking-[0.08em]">
-                    Speed
-                  </th>
-                  <th className="px-3 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {filteredProxies.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center text-sm text-muted">
-                      No matching proxies
-                    </td>
-                  </tr>
-                ) : (
-                  filteredProxies.map((proxy) => {
-                    const isTesting = testingIds.has(proxy.id)
-                    const isCheckingFraud = checkingFraudIds.has(proxy.id)
-                    const status = statusBadge(proxy)
-                    const reputation = reputationBadge(proxy)
-                    return (
-                      <tr
-                        key={proxy.id}
-                        className={cn(
-                          'border-b border-edge/40 transition-colors duration-150 ease-[var(--ease-osmosis)]',
-                          selected.has(proxy.id) ? 'bg-accent/8 shadow-[inset_2px_0_0_0_var(--color-accent)]' : 'hover:bg-elevated/40'
-                        )}
-                      >
-                        {/* Checkbox */}
-                        <td className="px-3 py-2.5">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(proxy.id)}
-                            onChange={() => toggleOne(proxy.id)}
-                            className={CHECKBOX}
-                            aria-label={`Select ${proxy.name}`}
-                          />
-                        </td>
-
-                        {/* Name / Host */}
-                        <td className="px-3 py-2.5">
-                          <div className="min-w-0">
-                            <p className="text-content font-medium truncate">{proxy.name}</p>
-                            <p className="text-xs text-muted font-mono truncate">
-                              {proxy.host}
-                              {proxy.external_ip && proxy.external_ip !== proxy.host && (
-                                <span className="text-muted/60"> → {proxy.external_ip}</span>
-                              )}
-                            </p>
-                          </div>
-                        </td>
-
-                        {/* Type */}
-                        <td className="px-3 py-2.5">
-                          <Badge variant={PROTOCOL_BADGE[proxy.protocol]}>
-                            {proxy.protocol.toUpperCase()}
-                          </Badge>
-                        </td>
-
-                        {/* Port */}
-                        <td className="px-3 py-2.5 font-mono text-xs text-muted tabular-nums">
-                          {proxy.port}
-                        </td>
-
-                        {/* Country */}
-                        <td className="px-3 py-2.5 text-xs">
-                          {proxy.country ? (
-                            <span className="inline-flex items-center gap-1.5">
-                              <span>{countryFlag(proxy.country)}</span>
-                              <span className="text-muted font-medium uppercase">
-                                {proxy.country}
-                              </span>
-                            </span>
-                          ) : (
-                            <span className="text-muted/40">—</span>
-                          )}
-                        </td>
-
-                        {/* Reputation */}
-                        <td className="px-3 py-2.5">
-                          {isCheckingFraud ? (
-                            <Badge variant="default" dot>
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              Checking
-                            </Badge>
-                          ) : (
-                            <Tooltip content={reputation.tooltip}>
-                              <button
-                                type="button"
-                                onClick={() => handleRecheckFraud(proxy.id)}
-                                disabled={isCheckingFraud}
-                                aria-label={reputation.ariaLabel}
-                                className="rounded-[--radius-sm] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                              >
-                                <Badge variant={reputation.variant} className="cursor-pointer inline-flex items-center gap-1 hover:opacity-80 transition-opacity">
-                                  {reputation.icon}
-                                  {reputation.label}
-                                </Badge>
-                              </button>
-                            </Tooltip>
-                          )}
-                        </td>
-
-                        {/* Status */}
-                        <td className="px-3 py-2.5">
-                          {isTesting ? (
-                            <Badge variant="default" dot>
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              Testing
-                            </Badge>
-                          ) : !proxy.check_ok && proxy.check_error ? (
-                            <Tooltip
-                              content={
-                                PROXY_CHECK_ERROR_MESSAGES[proxy.check_error] ?? proxy.check_error
-                              }
-                            >
-                              <Badge variant={status.variant} dot className="cursor-help">
-                                {status.label}
-                              </Badge>
-                            </Tooltip>
-                          ) : (
-                            <Badge variant={status.variant} dot>
-                              {status.label}
-                            </Badge>
-                          )}
-                        </td>
-
-                        {/* Speed */}
-                        <td className="px-3 py-2.5 text-xs font-mono tabular-nums">
-                          {proxy.check_ok && proxy.check_latency_ms != null ? (
-                            <span className="text-ok">{proxy.check_latency_ms}ms</span>
-                          ) : (
-                            <span className="text-muted/40">—</span>
-                          )}
-                        </td>
-
-                        {/* Actions */}
-                        <td className="px-3 py-2.5">
-                          <DropdownMenu
-                            align="right"
-                            trigger={
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                icon={<MoreHorizontal className="h-4 w-4" />}
-                                aria-label="Actions"
-                              />
-                            }
-                            items={[
-                              {
-                                label: 'Test',
-                                icon: <FlaskConical className="h-4 w-4" />,
-                                onClick: () => handleTest(proxy.id),
-                                disabled: isTesting
-                              },
-                              {
-                                label: 'Recheck reputation',
-                                icon: <RefreshCw className="h-4 w-4" />,
-                                onClick: () => handleRecheckFraud(proxy.id),
-                                disabled: isCheckingFraud
-                              },
-                              {
-                                label: 'Edit',
-                                icon: <Pencil className="h-4 w-4" />,
-                                onClick: () => openEdit(proxy)
-                              },
-                              {
-                                label: 'Copy',
-                                icon: <Copy className="h-4 w-4" />,
-                                onClick: () => handleCopy(proxy)
-                              },
-                              {
-                                label: 'Delete',
-                                icon: <Trash2 className="h-4 w-4" />,
-                                onClick: () => handleDelete(proxy.id, proxy.name),
-                                variant: 'danger'
-                              }
-                            ]}
-                          />
-                        </td>
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
+          }}
+          onPointerDownOutside={(e) => {
+            if (editorIsDirty) {
+              e.preventDefault()
+              void requestCloseEditor()
+            }
+          }}
+        >
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/60 shrink-0">
+            <SheetTitle>{editingId ? 'Edit Proxy' : 'Add Proxy'}</SheetTitle>
+            <button
+              type="button"
+              onClick={() => void requestCloseEditor()}
+              className={cn(
+                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+                'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+              )}
+              aria-label="Close editor"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
-        </div>
-      )}
 
-      {/* Add / Edit Modal */}
-      <Modal
-        open={modalOpen}
-        onClose={closeModal}
-        title={editingId ? 'Edit Proxy' : 'Add Proxy'}
-        description={editingId ? 'Update proxy configuration' : 'Configure a new proxy server'}
-        size="md"
-        actions={
-          <>
+          <form
+            id="proxy-form"
+            onSubmit={handleSubmit(onSubmitProxy)}
+            className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4"
+          >
+            {editorError && (
+              <div className="rounded-[--radius-md] bg-destructive/10 border border-destructive/25 px-3.5 py-2.5 text-xs text-destructive font-medium">
+                {editorError}
+              </div>
+            )}
+
+            {/* Quick paste */}
+            <div className="space-y-1.5">
+              <Label htmlFor="proxy-quick-paste">Quick paste</Label>
+              <Input
+                ref={quickPasteInputRef}
+                id="proxy-quick-paste"
+                placeholder="socks5://user:pass@host:port"
+                value={quickPaste}
+                onChange={(e) => setQuickPaste(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void runQuickPasteParse(quickPaste)
+                  }
+                }}
+                autoComplete="off"
+                spellCheck={false}
+                icon={<ClipboardPaste className="h-4 w-4" />}
+                rightIcon={
+                  quickPasteParsing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : quickPasteFilled ? (
+                    <Check className="h-4 w-4 text-ok" />
+                  ) : undefined
+                }
+              />
+              {quickPasteMultiline ? (
+                <p className="text-xs leading-snug text-destructive">
+                  {QUICK_PASTE_HINT.multiline}
+                  {!editingId && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        className="underline underline-offset-2 text-primary hover:text-accent-dim transition-colors"
+                        onClick={() => openBulkImportWithText(quickPaste)}
+                      >
+                        Open bulk import
+                      </button>
+                    </>
+                  )}
+                </p>
+              ) : quickPasteParsing ? (
+                <p className="text-xs leading-snug text-muted-foreground">Parsing…</p>
+              ) : quickPasteFilled ? (
+                <p className="text-xs leading-snug text-ok">Filled</p>
+              ) : (
+                <p
+                  className={cn(
+                    'text-xs leading-snug',
+                    quickPasteHint ? 'text-destructive' : 'text-muted-foreground'
+                  )}
+                >
+                  {quickPasteHint ?? 'Paste any format — fields auto-fill'}
+                </p>
+              )}
+            </div>
+
+            {/* Name */}
+            <div className="space-y-1.5">
+              <Label htmlFor="proxy-name">Name</Label>
+              <Input
+                id="proxy-name"
+                placeholder="My Proxy"
+                error={errors.name?.message}
+                {...register('name')}
+              />
+            </div>
+
+            {/* Protocol */}
+            <div className="space-y-1.5">
+              <Label htmlFor="proxy-protocol">Protocol</Label>
+              <Select
+                id="proxy-protocol"
+                options={PROTOCOL_OPTIONS}
+                error={errors.protocol?.message}
+                {...register('protocol')}
+              />
+            </div>
+
+            {/* Host + port */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2 space-y-1.5">
+                <Label htmlFor="proxy-host">Host</Label>
+                <Input
+                  id="proxy-host"
+                  placeholder="192.168.1.1"
+                  error={errors.host?.message}
+                  {...register('host')}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="proxy-port">Port</Label>
+                <Input
+                  id="proxy-port"
+                  type="number"
+                  placeholder="8080"
+                  error={errors.port?.message}
+                  {...register('port', { valueAsNumber: true })}
+                />
+              </div>
+            </div>
+
+            {/* Username / password */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="proxy-username">Username</Label>
+                <Input id="proxy-username" placeholder="optional" {...register('username')} />
+                {editingId && editingProxyHasUsername && (
+                  <div>
+                    {clearCreds.username && !watchedUsername ? (
+                      <p className="text-xs text-muted-foreground">
+                        Username will be cleared on save.{' '}
+                        <button
+                          type="button"
+                          className="underline underline-offset-2 text-primary hover:text-accent-dim transition-colors"
+                          onClick={() => setClearCreds((prev) => ({ ...prev, username: false }))}
+                        >
+                          Undo
+                        </button>
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+                        onClick={() => {
+                          setValue('username', '', { shouldDirty: true })
+                          setClearCreds((prev) => ({ ...prev, username: true }))
+                        }}
+                      >
+                        Clear saved username
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="proxy-password">Password</Label>
+                <Input
+                  id="proxy-password"
+                  type="password"
+                  placeholder={
+                    editingId && editingProxyHasPassword
+                      ? '•••••• (leave empty to keep)'
+                      : 'optional'
+                  }
+                  {...register('password')}
+                />
+                {editingId && editingProxyHasPassword && (
+                  <div>
+                    {clearCreds.password && !watchedPassword ? (
+                      <p className="text-xs text-muted-foreground">
+                        Password will be cleared on save.{' '}
+                        <button
+                          type="button"
+                          className="underline underline-offset-2 text-primary hover:text-accent-dim transition-colors"
+                          onClick={() => setClearCreds((prev) => ({ ...prev, password: false }))}
+                        >
+                          Undo
+                        </button>
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors"
+                        onClick={() => {
+                          setValue('password', '', { shouldDirty: true })
+                          setClearCreds((prev) => ({ ...prev, password: true }))
+                        }}
+                      >
+                        Clear saved password
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Country / group */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="proxy-country">Country</Label>
+                <Input
+                  id="proxy-country"
+                  placeholder="US, DE, etc."
+                  maxLength={2}
+                  {...register('country')}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="proxy-group">Group tag</Label>
+                <Input id="proxy-group" placeholder="rotation-group" {...register('group_tag')} />
+              </div>
+            </div>
+          </form>
+
+          <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border/60 shrink-0">
             {editingId ? (
               <Button
                 variant="ghost"
                 size="md"
                 icon={<FlaskConical className="h-4 w-4" />}
-                onClick={handleTestInModal}
-                loading={modalTesting}
-                disabled={modalTesting || modalSaving}
+                onClick={handleTestInEditor}
+                loading={editorTesting}
+                disabled={editorTesting || editorSaving}
+                className="mr-auto"
               >
                 Test
               </Button>
             ) : (
-              <span className="mr-auto text-xs text-muted">
+              <span className="mr-auto text-xs text-muted-foreground">
                 Save the proxy first to test it.
               </span>
             )}
-            <Button variant="secondary" size="md" onClick={closeModal}>
+            <Button variant="secondary" size="md" onClick={() => void requestCloseEditor()}>
               Cancel
             </Button>
             <Button
-              variant="primary"
+              variant="default"
               size="md"
-              onClick={handleSubmit(onSubmitProxy)}
-              loading={modalSaving}
-              disabled={modalSaving}
+              type="submit"
+              form="proxy-form"
+              loading={editorSaving}
+              disabled={editorSaving}
             >
               {editingId ? 'Save Changes' : 'Add Proxy'}
             </Button>
-          </>
-        }
-      >
-        {modalError && (
-          <div className="rounded-[--radius-md] bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err mb-4 font-medium">
-            {modalError}
           </div>
-        )}
+        </SheetContent>
+      </Sheet>
 
-        <form id="proxy-form" onSubmit={handleSubmit(onSubmitProxy)} className="space-y-3">
-          <div>
-            <label
-              htmlFor="proxy-quick-paste"
-              className={LABEL}
-            >
-              Quick paste
-            </label>
-            <Input
-              ref={quickPasteInputRef}
-              id="proxy-quick-paste"
-              placeholder="socks5://user:pass@host:port"
-              value={quickPaste}
-              onChange={(e) => setQuickPaste(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  // Prevent accidental form submission via the outer <form>.
-                  e.preventDefault()
-                  void runQuickPasteParse(quickPaste)
-                }
-              }}
-              autoComplete="off"
-              spellCheck={false}
-              icon={<ClipboardPaste className="h-4 w-4" />}
-              rightIcon={
-                quickPasteParsing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : quickPasteFilled ? (
-                  <Check className="h-4 w-4 text-ok" />
-                ) : undefined
-              }
-            />
-            {quickPasteMultiline ? (
-              <p className="mt-1 text-xs leading-snug text-err">
-                {QUICK_PASTE_HINT.multiline}
-                {!editingId && (
-                  <>
-                    {' '}
-                    <button
-                      type="button"
-                      className="underline underline-offset-2 text-accent hover:text-accent/80 transition-colors"
-                      onClick={() => openBulkImportWithText(quickPaste)}
-                    >
-                      Open bulk import
-                    </button>
-                  </>
-                )}
-              </p>
-            ) : quickPasteParsing ? (
-              <p className="mt-1 text-xs leading-snug text-muted">Parsing…</p>
-            ) : quickPasteFilled ? (
-              <p className="mt-1 text-xs leading-snug text-ok">✓ Filled</p>
-            ) : (
-              <p
-                className={cn(
-                  'mt-1 text-xs leading-snug',
-                  quickPasteHint ? 'text-err' : 'text-muted'
-                )}
-              >
-                {quickPasteHint ?? 'Paste any format — fields auto-fill'}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label htmlFor="proxy-name" className={LABEL}>
-              Name
-            </label>
-            <Input
-              id="proxy-name"
-              placeholder="My Proxy"
-              error={errors.name?.message}
-              {...register('name')}
-            />
-          </div>
-
-          <div>
-            <label
-              htmlFor="proxy-protocol"
-              className={LABEL}
-            >
-              Protocol
-            </label>
-            <Select
-              id="proxy-protocol"
-              options={PROTOCOL_OPTIONS}
-              error={errors.protocol?.message}
-              {...register('protocol')}
-            />
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-2">
-              <label
-                htmlFor="proxy-host"
-                className={LABEL}
-              >
-                Host
-              </label>
-              <Input
-                id="proxy-host"
-                placeholder="192.168.1.1"
-                error={errors.host?.message}
-                {...register('host')}
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="proxy-port"
-                className={LABEL}
-              >
-                Port
-              </label>
-              <Input
-                id="proxy-port"
-                type="number"
-                placeholder="8080"
-                error={errors.port?.message}
-                {...register('port', { valueAsNumber: true })}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label
-                htmlFor="proxy-username"
-                className={LABEL}
-              >
-                Username
-              </label>
-              <Input id="proxy-username" placeholder="optional" {...register('username')} />
-              {editingId && editingProxyHasUsername && (
-                <div className="mt-1">
-                  {clearCreds.username && !watchedUsername ? (
-                    <p className="text-xs text-muted">
-                      Username will be cleared on save.{' '}
-                      <button
-                        type="button"
-                        className="underline underline-offset-2 text-accent hover:text-accent/80 transition-colors"
-                        onClick={() =>
-                          setClearCreds((prev) => ({ ...prev, username: false }))
-                        }
-                      >
-                        Undo
-                      </button>
-                    </p>
-                  ) : (
-                    <button
-                      type="button"
-                      className="text-xs text-muted hover:text-content underline underline-offset-2 transition-colors"
-                      onClick={() => {
-                        setValue('username', '', { shouldDirty: true })
-                        setClearCreds((prev) => ({ ...prev, username: true }))
-                      }}
-                    >
-                      Clear saved username
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-            <div>
-              <label
-                htmlFor="proxy-password"
-                className={LABEL}
-              >
-                Password
-              </label>
-              <Input
-                id="proxy-password"
-                type="password"
-                placeholder={
-                  editingId && editingProxyHasPassword
-                    ? '•••••• (leave empty to keep)'
-                    : 'optional'
-                }
-                {...register('password')}
-              />
-              {editingId && editingProxyHasPassword && (
-                <div className="mt-1">
-                  {clearCreds.password && !watchedPassword ? (
-                    <p className="text-xs text-muted">
-                      Password will be cleared on save.{' '}
-                      <button
-                        type="button"
-                        className="underline underline-offset-2 text-accent hover:text-accent/80 transition-colors"
-                        onClick={() =>
-                          setClearCreds((prev) => ({ ...prev, password: false }))
-                        }
-                      >
-                        Undo
-                      </button>
-                    </p>
-                  ) : (
-                    <button
-                      type="button"
-                      className="text-xs text-muted hover:text-content underline underline-offset-2 transition-colors"
-                      onClick={() => {
-                        setValue('password', '', { shouldDirty: true })
-                        setClearCreds((prev) => ({ ...prev, password: true }))
-                      }}
-                    >
-                      Clear saved password
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label
-                htmlFor="proxy-country"
-                className={LABEL}
-              >
-                Country
-              </label>
-              <Input
-                id="proxy-country"
-                placeholder="US, DE, etc."
-                maxLength={2}
-                {...register('country')}
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="proxy-group"
-                className={LABEL}
-              >
-                Group tag
-              </label>
-              <Input id="proxy-group" placeholder="rotation-group" {...register('group_tag')} />
-            </div>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Import Modal */}
-      <Modal
+      {/* ── Import Sheet ─────────────────────────────────────────────── */}
+      <Sheet
         open={importOpen}
-        onClose={closeImport}
-        title="Import Proxies"
-        description="Paste proxies below or upload a file. One proxy per line."
-        size="lg"
-        actions={
-          importParsed ? (
-            <>
-              <Button variant="secondary" size="md" onClick={() => setImportParsed(null)}>
-                Back
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                icon={<CheckSquare className="h-4 w-4" />}
-                onClick={executeImport}
-                loading={importLoading}
-                disabled={importLoading || importParsed.filter((r) => r.ok).length === 0}
-              >
-                Import {importParsed.filter((r) => r.ok).length} Proxies
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="secondary" size="md" onClick={closeImport}>
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                onClick={parseImport}
-                loading={importLoading}
-                disabled={importLoading || !importText.trim()}
-              >
-                Preview
-              </Button>
-            </>
-          )
-        }
+        onOpenChange={(open) => {
+          if (!open) void requestCloseImport()
+        }}
       >
-        {!importParsed ? (
-          <>
-            <p className="text-xs text-muted mb-3 leading-relaxed">
-              Formats:{' '}
-              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
-                host:port
-              </code>
-              ,{' '}
-              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
-                host:port:user:pass
-              </code>
-              ,{' '}
-              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
-                socks5://host:port
-              </code>
-              ,{' '}
-              <code className="text-accent bg-accent/8 px-1 py-0.5 rounded-[--radius-sm]">
-                user:pass@host:port
-              </code>
-            </p>
-            <textarea
-              value={importText}
-              onChange={(e) => setImportText(e.target.value)}
-              placeholder={'192.168.1.1:8080\nsocks5://proxy.example.com:1080:user:pass'}
-              rows={8}
-              className={cn(TEXTAREA, 'font-mono mb-3')}
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<FileUp className="h-4 w-4" />}
-              onClick={handleFileUpload}
+        <SheetContent
+          side="right"
+          width={importSheetWidth}
+          hideClose
+          className="p-0 gap-0"
+          aria-describedby={undefined}
+          onEscapeKeyDown={(e) => {
+            if (importHasPendingWork()) {
+              e.preventDefault()
+              void requestCloseImport()
+            }
+          }}
+          onPointerDownOutside={(e) => {
+            if (importHasPendingWork()) {
+              e.preventDefault()
+              void requestCloseImport()
+            }
+          }}
+        >
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/60 shrink-0">
+            <SheetTitle>Import Proxies</SheetTitle>
+            <button
+              type="button"
+              onClick={() => void requestCloseImport()}
+              className={cn(
+                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+                'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+                'transition-colors duration-150 ease-[var(--ease-osmosis)]'
+              )}
+              aria-label="Close import"
             >
-              Upload File
-            </Button>
-          </>
-        ) : (
-          <div className="space-y-2 max-h-72 overflow-auto">
-            {importParsed.map((r, i) => (
-              <div
-                key={i}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-[--radius-md] text-xs font-mono',
-                  r.ok
-                    ? 'bg-ok/5 border border-ok/15 text-content'
-                    : 'bg-err/5 border border-err/15 text-muted line-through'
-                )}
-              >
-                <Badge variant={r.ok ? 'success' : 'error'} dot>
-                  {r.ok ? 'OK' : 'Invalid'}
-                </Badge>
-                <span className="truncate">
-                  {r.data
-                    ? `${r.data.protocol}://${r.data.host}:${r.data.port}`
-                    : `Line ${i + 1}`}
-                </span>
-              </div>
-            ))}
-            <p className="text-xs text-muted pt-1">
-              {importParsed.filter((r) => r.ok).length} of {importParsed.length} proxies will be
-              imported
-            </p>
-            <label className="flex items-start gap-2.5 mt-3 px-3 py-2.5 rounded-[--radius-md] bg-elevated/30 border border-edge/40 cursor-pointer hover:bg-elevated/50 transition-colors">
-              <input
-                type="checkbox"
-                checked={importFilterFraud}
-                onChange={(e) => setImportFilterFraud(e.target.checked)}
-                className={cn(CHECKBOX, 'mt-0.5')}
-              />
-              <div className="min-w-0">
-                <p className="text-[13px] font-medium text-content">
-                  Filter by reputation
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4">
+            {!importParsed ? (
+              <>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Paste proxies below or upload a file — one proxy per line. Supported formats:{' '}
+                  <code className="text-primary bg-primary/10 px-1 py-0.5 rounded-[--radius-sm]">
+                    host:port
+                  </code>
+                  ,{' '}
+                  <code className="text-primary bg-primary/10 px-1 py-0.5 rounded-[--radius-sm]">
+                    host:port:user:pass
+                  </code>
+                  ,{' '}
+                  <code className="text-primary bg-primary/10 px-1 py-0.5 rounded-[--radius-sm]">
+                    socks5://host:port
+                  </code>
+                  ,{' '}
+                  <code className="text-primary bg-primary/10 px-1 py-0.5 rounded-[--radius-sm]">
+                    user:pass@host:port
+                  </code>
+                  .
                 </p>
-                <p className="text-xs text-muted leading-relaxed mt-0.5">
-                  Skip proxies whose IP is on a datacenter / known-proxy ASN. Each candidate is
-                  probed via ip-api.com through the proxy itself before being persisted; risky IPs
-                  are dropped silently. Sequential lookup (~1s per proxy).
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="proxy-import-text">Proxies</Label>
+                  <textarea
+                    id="proxy-import-text"
+                    value={importText}
+                    onChange={(e) => setImportText(e.target.value)}
+                    placeholder={'192.168.1.1:8080\nsocks5://proxy.example.com:1080:user:pass'}
+                    rows={10}
+                    className={cn(
+                      'w-full px-3 py-2 rounded-[--radius-md] bg-input border border-border',
+                      'text-sm text-foreground placeholder:text-muted-foreground/60',
+                      'transition-all duration-150 ease-[var(--ease-osmosis)]',
+                      'hover:border-edge/80 focus:outline-none focus:border-primary/60 focus:bg-input/60',
+                      'focus:ring-[3px] focus:ring-primary/15 resize-none font-mono'
+                    )}
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<FileUp className="h-4 w-4" />}
+                  onClick={handleFileUpload}
+                >
+                  Upload file
+                </Button>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  {importParsed.map((r, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        'flex items-center gap-3 px-3 py-2 rounded-[--radius-md] text-xs font-mono',
+                        r.ok
+                          ? 'bg-ok/5 border border-ok/15 text-foreground'
+                          : 'bg-destructive/5 border border-destructive/15 text-muted-foreground line-through'
+                      )}
+                    >
+                      <Badge variant={r.ok ? 'success' : 'destructive'} dot>
+                        {r.ok ? 'OK' : 'Invalid'}
+                      </Badge>
+                      <span className="truncate">
+                        {r.data ? `${r.data.protocol}://${r.data.host}:${r.data.port}` : `Line ${i + 1}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {importParsed.filter((r) => r.ok).length} of {importParsed.length} proxies will be
+                  imported
                 </p>
-              </div>
-            </label>
-            {importLoading && importProgress && (
-              <div className="flex items-center gap-2 mt-2 px-3 py-2 rounded-[--radius-md] bg-accent/5 border border-accent/15 text-xs text-content">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-accent shrink-0" />
-                <span className="font-mono tabular-nums">
-                  {importProgress.checked}/{importProgress.total}
-                </span>
-                <span className="text-muted">checked</span>
-                {importProgress.risky > 0 && (
-                  <span className="ml-auto text-warn font-medium">
-                    {importProgress.risky} risky skipped
-                  </span>
+
+                <label className="flex items-start gap-3 px-3 py-2.5 rounded-[--radius-md] bg-elevated/40 border border-border cursor-pointer hover:bg-elevated/60 transition-colors">
+                  <Switch
+                    checked={importFilterFraud}
+                    onCheckedChange={setImportFilterFraud}
+                    aria-label="Filter by reputation"
+                    className="mt-0.5"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-foreground">Filter by reputation</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
+                      Skip proxies whose IP is on a datacenter / known-proxy ASN. Each candidate is
+                      probed via ip-api.com through the proxy itself before being persisted; risky IPs
+                      are dropped silently. Sequential lookup (~1s per proxy).
+                    </p>
+                  </div>
+                </label>
+
+                {importLoading && importProgress && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-[--radius-md] bg-primary/5 border border-primary/15 text-xs text-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+                    <span className="font-mono tabular-nums">
+                      {importProgress.checked}/{importProgress.total}
+                    </span>
+                    <span className="text-muted-foreground">checked</span>
+                    {importProgress.risky > 0 && (
+                      <span className="ml-auto text-warn font-medium">
+                        {importProgress.risky} risky skipped
+                      </span>
+                    )}
+                  </div>
                 )}
-              </div>
+              </>
             )}
           </div>
-        )}
-      </Modal>
 
-      {/* Standalone IP fraud-check tool */}
-      <Modal
-        open={ipCheckOpen}
-        onClose={() => setIpCheckOpen(false)}
-        title="Check IP reputation"
-        description="Investigate any IP without adding it as a proxy. Both providers (ip-api + ipapi.is) are queried directly from this machine."
-        size="md"
-        actions={
-          <Button
-            variant="primary"
-            size="md"
-            icon={<ShieldCheck className="h-4 w-4" />}
-            onClick={() => handleStandaloneIpCheck()}
-            loading={ipCheckLoading}
-            disabled={ipCheckLoading || !ipCheckInput.trim()}
-          >
-            Check
-          </Button>
-        }
-      >
-        <div className="space-y-3">
-          <div>
-            <label className={cn(LABEL, 'mb-1.5 block')}>IP address</label>
-            <Input
-              placeholder="e.g. 84.54.120.38"
-              value={ipCheckInput}
-              onChange={(e) => setIpCheckInput(e.target.value)}
-              disabled={ipCheckLoading}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && ipCheckInput.trim() && !ipCheckLoading) {
-                  handleStandaloneIpCheck()
-                }
-              }}
-            />
+          <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border/60 shrink-0">
+            {importParsed ? (
+              <>
+                <Button variant="secondary" size="md" onClick={() => setImportParsed(null)}>
+                  Back
+                </Button>
+                <Button
+                  size="md"
+                  icon={<CheckSquare className="h-4 w-4" />}
+                  onClick={executeImport}
+                  loading={importLoading}
+                  disabled={importLoading || importParsed.filter((r) => r.ok).length === 0}
+                >
+                  Import {importParsed.filter((r) => r.ok).length} Proxies
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="secondary" size="md" onClick={() => void requestCloseImport()}>
+                  Cancel
+                </Button>
+                <Button
+                  size="md"
+                  onClick={parseImport}
+                  loading={importLoading}
+                  disabled={importLoading || !importText.trim()}
+                >
+                  Preview
+                </Button>
+              </>
+            )}
           </div>
-          <p className="text-[11px] text-muted/70 leading-relaxed">
-            Privacy note: this query runs from your real machine — both providers will see your
-            actual IP alongside the IP under investigation. Use the per-row Recheck action when
-            you want to characterize a proxy without revealing your host.
-          </p>
-          {ipCheckError && (
-            <div className="rounded-[--radius-md] bg-err/8 border border-err/20 px-3 py-2 text-xs text-err">
-              {ipCheckError}
+        </SheetContent>
+      </Sheet>
+
+      {/* ── Standalone IP fraud-check Dialog ──────────────────────────── */}
+      <Dialog open={ipCheckOpen} onOpenChange={setIpCheckOpen}>
+        <DialogContent className="max-w-md">
+          <div className="space-y-1.5 mb-4">
+            <DialogTitle>Check IP reputation</DialogTitle>
+            <DialogDescription>
+              Investigate any IP without adding it as a proxy. Both providers (ip-api + ipapi.is)
+              are queried directly from this machine.
+            </DialogDescription>
+          </div>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="ip-check-input">IP address</Label>
+              <Input
+                id="ip-check-input"
+                placeholder="e.g. 84.54.120.38"
+                value={ipCheckInput}
+                onChange={(e) => setIpCheckInput(e.target.value)}
+                disabled={ipCheckLoading}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && ipCheckInput.trim() && !ipCheckLoading) {
+                    void handleStandaloneIpCheck()
+                  }
+                }}
+              />
             </div>
+            <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+              Privacy note: this query runs from your real machine — both providers will see your
+              actual IP alongside the IP under investigation. Use the per-row Recheck action when
+              you want to characterize a proxy without revealing your host.
+            </p>
+            {ipCheckError && (
+              <div className="rounded-[--radius-md] bg-destructive/10 border border-destructive/25 px-3 py-2 text-xs text-destructive">
+                {ipCheckError}
+              </div>
+            )}
+            {ipCheckReport && <IpFraudReportPanel report={ipCheckReport} />}
+          </div>
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <Button variant="secondary" size="md" onClick={() => setIpCheckOpen(false)}>
+              Close
+            </Button>
+            <Button
+              size="md"
+              icon={<ShieldCheck className="h-4 w-4" />}
+              onClick={() => void handleStandaloneIpCheck()}
+              loading={ipCheckLoading}
+              disabled={ipCheckLoading || !ipCheckInput.trim()}
+            >
+              Check
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Right-click context menu ──────────────────────────────────── */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={getActionsForProxy(
+            contextMenu.proxy,
+            testingIds.has(contextMenu.proxy.id),
+            checkingFraudIds.has(contextMenu.proxy.id)
           )}
-          {ipCheckReport && <IpFraudReportPanel report={ipCheckReport} />}
-        </div>
-      </Modal>
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   )
 }
 
-// ---------------------------------------------------------------------------
-// IP Fraud Report panel — shared shape between the standalone tool and any
-// future inline lookup. Mirrors the reputation tooltip but in a full panel
-// so the user can read every signal without hovering.
-// ---------------------------------------------------------------------------
+// ──────────────────────────────────────────────────────────────────────────
+// IpFraudReportPanel — shared between the standalone Dialog and any future
+// inline lookup. Mirrors the reputation tooltip but in a full panel so the
+// user can read every signal without hovering.
+// ──────────────────────────────────────────────────────────────────────────
 
 function IpFraudReportPanel({ report }: { report: IpFraudReport }): React.JSX.Element {
   const meta = FRAUD_BUCKET_META[report.fraud_risk]
@@ -1720,52 +2863,62 @@ function IpFraudReportPanel({ report }: { report: IpFraudReport }): React.JSX.El
   ]
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-3 px-3 py-2.5 rounded-[--radius-md] bg-elevated/40 border border-edge/40">
+      <div className="flex items-center gap-3 px-3 py-2.5 rounded-[--radius-md] bg-elevated/40 border border-border">
         <Badge variant={meta.variant} className="inline-flex items-center gap-1">
           {fraudBucketIcon(meta.icon)}
           {meta.label} {report.fraud_score}
         </Badge>
-        <span className="text-xs text-muted">/ 100</span>
-        <span className="ml-auto font-mono text-xs text-content">{report.ip}</span>
+        <span className="text-xs text-muted-foreground">/ 100</span>
+        <span className="ml-auto font-mono text-xs text-foreground">{report.ip}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         {report.country && (
-          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2">
-            <p className="text-muted text-[10px] uppercase tracking-wider">Country</p>
-            <p className="text-content">
-              {report.country_code && <span className="mr-1">{countryFlag(report.country_code)}</span>}
-              {report.country}{report.city ? ` — ${report.city}` : ''}
+          <div className="rounded-[--radius-md] bg-input border border-border px-3 py-2">
+            <p className="text-muted-foreground text-[10px] uppercase tracking-wider">Country</p>
+            <p className="text-foreground">
+              {report.country_code && (
+                <span className="mr-1">{countryFlag(report.country_code)}</span>
+              )}
+              {report.country}
+              {report.city ? ` — ${report.city}` : ''}
             </p>
           </div>
         )}
         {report.isp && (
-          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2">
-            <p className="text-muted text-[10px] uppercase tracking-wider">ISP</p>
-            <p className="text-content truncate" title={report.isp}>{report.isp}</p>
+          <div className="rounded-[--radius-md] bg-input border border-border px-3 py-2">
+            <p className="text-muted-foreground text-[10px] uppercase tracking-wider">ISP</p>
+            <p className="text-foreground truncate" title={report.isp}>
+              {report.isp}
+            </p>
           </div>
         )}
         {report.asn && (
-          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2 col-span-2">
-            <p className="text-muted text-[10px] uppercase tracking-wider">ASN</p>
-            <p className="text-content font-mono truncate" title={report.asn}>
-              {report.asn}{report.asn_type ? <span className="text-muted ml-1">({report.asn_type})</span> : null}
+          <div className="rounded-[--radius-md] bg-input border border-border px-3 py-2 col-span-2">
+            <p className="text-muted-foreground text-[10px] uppercase tracking-wider">ASN</p>
+            <p className="text-foreground font-mono truncate" title={report.asn}>
+              {report.asn}
+              {report.asn_type ? (
+                <span className="text-muted-foreground ml-1">({report.asn_type})</span>
+              ) : null}
             </p>
           </div>
         )}
         {report.abuse_score !== null && (
-          <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2 col-span-2">
-            <p className="text-muted text-[10px] uppercase tracking-wider">Abuse score (ipapi.is)</p>
-            <p className="text-content font-mono">{(report.abuse_score * 100).toFixed(2)}%</p>
+          <div className="rounded-[--radius-md] bg-input border border-border px-3 py-2 col-span-2">
+            <p className="text-muted-foreground text-[10px] uppercase tracking-wider">
+              Abuse score (ipapi.is)
+            </p>
+            <p className="text-foreground font-mono">{(report.abuse_score * 100).toFixed(2)}%</p>
           </div>
         )}
       </div>
-      <div className="rounded-[--radius-md] bg-surface border border-edge/40 px-3 py-2">
-        <p className="text-muted text-[10px] uppercase tracking-wider mb-2">Signals</p>
+      <div className="rounded-[--radius-md] bg-input border border-border px-3 py-2">
+        <p className="text-muted-foreground text-[10px] uppercase tracking-wider mb-2">Signals</p>
         <div className="flex flex-wrap gap-1.5">
           {flags.map((f) => (
             <Badge
               key={f.label}
-              variant={f.on === true ? (f.tone === 'warn' ? 'error' : 'success') : 'default'}
+              variant={f.on === true ? (f.tone === 'warn' ? 'destructive' : 'success') : 'outline'}
               className="text-[11px]"
             >
               {f.on === null ? '— ' : f.on ? '✓ ' : '✗ '}
@@ -1774,7 +2927,7 @@ function IpFraudReportPanel({ report }: { report: IpFraudReport }): React.JSX.El
           ))}
         </div>
       </div>
-      <p className="text-[11px] text-muted/70">
+      <p className="text-[11px] text-muted-foreground/70">
         Sources: {report.fraud_providers.join(', ') || 'none'}
       </p>
     </div>

@@ -72,21 +72,34 @@ function BrandMark(): React.JSX.Element {
     <NavLink
       to="/profiles"
       className={cn(
-        'no-drag flex items-center gap-2.5 px-3 h-full select-none',
+        'no-drag flex items-center h-full select-none',
         'transition-opacity duration-150 ease-[var(--ease-osmosis)] hover:opacity-90'
       )}
       aria-label="Lux home"
     >
+      {/*
+       * Shield zone — width is locked to the LeftRail column width so the
+       * shield icon center sits on the same vertical axis as the rail nav
+       * icons directly below. Without this snap the brand text pulls the
+       * shield ~8px off-center vs the rail, which reads as crooked in the
+       * top-left corner.
+       */}
       <div
-        className={cn(
-          'h-8 w-8 rounded-[--radius-md] flex items-center justify-center shrink-0',
-          'bg-primary/12 ring-1 ring-inset ring-primary/20',
-          'shadow-[0_0_18px_rgba(59,130,246,0.18)]'
-        )}
+        className="flex items-center justify-center shrink-0"
+        style={{ width: LEFTRAIL_WIDTH_PX }}
       >
-        <Shield className="h-4 w-4 text-primary" strokeWidth={2.2} />
+        <div
+          className={cn(
+            'h-8 w-8 rounded-[--radius-md] flex items-center justify-center',
+            'bg-primary/12 ring-1 ring-inset ring-primary/20',
+            'shadow-[0_0_18px_rgba(59,130,246,0.18)]'
+          )}
+        >
+          <Shield className="h-4 w-4 text-primary" strokeWidth={2.2} />
+        </div>
       </div>
-      <div className="flex flex-col leading-none">
+      {/* Wordmark — sits to the right of the rail-aligned shield zone. */}
+      <div className="flex flex-col leading-none pr-3">
         <span className="text-[13px] font-bold tracking-[0.04em] text-foreground">LUX</span>
         <span className="text-[9px] font-medium tracking-[0.18em] text-muted-foreground/70 uppercase mt-0.5">
           Antidetect
@@ -247,12 +260,14 @@ function TopBar({ onOpenPalette, onOpenShortcuts }: TopBarProps): React.JSX.Elem
   return (
     <header
       className={cn(
-        'drag-region shrink-0 flex items-stretch gap-2 px-2',
+        'drag-region shrink-0 flex items-stretch',
         'border-b border-border/50 bg-card/85 backdrop-blur-md',
         'relative z-30'
       )}
       style={{ height: TOPBAR_HEIGHT_PX }}
     >
+      {/* Brand sits flush against screen-left so the shield zone (LEFTRAIL_WIDTH_PX wide)
+          aligns vertically with the LeftRail icons below. */}
       <div className="no-drag flex items-center shrink-0">
         <BrandMark />
       </div>
@@ -396,9 +411,7 @@ export function Layout(): React.JSX.Element {
   const showShortcuts = useKeyboardShortcutsStore((s) => s.show)
   const showPalette = useCommandPaletteStore((s) => s.show)
   const location = useLocation()
-  const runningCount = useProfilesStore(
-    (s) => s.profiles.filter((p) => p.status === 'running' || p.status === 'starting').length
-  )
+  const runningCount = useProfilesStore((s) => s.runningCount)
 
   // Drop the legacy persisted collapsed-sidebar key from previous design.
   // Best-effort — silently ignore storage errors.

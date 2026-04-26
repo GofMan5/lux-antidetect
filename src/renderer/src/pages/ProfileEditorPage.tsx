@@ -1,9 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { useForm } from 'react-hook-form'
+/**
+ * ProfileEditorPage — Vault iter-2.
+ *
+ * `ProfileEditorPanel` is the only public entry; ProfilesPage hosts it inside
+ * a viewport-responsive `Sheet`. Tabs run through the canonical `TabsRoot`
+ * primitive, fingerprint sub-cards expose a real disclosure (button +
+ * aria-expanded) instead of a Switch, and the form's `isDirty` bubbles up to
+ * the Sheet host via `onDirtyChange` so ESC / overlay-click route through
+ * the Discard-changes confirm.
+ */
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent
+} from 'react'
+import { useForm, Controller, type Control } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import {
-  ArrowLeft,
   Save,
   Wand2,
   Bookmark,
@@ -33,22 +49,34 @@ import { cn } from '../lib/utils'
 import {
   Button,
   Input,
-  Select,
-  Card,
-  Toggle,
-  Tabs,
+  Label,
   Badge,
   Tooltip,
-  DropdownMenu
+  DropdownMenu,
+  Separator,
+  TabsRoot,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+  SelectRoot,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem
 } from '../components/ui'
 import type { DropdownMenuItem } from '../components/ui'
-import { TEXTAREA, LABEL } from '../lib/ui'
+import { TEXTAREA } from '../lib/ui'
 import { validateProfileFingerprint } from '../lib/fingerprint-validator'
+import type { ValidationWarning } from '../lib/fingerprint-validator'
 import { PRESET_BROWSER_MAP, buildPresetMenuItems } from '../lib/preset-menu'
 import { CookiesTab } from '../components/profile/CookiesTab'
 import { ExtensionsTab } from '../components/profile/ExtensionsTab'
 import type { Fingerprint } from '../lib/types'
 import type { PresetDescriptor } from '../../../preload/api-contract'
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 // Verification test sites for launched profiles
 const TEST_SITES: ReadonlyArray<{ label: string; url: string }> = [
@@ -60,13 +88,7 @@ const TEST_SITES: ReadonlyArray<{ label: string; url: string }> = [
   { label: 'AmIUnique', url: 'https://amiunique.org' }
 ] as const
 
-export type InitialFingerprint = Omit<Fingerprint, 'id' | 'profile_id'>
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const SCREEN_PRESETS = [
+const SCREEN_PRESETS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '1920x1080', label: '1920×1080' },
   { value: '2560x1440', label: '2560×1440' },
   { value: '1366x768', label: '1366×768' },
@@ -75,7 +97,7 @@ const SCREEN_PRESETS = [
   { value: '1280x720', label: '1280×720' }
 ]
 
-const TIMEZONES = [
+const TIMEZONES: ReadonlyArray<string> = [
   'America/New_York',
   'America/Chicago',
   'America/Denver',
@@ -92,43 +114,43 @@ const TIMEZONES = [
   'Pacific/Auckland'
 ] as const
 
-const BROWSER_OPTIONS = [
+const BROWSER_OPTIONS: ReadonlyArray<{ value: 'chromium' | 'firefox' | 'edge'; label: string }> = [
   { value: 'chromium', label: 'Chromium' },
   { value: 'firefox', label: 'Firefox' },
   { value: 'edge', label: 'Edge' }
 ]
 
-const DEVICE_TYPE_OPTIONS = [
+const DEVICE_TYPE_OPTIONS: ReadonlyArray<{ value: 'desktop' | 'mobile'; label: string }> = [
   { value: 'desktop', label: 'Desktop' },
   { value: 'mobile', label: 'Mobile' }
 ]
 
-const HARDWARE_CONCURRENCY_OPTIONS = [
+const HARDWARE_CONCURRENCY_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '4', label: '4 cores' },
   { value: '8', label: '8 cores' },
   { value: '12', label: '12 cores' },
   { value: '16', label: '16 cores' }
 ]
 
-const DEVICE_MEMORY_OPTIONS = [
+const DEVICE_MEMORY_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '4', label: '4 GB' },
   { value: '8', label: '8 GB' },
   { value: '16', label: '16 GB' }
 ]
 
-const WEBRTC_POLICIES = [
+const WEBRTC_POLICIES: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'disable_non_proxied_udp', label: 'Disable non-proxied UDP' },
   { value: 'default_public_interface_only', label: 'Default public only' },
   { value: 'default', label: 'Default' }
 ]
 
-const COLOR_DEPTH_OPTIONS = [
+const COLOR_DEPTH_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '24', label: '24-bit' },
   { value: '30', label: '30-bit' },
   { value: '32', label: '32-bit' }
 ]
 
-const PIXEL_RATIO_OPTIONS = [
+const PIXEL_RATIO_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: '1', label: '1.0×' },
   { value: '1.25', label: '1.25×' },
   { value: '1.5', label: '1.5×' },
@@ -136,21 +158,40 @@ const PIXEL_RATIO_OPTIONS = [
   { value: '3', label: '3.0×' }
 ]
 
-const BASE_FORM_TABS = [
-  { id: 'general', label: 'General', icon: <Settings className="h-3.5 w-3.5" /> },
-  { id: 'browser', label: 'Browser', icon: <Monitor className="h-3.5 w-3.5" /> },
-  { id: 'proxy', label: 'Proxy', icon: <Globe className="h-3.5 w-3.5" /> },
-  { id: 'fingerprint', label: 'Fingerprint', icon: <Shield className="h-3.5 w-3.5" /> }
-]
+// Tab identifiers — keep in sync with TabsTrigger values below.
+const TAB_GENERAL = 'general'
+const TAB_BROWSER = 'browser'
+const TAB_PROXY = 'proxy'
+const TAB_FINGERPRINT = 'fingerprint'
+const TAB_COOKIES = 'cookies'
+const TAB_EXTENSIONS = 'extensions'
 
-// Tabs that require a saved profileId — only shown in edit mode.
-const EDIT_ONLY_FORM_TABS = [
-  { id: 'cookies', label: 'Cookies', icon: <Cookie className="h-3.5 w-3.5" /> },
-  { id: 'extensions', label: 'Extensions', icon: <Puzzle className="h-3.5 w-3.5" /> }
-]
+// Radix Select rejects an empty-string `value` on `<SelectItem>` — the
+// placeholder slot is the only way to render "no value" — so we use a sentinel
+// for the proxy picker's "No proxy" option and translate it back to '' before
+// it lands in the form state.
+const PROXY_NONE_SENTINEL = '__none__'
 
-const FORM_TABS_CREATE = BASE_FORM_TABS
-const FORM_TABS_EDIT = [...BASE_FORM_TABS, ...EDIT_ONLY_FORM_TABS]
+type TabId =
+  | typeof TAB_GENERAL
+  | typeof TAB_BROWSER
+  | typeof TAB_PROXY
+  | typeof TAB_FINGERPRINT
+  | typeof TAB_COOKIES
+  | typeof TAB_EXTENSIONS
+
+// Maps a validator field back to the tab the field lives on, for the
+// "jump to tab" affordance under each warning row.
+const FIELD_TAB_MAP: Record<string, TabId> = {
+  platform: TAB_BROWSER,
+  user_agent: TAB_BROWSER,
+  languages: TAB_BROWSER,
+  timezone: TAB_FINGERPRINT,
+  screen: TAB_FINGERPRINT,
+  hardware_concurrency: TAB_FINGERPRINT,
+  device_memory: TAB_FINGERPRINT,
+  webgl_vendor: TAB_FINGERPRINT
+}
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -206,6 +247,8 @@ const DEFAULT_VALUES: ProfileFormData = {
   device_type: 'desktop' as const
 }
 
+export type InitialFingerprint = Omit<Fingerprint, 'id' | 'profile_id'>
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -240,6 +283,80 @@ function getFingerprintStrength(
 }
 
 // ---------------------------------------------------------------------------
+// Reusable controlled-Select adapter
+// ---------------------------------------------------------------------------
+//
+// Radix `SelectRoot` is fully controlled (`value` + `onValueChange`) so it
+// can't be wired through `register()` like a native <select>. RHF's
+// `Controller` is the canonical adapter — extracted here once so each call
+// site stays terse.
+//
+// `numeric` flips the on-change marshalling to `Number(value)` so the form
+// keeps numeric fields typed as numbers (CPU cores, memory, color depth,
+// pixel ratio). Without it Radix would write strings into number fields and
+// break Zod parsing on submit.
+
+interface ControlledSelectFieldProps<TName extends keyof ProfileFormData> {
+  control: Control<ProfileFormData>
+  name: TName
+  options: ReadonlyArray<{ value: string; label: string }>
+  numeric?: boolean
+  placeholder?: string
+  triggerId?: string
+  className?: string
+  disabled?: boolean
+  ariaLabel?: string
+}
+
+function ControlledSelectField<TName extends keyof ProfileFormData>({
+  control,
+  name,
+  options,
+  numeric,
+  placeholder,
+  triggerId,
+  className,
+  disabled,
+  ariaLabel
+}: ControlledSelectFieldProps<TName>): React.JSX.Element {
+  return (
+    <Controller
+      control={control}
+      name={name}
+      render={({ field }) => {
+        const stringValue = field.value === undefined || field.value === null ? '' : String(field.value)
+        return (
+          <SelectRoot
+            value={stringValue}
+            onValueChange={(next) => {
+              field.onChange(numeric ? Number(next) : next)
+            }}
+            disabled={disabled}
+          >
+            <SelectTrigger
+              id={triggerId}
+              ref={field.ref}
+              onBlur={field.onBlur}
+              aria-label={ariaLabel}
+              className={className}
+            >
+              <SelectValue placeholder={placeholder} />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </SelectRoot>
+        )
+      }}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -254,6 +371,13 @@ interface ProfileEditorPanelProps {
    * field so e.g. Firefox presets open the editor with browser_type='firefox'.
    */
   initialBrowser?: 'chromium' | 'firefox' | 'edge' | null
+  /**
+   * Notifies the parent whenever react-hook-form's `isDirty` flips. The
+   * Sheet host (ProfilesPage) latches this into a ref and consults it on
+   * ESC / overlay-click so closing a dirty panel routes through the
+   * Discard-changes confirm instead of dropping edits silently.
+   */
+  onDirtyChange?: (isDirty: boolean) => void
 }
 
 export function ProfileEditorPanel({
@@ -261,12 +385,13 @@ export function ProfileEditorPanel({
   onSave,
   onCancel,
   initialFingerprint,
-  initialBrowser
+  initialBrowser,
+  onDirtyChange
 }: ProfileEditorPanelProps): React.JSX.Element {
   const isEditMode = Boolean(profileId)
 
   // -- Local state --------------------------------------------------------
-  const [activeTab, setActiveTab] = useState('general')
+  const [activeTab, setActiveTab] = useState<TabId>(TAB_GENERAL)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -296,14 +421,14 @@ export function ProfileEditorPanel({
     }
   }, [])
 
-  // Fingerprint section toggles (UI-only collapse / expand)
+  // Fingerprint sub-section toggles (UI-only collapse / expand)
   const [webrtcOpen, setWebrtcOpen] = useState(true)
   const [webglOpen, setWebglOpen] = useState(true)
   const [displayOpen, setDisplayOpen] = useState(true)
   const [hardwareOpen, setHardwareOpen] = useState(true)
   const [timezoneOpen, setTimezoneOpen] = useState(true)
 
-  // -- Store --------------------------------------------------------------
+  // -- Stores -------------------------------------------------------------
   const proxies = useProxiesStore((s) => s.proxies)
   const fetchProxies = useProxiesStore((s) => s.fetchProxies)
   const storeTestProxy = useProxiesStore((s) => s.testProxy)
@@ -318,11 +443,18 @@ export function ProfileEditorPanel({
     setValue,
     getValues,
     watch,
+    control,
     formState: { errors, isDirty }
   } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: DEFAULT_VALUES
   })
+
+  // Bubble dirty-state up so the Sheet host can intercept ESC / overlay-click
+  // and route through the Discard-changes confirm instead of dropping edits.
+  useEffect(() => {
+    onDirtyChange?.(isDirty)
+  }, [isDirty, onDirtyChange])
 
   // Watch individual primitives so memo deps stay stable across renders.
   const watchedUserAgent = watch('user_agent')
@@ -335,14 +467,14 @@ export function ProfileEditorPanel({
   const watchedLanguages = watch('languages')
   const watchedHardware = watch('hardware_concurrency')
   const watchedMemory = watch('device_memory')
-  const screenValue = watch('screen')
+  const watchedScreen = watch('screen')
 
   const selectedProxy = useMemo(
     () => proxies.find((p) => p.id === watchedProxyId),
     [proxies, watchedProxyId]
   )
   const selectedProxyCountry = selectedProxy?.country ?? null
-  const isCustomScreen = !SCREEN_PRESETS.some((p) => p.value === screenValue)
+  const isCustomScreen = !SCREEN_PRESETS.some((p) => p.value === watchedScreen)
   const isCustomTimezone = !(TIMEZONES as readonly string[]).includes(watchedTimezone)
 
   // -- Derived ------------------------------------------------------------
@@ -353,9 +485,9 @@ export function ProfileEditorPanel({
         .filter(Boolean)
     : []
 
-  const proxyOptions = useMemo(
+  const proxyOptions = useMemo<ReadonlyArray<{ value: string; label: string }>>(
     () => [
-      { value: '', label: 'No proxy' },
+      { value: PROXY_NONE_SENTINEL, label: 'No proxy' },
       ...proxies.map((p) => ({
         value: p.id,
         label: `${p.name} (${p.protocol}://${p.host}:${p.port})`
@@ -364,15 +496,15 @@ export function ProfileEditorPanel({
     [proxies]
   )
 
-  const screenOptions = useMemo(
+  const screenOptions = useMemo<ReadonlyArray<{ value: string; label: string }>>(
     () => [
       ...SCREEN_PRESETS,
-      ...(isCustomScreen ? [{ value: screenValue, label: screenValue }] : [])
+      ...(isCustomScreen ? [{ value: watchedScreen, label: watchedScreen }] : [])
     ],
-    [isCustomScreen, screenValue]
+    [isCustomScreen, watchedScreen]
   )
 
-  const timezoneOptions = useMemo(
+  const timezoneOptions = useMemo<ReadonlyArray<{ value: string; label: string }>>(
     () => [
       ...TIMEZONES.map((tz) => ({ value: tz, label: tz })),
       ...(isCustomTimezone
@@ -399,7 +531,7 @@ export function ProfileEditorPanel({
         platform: watchedPlatform ?? '',
         timezone: watchedTimezone ?? '',
         languages: watchedLanguages ?? '',
-        screen: screenValue ?? '',
+        screen: watchedScreen ?? '',
         hardware_concurrency: Number(watchedHardware ?? 0),
         device_memory: Number(watchedMemory ?? 0),
         webgl_vendor: watchedWebglVendor ?? '',
@@ -410,7 +542,7 @@ export function ProfileEditorPanel({
       watchedPlatform,
       watchedTimezone,
       watchedLanguages,
-      screenValue,
+      watchedScreen,
       watchedHardware,
       watchedMemory,
       watchedWebglVendor,
@@ -567,7 +699,7 @@ export function ProfileEditorPanel({
       setValue('languages', fp.languages, { shouldDirty: true })
       setValue('color_depth', fp.color_depth ?? 24, { shouldDirty: true })
       setValue('pixel_ratio', fp.pixel_ratio ?? 1.0, { shouldDirty: true })
-      setActiveTab('fingerprint')
+      setActiveTab(TAB_FINGERPRINT)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to generate fingerprint')
     } finally {
@@ -586,7 +718,7 @@ export function ProfileEditorPanel({
         if (!isMountedRef.current || profileId !== initialProfileId) return
 
         // languages arrives as a JSON-stringified array (matches Fingerprint
-        // storage). Mirror the parse used for initialFingerprint (L411-424).
+        // storage). Mirror the parse used for initialFingerprint.
         let langs: string
         try {
           const parsed = JSON.parse(fp.languages)
@@ -778,6 +910,50 @@ export function ProfileEditorPanel({
     }
   }
 
+  const handleApplyTemplate = useCallback(
+    async (templateId: string): Promise<void> => {
+      if (!templateId) return
+      try {
+        const tmpl = (await api.getTemplate(templateId)) as {
+          config: string
+          browser_type: string
+        }
+        const config = JSON.parse(tmpl.config) as Record<string, unknown>
+        if (config.group_name) setValue('group_name', config.group_name as string)
+        if (config.notes) setValue('notes', config.notes as string)
+        if (config.start_url) setValue('start_url', config.start_url as string)
+        setValue('browser_type', tmpl.browser_type as 'chromium' | 'firefox' | 'edge')
+        const fp = config.fingerprint as Record<string, unknown> | undefined
+        if (fp) {
+          if (fp.user_agent) setValue('user_agent', fp.user_agent as string)
+          if (fp.platform) setValue('platform', fp.platform as string)
+          if (fp.screen_width && fp.screen_height) {
+            setValue(
+              'screen',
+              toScreenValue(fp.screen_width as number, fp.screen_height as number)
+            )
+          }
+          if (fp.timezone) setValue('timezone', fp.timezone as string)
+          if (fp.languages) setValue('languages', fp.languages as string)
+          if (fp.webrtc_policy) setValue('webrtc_policy', fp.webrtc_policy as string)
+          if (fp.webgl_vendor) setValue('webgl_vendor', fp.webgl_vendor as string)
+          if (fp.webgl_renderer) setValue('webgl_renderer', fp.webgl_renderer as string)
+          if (fp.hardware_concurrency)
+            setValue('hardware_concurrency', fp.hardware_concurrency as number)
+          if (fp.device_memory) setValue('device_memory', fp.device_memory as number)
+          if (fp.color_depth) setValue('color_depth', fp.color_depth as number)
+          if (fp.pixel_ratio) setValue('pixel_ratio', fp.pixel_ratio as number)
+          if (fp.device_type)
+            setValue('device_type', fp.device_type as 'desktop' | 'mobile')
+        }
+      } catch {
+        // Template lookups failing silently keeps the UX simple — the user can
+        // pick a different template or fill the form by hand.
+      }
+    },
+    [setValue]
+  )
+
   const onSubmit = async (data: ProfileFormData): Promise<void> => {
     try {
       setSaving(true)
@@ -889,22 +1065,36 @@ export function ProfileEditorPanel({
 
   // -- Render -------------------------------------------------------------
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col h-full">
-      {/* ── Top Bar ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-edge shrink-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          icon={<ArrowLeft className="h-4 w-4" />}
-          onClick={handleCancel}
-          type="button"
-          aria-label="Go back"
+    <form
+      onSubmit={handleSubmit(onSubmit)}
+      className="flex flex-col h-full min-h-0"
+      aria-label={isEditMode ? 'Edit profile' : 'New profile'}
+    >
+      {/* ── Compact action header ───────────────────────────────────────────
+          The Sheet's parent already renders a SheetTitle + close button, so
+          this row carries the *primary actions* for the form: inline name
+          rename, browser picker, dirty badge, save / generate / discard.
+          Sits flush against the SheetHeader from the parent — no extra
+          card chrome (double border was flagged in v1.0.54 review). */}
+      <div className="flex items-center gap-2 px-5 py-3 border-b border-border/60 shrink-0">
+        <Input
+          {...register('name')}
+          placeholder="Profile name"
+          aria-label="Profile name"
+          aria-invalid={errors.name ? true : undefined}
+          className="h-8 flex-1 min-w-0 text-[13px] font-medium"
         />
-        <h2 className="text-sm font-semibold text-content flex-1 truncate">
-          {isEditMode ? 'Edit Profile' : 'New Profile'}
-        </h2>
+        <div className="w-[120px] shrink-0">
+          <ControlledSelectField
+            control={control}
+            name="browser_type"
+            options={BROWSER_OPTIONS}
+            ariaLabel="Browser type"
+            className="h-8 text-[12px]"
+          />
+        </div>
         {isDirty && (
-          <Badge variant="warning" dot>
+          <Badge variant="warning" dot className="shrink-0">
             Unsaved
           </Badge>
         )}
@@ -921,7 +1111,7 @@ export function ProfileEditorPanel({
           </Tooltip>
         )}
         <Button
-          variant="primary"
+          variant="default"
           size="sm"
           icon={<Save className="h-3.5 w-3.5" />}
           type="submit"
@@ -929,251 +1119,168 @@ export function ProfileEditorPanel({
         >
           {isEditMode ? 'Save' : 'Create'}
         </Button>
+        <Tooltip content={isDirty ? 'Discard changes & close' : 'Close'}>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<X className="h-3.5 w-3.5" />}
+            onClick={handleCancel}
+            type="button"
+            aria-label="Close editor without saving"
+          />
+        </Tooltip>
       </div>
 
-      {/* ── Error Banner ────────────────────────────────────────────────── */}
-      {error && (
+      {/* Field-level error banner — surfaces top-of-form save errors and the
+          name validation error when the user submits with an empty name. */}
+      {(error || errors.name) && (
         <div
           role="alert"
-          className="mx-4 mt-3 rounded-[--radius-md] bg-err/8 border border-err/20 px-3.5 py-2.5 text-xs text-err font-medium flex items-center gap-2"
+          className="mx-5 mt-3 rounded-[--radius-md] bg-destructive/10 border border-destructive/25 px-3 py-2 text-xs text-destructive font-medium flex items-center gap-2"
         >
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          <span className="flex-1">{error}</span>
-        </div>
-      )}
-
-      {/* ── Consistency Warnings ────────────────────────────────────────── */}
-      {validationWarnings.length > 0 && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            'mx-4 mt-3 rounded-[--radius-md] border px-3.5 py-2.5 text-xs',
-            hasWarnSeverity
-              ? 'bg-warn/8 border-warn/20'
-              : 'bg-elevated border-edge'
-          )}
-        >
-          <div
-            className={cn(
-              'flex items-center gap-1.5 mb-1.5 font-medium',
-              hasWarnSeverity ? 'text-warn' : 'text-muted'
-            )}
-          >
-            {hasWarnSeverity ? (
-              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
-            ) : (
-              <Info className="h-3.5 w-3.5 shrink-0" />
-            )}
-            <span>Fingerprint consistency</span>
-          </div>
-          <ul
-            className={cn(
-              'space-y-1',
-              validationWarnings.length > 3 && showAllWarnings && 'max-h-48 overflow-y-auto pr-1'
-            )}
-          >
-            {visibleWarnings.map((w, i) => (
-              <li
-                key={`${w.field}:${w.severity}:${i}`}
-                className="flex items-start gap-1.5 text-content/80"
-              >
-                {w.severity === 'warn' ? (
-                  <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0 text-warn" />
-                ) : (
-                  <Info className="h-3 w-3 mt-0.5 shrink-0 text-muted" />
-                )}
-                <span>{w.message}</span>
-              </li>
-            ))}
-          </ul>
-          {validationWarnings.length > 3 && (
+          <span className="flex-1">
+            {error ?? errors.name?.message ?? 'Invalid form data'}
+          </span>
+          {error && (
             <button
               type="button"
-              onClick={() => setShowAllWarnings((v) => !v)}
-              className="mt-1.5 text-[11px] font-medium text-accent hover:text-accent/80 transition-colors"
+              onClick={() => setError(null)}
+              aria-label="Dismiss error"
+              className="rounded p-0.5 hover:bg-destructive/15"
             >
-              {showAllWarnings
-                ? 'Show less'
-                : `Show ${validationWarnings.length - 3} more`}
+              <X className="h-3 w-3" />
             </button>
           )}
         </div>
       )}
 
-      {/* ── Verification (launched-profile test sites) ──────────────────── */}
-      {isEditMode && profileId && (
-        <div className="mx-4 mt-3 rounded-[--radius-md] bg-elevated/60 border border-edge px-3 py-2.5">
-          <div className="flex items-center gap-1.5 mb-2 text-[11px] font-medium text-muted uppercase tracking-wider">
-            <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span>Verification</span>
-          </div>
-          <div
-            role="group"
-            aria-label="Verification test sites"
-            className="flex flex-wrap gap-1.5"
-          >
-            {TEST_SITES.map((site) => (
-              <button
-                key={site.url}
-                type="button"
-                onClick={async () => {
-                  try {
-                    await api.openUrlInProfile(profileId, site.url)
-                    addToast(`Opened ${site.label}`, 'success')
-                  } catch (err) {
-                    addToast(
-                      err instanceof Error ? err.message : `Failed to open ${site.label}`,
-                      'error'
-                    )
-                  }
-                }}
-                className="inline-flex items-center gap-1 rounded-full bg-surface border border-edge px-2.5 py-1 text-[11px] font-medium text-content/80 hover:text-accent hover:border-accent/40 hover:bg-accent/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
-                {site.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      {!isEditMode && (
-        <div className="mx-4 mt-3 rounded-[--radius-md] bg-elevated/40 border border-edge px-3 py-2.5">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted uppercase tracking-wider">
-              <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
-              <span>Verification</span>
-            </div>
-            <span
-              id="verification-hint"
-              className="text-[10px] font-medium text-muted/70"
-            >
-              Available after saving
-            </span>
-          </div>
-          <div
-            role="group"
-            aria-label="Verification test sites"
-            className="flex flex-wrap gap-1.5"
-          >
-            {TEST_SITES.map((site) => (
-              <button
-                key={site.url}
-                type="button"
-                disabled
-                aria-disabled="true"
-                aria-describedby="verification-hint"
-                className="inline-flex items-center gap-1 rounded-full bg-surface/60 border border-edge/50 px-2.5 py-1 text-[11px] font-medium text-muted cursor-not-allowed opacity-70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
-                {site.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* ── Tabs ────────────────────────────────────────────────────────── */}
-      <Tabs
-        tabs={isEditMode ? FORM_TABS_EDIT : FORM_TABS_CREATE}
-        activeTab={activeTab}
-        onChange={setActiveTab}
-        className="px-4 pt-3"
-      />
+      <TabsRoot
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as TabId)}
+        className="flex-1 flex flex-col min-h-0"
+      >
+        <div className="px-5 pt-3 shrink-0 overflow-x-auto scrollbar-hide border-b border-border">
+          <TabsList className="border-b-0">
+            <TabsTrigger value={TAB_GENERAL}>
+              <Settings className="h-3.5 w-3.5" />
+              General
+            </TabsTrigger>
+            <TabsTrigger value={TAB_BROWSER}>
+              <Monitor className="h-3.5 w-3.5" />
+              Browser
+            </TabsTrigger>
+            <TabsTrigger value={TAB_PROXY}>
+              <Globe className="h-3.5 w-3.5" />
+              Proxy
+            </TabsTrigger>
+            <TabsTrigger value={TAB_FINGERPRINT}>
+              <Shield className="h-3.5 w-3.5" />
+              Fingerprint
+            </TabsTrigger>
+            {isEditMode && (
+              <TabsTrigger value={TAB_COOKIES}>
+                <Cookie className="h-3.5 w-3.5" />
+                Cookies
+              </TabsTrigger>
+            )}
+            {isEditMode && (
+              <TabsTrigger value={TAB_EXTENSIONS}>
+                <Puzzle className="h-3.5 w-3.5" />
+                Extensions
+              </TabsTrigger>
+            )}
+          </TabsList>
+        </div>
 
-      {/* ── Tab Content ─────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
-        {/* ═══ General ═══ */}
-        {activeTab === 'general' && (
-          <div className="space-y-4">
+        {/* Scrollable body — every TabsContent lives inside this surface. */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {/* ═══ Health summary (visible on every tab) ═══ */}
+          {validationWarnings.length > 0 && (
+            <FingerprintHealthPanel
+              warnings={validationWarnings}
+              visibleWarnings={visibleWarnings}
+              hasWarnSeverity={hasWarnSeverity}
+              showAll={showAllWarnings}
+              onToggleShowAll={() => setShowAllWarnings((v) => !v)}
+              onJumpToTab={(tab) => setActiveTab(tab)}
+              activeTab={activeTab}
+            />
+          )}
+
+          {/* ═══ Verification chips ═══ */}
+          {isEditMode && profileId ? (
+            <VerificationChips
+              disabled={false}
+              onOpen={async (label, url) => {
+                try {
+                  await api.openUrlInProfile(profileId, url)
+                  addToast(`Opened ${label}`, 'success')
+                } catch (err) {
+                  addToast(
+                    err instanceof Error ? err.message : `Failed to open ${label}`,
+                    'error'
+                  )
+                }
+              }}
+            />
+          ) : (
+            <VerificationChips disabled />
+          )}
+
+          {/* ═══ General ═══ */}
+          <TabsContent value={TAB_GENERAL} className="px-5 py-4 m-0 space-y-5">
             {/* Template selector (create-mode only) */}
             {!isEditMode && templates.length > 0 && (
-              <Card title="Template">
-                <Select
-                  options={[
-                    { value: '', label: 'Start from scratch' },
-                    ...templates.map((t) => ({ value: t.id, label: t.name }))
-                  ]}
-                  onChange={async (e) => {
-                    const tid = (e.target as HTMLSelectElement).value
-                    if (!tid) return
-                    try {
-                      const tmpl = (await api.getTemplate(tid)) as {
-                        config: string
-                        browser_type: string
-                      }
-                      const config = JSON.parse(tmpl.config) as Record<string, unknown>
-                      if (config.group_name)
-                        setValue('group_name', config.group_name as string)
-                      if (config.notes) setValue('notes', config.notes as string)
-                      if (config.start_url)
-                        setValue('start_url', config.start_url as string)
-                      setValue(
-                        'browser_type',
-                        tmpl.browser_type as 'chromium' | 'firefox' | 'edge'
-                      )
-                      const fp = config.fingerprint as Record<string, unknown> | undefined
-                      if (fp) {
-                        if (fp.user_agent) setValue('user_agent', fp.user_agent as string)
-                        if (fp.platform) setValue('platform', fp.platform as string)
-                        if (fp.screen_width && fp.screen_height)
-                          setValue('screen', toScreenValue(fp.screen_width as number, fp.screen_height as number))
-                        if (fp.timezone) setValue('timezone', fp.timezone as string)
-                        if (fp.languages) setValue('languages', fp.languages as string)
-                        if (fp.webrtc_policy) setValue('webrtc_policy', fp.webrtc_policy as string)
-                        if (fp.webgl_vendor) setValue('webgl_vendor', fp.webgl_vendor as string)
-                        if (fp.webgl_renderer) setValue('webgl_renderer', fp.webgl_renderer as string)
-                        if (fp.hardware_concurrency) setValue('hardware_concurrency', fp.hardware_concurrency as number)
-                        if (fp.device_memory) setValue('device_memory', fp.device_memory as number)
-                        if (fp.color_depth) setValue('color_depth', fp.color_depth as number)
-                        if (fp.pixel_ratio) setValue('pixel_ratio', fp.pixel_ratio as number)
-                        if (fp.device_type) setValue('device_type', fp.device_type as 'desktop' | 'mobile')
-                      }
-                    } catch {
-                      /* ignore */
-                    }
-                  }}
-                />
-              </Card>
+              <section className="space-y-1.5">
+                <Label htmlFor="profile-template">Start from template</Label>
+                <SelectRoot
+                  onValueChange={(v) => void handleApplyTemplate(v)}
+                >
+                  <SelectTrigger id="profile-template" aria-label="Profile template">
+                    <SelectValue placeholder="Pick a template" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {templates.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </SelectRoot>
+              </section>
             )}
-
-            {/* Profile name */}
-            <div>
-              <label className={LABEL}>Profile Name</label>
-              <Input
-                {...register('name')}
-                placeholder="My Profile"
-                error={errors.name?.message}
-                className="!text-base font-medium"
-              />
-            </div>
 
             {/* Group + Color */}
             <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
-              <div>
-                <label className={LABEL}>Group</label>
-                <Input {...register('group_name')} placeholder="Work, Personal" />
+              <div className="space-y-1.5">
+                <Label htmlFor="profile-group">Group</Label>
+                <Input id="profile-group" {...register('group_name')} placeholder="Work, Personal" />
               </div>
-              <div>
-                <label className={LABEL}>Color</label>
+              <div className="space-y-1.5">
+                <Label htmlFor="profile-group-color">Color</Label>
                 <input
+                  id="profile-group-color"
                   type="color"
-                  className="h-9 w-9 rounded-[--radius-md] border border-edge bg-surface cursor-pointer"
+                  className="h-9 w-9 rounded-[--radius-md] border border-border bg-input cursor-pointer"
                   {...register('group_color')}
                 />
               </div>
             </div>
 
             {/* Tags */}
-            <div>
-              <label className={LABEL}>Tags</label>
+            <div className="space-y-1.5">
+              <Label htmlFor="profile-tag-input">Tags</Label>
               {tagsList.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-2">
+                <div className="flex flex-wrap gap-1.5">
                   {tagsList.map((tag) => (
                     <Badge key={tag} variant="accent">
                       {tag}
                       <button
                         type="button"
                         onClick={() => removeTag(tag)}
-                        className="ml-1 text-accent/60 hover:text-accent transition-colors"
+                        className="ml-1 text-primary/60 hover:text-primary transition-colors"
                         aria-label={`Remove tag ${tag}`}
                       >
                         <X className="h-3 w-3" />
@@ -1183,14 +1290,14 @@ export function ProfileEditorPanel({
                 </div>
               )}
               <div className="flex gap-2">
-                <div className="flex-1">
-                  <Input
-                    value={tagInput}
-                    onChange={(e) => setTagInput(e.target.value)}
-                    onKeyDown={handleTagKeyDown}
-                    placeholder="Add tag…"
-                  />
-                </div>
+                <Input
+                  id="profile-tag-input"
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={handleTagKeyDown}
+                  placeholder="Add tag…"
+                  className="flex-1"
+                />
                 <Button
                   variant="secondary"
                   size="sm"
@@ -1204,9 +1311,10 @@ export function ProfileEditorPanel({
             </div>
 
             {/* Notes */}
-            <div>
-              <label className={LABEL}>Notes</label>
+            <div className="space-y-1.5">
+              <Label htmlFor="profile-notes">Notes</Label>
               <textarea
+                id="profile-notes"
                 rows={3}
                 placeholder="Additional notes…"
                 className={TEXTAREA}
@@ -1215,46 +1323,56 @@ export function ProfileEditorPanel({
             </div>
 
             {/* Start URL */}
-            <div>
-              <label className={LABEL}>Start URL</label>
+            <div className="space-y-1.5">
+              <Label htmlFor="profile-start-url">Start URL</Label>
               <Input
+                id="profile-start-url"
                 {...register('start_url')}
                 placeholder="https://example.com"
                 icon={<Globe className="h-3.5 w-3.5" />}
               />
             </div>
-          </div>
-        )}
+          </TabsContent>
 
-        {/* ═══ Browser ═══ */}
-        {activeTab === 'browser' && (
-          <div className="space-y-4">
+          {/* ═══ Browser ═══ */}
+          <TabsContent value={TAB_BROWSER} className="px-5 py-4 m-0 space-y-5">
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={LABEL}>Browser</label>
-                <Select options={BROWSER_OPTIONS} {...register('browser_type')} />
+              <div className="space-y-1.5">
+                <Label htmlFor="profile-browser-type-tab">Browser</Label>
+                <ControlledSelectField
+                  control={control}
+                  name="browser_type"
+                  options={BROWSER_OPTIONS}
+                  triggerId="profile-browser-type-tab"
+                />
               </div>
-              <div>
-                <label className={LABEL}>Device Type</label>
-                <Select options={DEVICE_TYPE_OPTIONS} {...register('device_type')} />
+              <div className="space-y-1.5">
+                <Label htmlFor="profile-device-type">Device Type</Label>
+                <ControlledSelectField
+                  control={control}
+                  name="device_type"
+                  options={DEVICE_TYPE_OPTIONS}
+                  triggerId="profile-device-type"
+                />
               </div>
             </div>
 
-            <div>
-              <label className={LABEL}>Platform</label>
+            <div className="space-y-1.5">
+              <Label htmlFor="profile-platform">Platform</Label>
               <Input
+                id="profile-platform"
                 {...register('platform')}
                 placeholder="Win32, MacIntel, Linux x86_64"
               />
-              <p className="mt-1 text-[10px] text-muted">
+              <p className="text-[10px] text-muted-foreground">
                 Auto-filled when generating a fingerprint
               </p>
             </div>
 
             {/* User Agent */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-medium text-content">User Agent</label>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="profile-user-agent">User Agent</Label>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -1267,6 +1385,7 @@ export function ProfileEditorPanel({
                 </Button>
               </div>
               <Input
+                id="profile-user-agent"
                 {...register('user_agent')}
                 placeholder="Mozilla/5.0 …"
                 className="font-mono text-xs"
@@ -1274,38 +1393,71 @@ export function ProfileEditorPanel({
             </div>
 
             {/* Languages */}
-            <div>
-              <label className={LABEL}>Languages</label>
-              <Input {...register('languages')} placeholder="en-US, en" />
-              <p className="mt-1 text-[10px] text-muted">
+            <div className="space-y-1.5">
+              <Label htmlFor="profile-languages">Languages</Label>
+              <Input
+                id="profile-languages"
+                {...register('languages')}
+                placeholder="en-US, en"
+              />
+              <p className="text-[10px] text-muted-foreground">
                 Comma-separated language codes
               </p>
             </div>
-          </div>
-        )}
+          </TabsContent>
 
-        {/* ═══ Proxy ═══ */}
-        {activeTab === 'proxy' && (
-          <div className="space-y-4">
-            <div>
-              <label className={LABEL}>Select Proxy</label>
-              <Select options={proxyOptions} {...register('proxy_id')} />
+          {/* ═══ Proxy ═══ */}
+          <TabsContent value={TAB_PROXY} className="px-5 py-4 m-0 space-y-5">
+            <div className="space-y-1.5">
+              <Label htmlFor="profile-proxy">Select Proxy</Label>
+              <Controller
+                control={control}
+                name="proxy_id"
+                render={({ field }) => (
+                  <SelectRoot
+                    value={field.value === '' ? PROXY_NONE_SENTINEL : field.value}
+                    onValueChange={(next) => {
+                      field.onChange(next === PROXY_NONE_SENTINEL ? '' : next)
+                    }}
+                  >
+                    <SelectTrigger
+                      id="profile-proxy"
+                      ref={field.ref}
+                      onBlur={field.onBlur}
+                      aria-label="Proxy"
+                    >
+                      <SelectValue placeholder="No proxy" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {proxyOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </SelectRoot>
+                )}
+              />
             </div>
 
             {selectedProxy ? (
-              <Card>
+              // Inset preview block — matches the Vault rhythm of
+              // FingerprintSubsection (`bg-elevated/40 surface-lit border ...`)
+              // so it reads as a recessed sibling of the form, not a duplicated
+              // Card chrome inside the Sheet's Card-toned container.
+              <div className="rounded-[--radius-lg] border border-border bg-elevated/40 p-4 surface-lit shadow-[var(--shadow-sm)]">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-content truncate">
+                      <p className="text-sm font-medium text-foreground truncate">
                         {selectedProxy.name}
                       </p>
-                      <p className="text-xs text-muted mt-0.5 truncate">
+                      <p className="text-xs text-muted-foreground mt-0.5 truncate">
                         {selectedProxy.protocol}://{selectedProxy.host}:
                         {selectedProxy.port}
                       </p>
                     </div>
-                    <Badge variant={selectedProxy.check_ok ? 'success' : 'error'} dot>
+                    <Badge variant={selectedProxy.check_ok ? 'success' : 'destructive'} dot>
                       {selectedProxy.check_ok ? 'Online' : 'Offline'}
                     </Badge>
                   </div>
@@ -1351,25 +1503,21 @@ export function ProfileEditorPanel({
                         : 'Test Connection'}
                   </Button>
                 </div>
-              </Card>
+              </div>
             ) : (
-              <div className="rounded-[--radius-lg] border border-dashed border-edge p-8 text-center">
-                <Globe className="h-8 w-8 text-muted/30 mx-auto mb-2" />
-                <p className="text-sm text-muted">No proxy selected</p>
-                <p className="text-xs text-muted/60 mt-1">
+              <div className="rounded-[--radius-lg] border border-dashed border-border p-8 text-center">
+                <Globe className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
+                <p className="text-sm text-muted-foreground">No proxy selected</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">
                   Profile will use a direct connection
                 </p>
               </div>
             )}
-          </div>
-        )}
+          </TabsContent>
 
-        {/* ═══ Fingerprint ═══ */}
-        {activeTab === 'fingerprint' && (
-          <div className="space-y-4">
-            {/* Generate & strength bar — wraps on narrow split-panel widths
-                so the strength bar keeps a usable footprint instead of
-                collapsing to a sliver. */}
+          {/* ═══ Fingerprint ═══ */}
+          <TabsContent value={TAB_FINGERPRINT} className="px-5 py-4 m-0 space-y-5">
+            {/* Generate / preset / strength bar */}
             <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="secondary"
@@ -1413,7 +1561,7 @@ export function ProfileEditorPanel({
                           ? 'bg-ok'
                           : fpStrength.score >= 50
                             ? 'bg-warn'
-                            : 'bg-err'
+                            : 'bg-destructive'
                       )}
                       style={{ width: `${fpStrength.score}%` }}
                     />
@@ -1432,7 +1580,7 @@ export function ProfileEditorPanel({
                           ? 'text-ok'
                           : fpStrength.score >= 50
                             ? 'text-warn'
-                            : 'text-err'
+                            : 'text-destructive'
                       )}
                     >
                       {fpStrength.score}%
@@ -1442,177 +1590,444 @@ export function ProfileEditorPanel({
               )}
             </div>
 
+            <Separator />
+
             {/* WebRTC */}
-            <Card
+            <FingerprintSubsection
               title="WebRTC"
               description="Control WebRTC IP leak behavior"
-              actions={<Toggle checked={webrtcOpen} onChange={setWebrtcOpen} />}
+              open={webrtcOpen}
+              onOpenChange={setWebrtcOpen}
             >
-              {webrtcOpen && (
-                <div className="pt-3">
-                  <label className={LABEL}>Policy</label>
-                  <Select options={WEBRTC_POLICIES} {...register('webrtc_policy')} />
-                </div>
-              )}
-            </Card>
+              <div className="space-y-1.5">
+                <Label htmlFor="profile-webrtc-policy">Policy</Label>
+                <ControlledSelectField
+                  control={control}
+                  name="webrtc_policy"
+                  options={WEBRTC_POLICIES}
+                  triggerId="profile-webrtc-policy"
+                />
+              </div>
+            </FingerprintSubsection>
 
             {/* WebGL */}
-            <Card
+            <FingerprintSubsection
               title="WebGL"
               description="GPU fingerprint spoofing"
-              actions={<Toggle checked={webglOpen} onChange={setWebglOpen} />}
+              open={webglOpen}
+              onOpenChange={setWebglOpen}
             >
-              {webglOpen && (
-                <div className="pt-3 space-y-3">
-                  <div>
-                    <label className={LABEL}>
-                      Vendor{' '}
-                      <span className="text-muted/50 font-normal text-[10px]">
-                        (auto-generated)
-                      </span>
-                    </label>
-                    <Input
-                      {...register('webgl_vendor')}
-                      readOnly
-                      className="opacity-60 font-mono text-xs cursor-default"
-                    />
-                  </div>
-                  <div>
-                    <label className={LABEL}>
-                      Renderer{' '}
-                      <span className="text-muted/50 font-normal text-[10px]">
-                        (auto-generated)
-                      </span>
-                    </label>
-                    <Input
-                      {...register('webgl_renderer')}
-                      readOnly
-                      className="opacity-60 font-mono text-xs cursor-default"
-                    />
-                  </div>
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="profile-webgl-vendor">
+                    Vendor{' '}
+                    <span className="text-muted-foreground/60 font-normal text-[10px]">
+                      (auto-generated)
+                    </span>
+                  </Label>
+                  <Input
+                    id="profile-webgl-vendor"
+                    {...register('webgl_vendor')}
+                    readOnly
+                    className="opacity-60 font-mono text-xs cursor-default"
+                  />
                 </div>
-              )}
-            </Card>
+                <div className="space-y-1.5">
+                  <Label htmlFor="profile-webgl-renderer">
+                    Renderer{' '}
+                    <span className="text-muted-foreground/60 font-normal text-[10px]">
+                      (auto-generated)
+                    </span>
+                  </Label>
+                  <Input
+                    id="profile-webgl-renderer"
+                    {...register('webgl_renderer')}
+                    readOnly
+                    className="opacity-60 font-mono text-xs cursor-default"
+                  />
+                </div>
+              </div>
+            </FingerprintSubsection>
 
             {/* Screen & Display */}
-            <Card
+            <FingerprintSubsection
               title="Screen & Display"
               description="Resolution and rendering settings"
-              actions={<Toggle checked={displayOpen} onChange={setDisplayOpen} />}
+              open={displayOpen}
+              onOpenChange={setDisplayOpen}
             >
-              {displayOpen && (
-                <div className="pt-3 space-y-3">
-                  <div>
-                    <label className={LABEL}>Resolution</label>
-                    <Select options={screenOptions} {...register('screen')} />
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="profile-screen">Resolution</Label>
+                  <ControlledSelectField
+                    control={control}
+                    name="screen"
+                    options={screenOptions}
+                    triggerId="profile-screen"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="profile-color-depth">Color Depth</Label>
+                    <ControlledSelectField
+                      control={control}
+                      name="color_depth"
+                      options={COLOR_DEPTH_OPTIONS}
+                      numeric
+                      triggerId="profile-color-depth"
+                    />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={LABEL}>Color Depth</label>
-                      <Select
-                        options={COLOR_DEPTH_OPTIONS}
-                        {...register('color_depth', { valueAsNumber: true })}
-                      />
-                    </div>
-                    <div>
-                      <label className={LABEL}>Pixel Ratio</label>
-                      <Select
-                        options={PIXEL_RATIO_OPTIONS}
-                        {...register('pixel_ratio', { valueAsNumber: true })}
-                      />
-                    </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="profile-pixel-ratio">Pixel Ratio</Label>
+                    <ControlledSelectField
+                      control={control}
+                      name="pixel_ratio"
+                      options={PIXEL_RATIO_OPTIONS}
+                      numeric
+                      triggerId="profile-pixel-ratio"
+                    />
                   </div>
                 </div>
-              )}
-            </Card>
+              </div>
+            </FingerprintSubsection>
 
             {/* Hardware */}
-            <Card
+            <FingerprintSubsection
               title="Hardware"
               description="CPU and memory configuration"
-              actions={<Toggle checked={hardwareOpen} onChange={setHardwareOpen} />}
+              open={hardwareOpen}
+              onOpenChange={setHardwareOpen}
             >
-              {hardwareOpen && (
-                <div className="pt-3 grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={LABEL}>CPU Cores</label>
-                    <Select
-                      options={HARDWARE_CONCURRENCY_OPTIONS}
-                      {...register('hardware_concurrency', { valueAsNumber: true })}
-                    />
-                  </div>
-                  <div>
-                    <label className={LABEL}>Memory</label>
-                    <Select
-                      options={DEVICE_MEMORY_OPTIONS}
-                      {...register('device_memory', { valueAsNumber: true })}
-                    />
-                  </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="profile-hardware-concurrency">CPU Cores</Label>
+                  <ControlledSelectField
+                    control={control}
+                    name="hardware_concurrency"
+                    options={HARDWARE_CONCURRENCY_OPTIONS}
+                    numeric
+                    triggerId="profile-hardware-concurrency"
+                  />
                 </div>
-              )}
-            </Card>
+                <div className="space-y-1.5">
+                  <Label htmlFor="profile-device-memory">Memory</Label>
+                  <ControlledSelectField
+                    control={control}
+                    name="device_memory"
+                    options={DEVICE_MEMORY_OPTIONS}
+                    numeric
+                    triggerId="profile-device-memory"
+                  />
+                </div>
+              </div>
+            </FingerprintSubsection>
 
             {/* Timezone */}
-            <Card
+            <FingerprintSubsection
               title="Timezone & Locale"
               description="Geographic identity settings"
+              open={timezoneOpen}
+              onOpenChange={setTimezoneOpen}
               actions={
-                <>
-                  <Tooltip
-                    content={
+                <Tooltip
+                  content={
+                    watchedProxyId
+                      ? 'Fill timezone and languages from the attached proxy IP'
+                      : 'Attach a proxy to apply geo'
+                  }
+                >
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<MapPin className="h-3.5 w-3.5" />}
+                    onClick={handleApplyProxyGeo}
+                    loading={applyingGeo}
+                    disabled={!watchedProxyId || applyingGeo}
+                    type="button"
+                    aria-label={
                       watchedProxyId
-                        ? 'Fill timezone and languages from the attached proxy IP'
+                        ? 'Apply geo from proxy'
                         : 'Attach a proxy to apply geo'
                     }
                   >
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={<MapPin className="h-3.5 w-3.5" />}
-                      onClick={handleApplyProxyGeo}
-                      loading={applyingGeo}
-                      disabled={!watchedProxyId || applyingGeo}
-                      type="button"
-                      aria-label={
-                        watchedProxyId
-                          ? 'Apply geo from proxy'
-                          : 'Attach a proxy to apply geo'
-                      }
-                    >
-                      {applyingGeo ? 'Resolving proxy geo…' : 'Apply geo from proxy'}
-                    </Button>
-                  </Tooltip>
-                  <Toggle checked={timezoneOpen} onChange={setTimezoneOpen} />
-                </>
+                    {applyingGeo ? 'Resolving…' : 'Apply geo'}
+                  </Button>
+                </Tooltip>
               }
             >
-              {timezoneOpen && (
-                <div className="pt-3 space-y-3">
-                  <div>
-                    <label className={LABEL}>Timezone</label>
-                    <Select options={timezoneOptions} {...register('timezone')} />
-                  </div>
-                  {!watchedProxyId && (
-                    <p className="text-[10px] text-muted">
-                      Attach a proxy to the profile to enable “Apply geo from proxy”.
-                    </p>
-                  )}
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="profile-timezone">Timezone</Label>
+                  <ControlledSelectField
+                    control={control}
+                    name="timezone"
+                    options={timezoneOptions}
+                    triggerId="profile-timezone"
+                  />
                 </div>
+                {!watchedProxyId && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Attach a proxy to enable “Apply geo from proxy”.
+                  </p>
+                )}
+              </div>
+            </FingerprintSubsection>
+          </TabsContent>
+
+          {/* ═══ Cookies ═══ */}
+          {isEditMode && profileId && (
+            <TabsContent value={TAB_COOKIES} className="px-5 py-4 m-0">
+              <CookiesTab profileId={profileId} profileName={getValues('name')} />
+            </TabsContent>
+          )}
+
+          {/* ═══ Extensions ═══ */}
+          {isEditMode && profileId && (
+            <TabsContent value={TAB_EXTENSIONS} className="px-5 py-4 m-0">
+              <ExtensionsTab profileId={profileId} />
+            </TabsContent>
+          )}
+        </div>
+      </TabsRoot>
+    </form>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+interface FingerprintSubsectionProps {
+  title: string
+  description?: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  actions?: React.ReactNode
+  children: React.ReactNode
+}
+
+/**
+ * Collapsible group for fingerprint sub-cards (WebRTC / WebGL / Display /
+ * Hardware / Timezone). Subtle inset card chrome with a header that exposes
+ * a disclosure button and optional inline action button. Body unmounts when
+ * collapsed so a closed section doesn't keep reactive form subscriptions
+ * live. The disclosure is a real chevron button with `aria-expanded` +
+ * `aria-controls` — the prior `<Switch>` semantically described an on/off
+ * setting, not a collapse/expand region, which mis-represented intent to AT.
+ */
+function FingerprintSubsection({
+  title,
+  description,
+  open,
+  onOpenChange,
+  actions,
+  children
+}: FingerprintSubsectionProps): React.JSX.Element {
+  const titleId = `fp-section-${title.toLowerCase().replace(/\s+/g, '-')}`
+  const bodyId = `${titleId}-body`
+  return (
+    <section
+      aria-labelledby={titleId}
+      className="rounded-[--radius-lg] border border-border bg-elevated/40 p-4 surface-lit shadow-[var(--shadow-sm)]"
+    >
+      <header className="flex items-center justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <h3
+            id={titleId}
+            className="text-[14px] font-semibold text-foreground tracking-tight"
+          >
+            {title}
+          </h3>
+          {description && (
+            <p className="text-[12px] text-muted-foreground leading-relaxed">{description}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {actions}
+          <button
+            type="button"
+            onClick={() => onOpenChange(!open)}
+            aria-expanded={open}
+            aria-controls={bodyId}
+            aria-label={`${open ? 'Collapse' : 'Expand'} ${title}`}
+            className={cn(
+              'inline-flex items-center justify-center h-7 w-7 rounded-[--radius-sm]',
+              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
+            )}
+          >
+            <ChevronDown
+              className={cn('h-4 w-4 transition-transform', open && 'rotate-180')}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+      </header>
+      {open && <div id={bodyId}>{children}</div>}
+    </section>
+  )
+}
+
+interface FingerprintHealthPanelProps {
+  warnings: ValidationWarning[]
+  visibleWarnings: ValidationWarning[]
+  hasWarnSeverity: boolean
+  showAll: boolean
+  onToggleShowAll: () => void
+  onJumpToTab: (tab: TabId) => void
+  activeTab: TabId
+}
+
+/**
+ * Surfaces validator warnings as a compact panel above the tab body. Clicking
+ * a row jumps to the tab the field lives on. Stays sticky-ish at the top of
+ * the scroll surface — collapses to 3 rows + "show more" when there are many.
+ */
+function FingerprintHealthPanel({
+  warnings,
+  visibleWarnings,
+  hasWarnSeverity,
+  showAll,
+  onToggleShowAll,
+  onJumpToTab,
+  activeTab
+}: FingerprintHealthPanelProps): React.JSX.Element {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        'mx-5 mt-3 rounded-[--radius-md] border px-3.5 py-2.5 text-xs',
+        hasWarnSeverity ? 'bg-warn/10 border-warn/25' : 'bg-elevated border-border'
+      )}
+    >
+      <div
+        className={cn(
+          'flex items-center gap-1.5 mb-2 font-medium',
+          hasWarnSeverity ? 'text-warn' : 'text-muted-foreground'
+        )}
+      >
+        {hasWarnSeverity ? (
+          <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <Info className="h-3.5 w-3.5 shrink-0" />
+        )}
+        <span>Fingerprint consistency</span>
+        <Badge
+          variant={hasWarnSeverity ? 'warning' : 'muted'}
+          className="ml-auto h-4 px-1.5 text-[10px] tabular-nums"
+        >
+          {warnings.length}
+        </Badge>
+      </div>
+      <ul
+        className={cn(
+          'space-y-1.5',
+          warnings.length > 3 && showAll && 'max-h-44 overflow-y-auto pr-1'
+        )}
+      >
+        {visibleWarnings.map((w, i) => {
+          const targetTab = FIELD_TAB_MAP[w.field]
+          const isOnTargetTab = targetTab && activeTab === targetTab
+          return (
+            <li
+              key={`${w.field}:${w.severity}:${i}`}
+              className="flex items-start gap-2 text-foreground/85"
+            >
+              {w.severity === 'warn' ? (
+                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0 text-warn" />
+              ) : (
+                <Info className="h-3 w-3 mt-0.5 shrink-0 text-muted-foreground" />
               )}
-            </Card>
-          </div>
-        )}
+              <span className="flex-1">{w.message}</span>
+              {targetTab && !isOnTargetTab && (
+                <button
+                  type="button"
+                  onClick={() => onJumpToTab(targetTab)}
+                  className="text-[10px] font-medium uppercase tracking-wider text-primary hover:text-accent-dim transition-colors shrink-0"
+                  aria-label={`Jump to ${targetTab} tab`}
+                >
+                  Fix →
+                </button>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      {warnings.length > 3 && (
+        <button
+          type="button"
+          onClick={onToggleShowAll}
+          className="mt-2 text-[11px] font-medium text-primary hover:text-accent-dim transition-colors"
+        >
+          {showAll ? 'Show less' : `Show ${warnings.length - 3} more`}
+        </button>
+      )}
+    </div>
+  )
+}
 
-        {/* ═══ Cookies ═══ */}
-        {activeTab === 'cookies' && isEditMode && profileId && (
-          <CookiesTab profileId={profileId} profileName={getValues('name')} />
-        )}
+interface VerificationChipsProps {
+  disabled: boolean
+  onOpen?: (label: string, url: string) => Promise<void> | void
+}
 
-        {/* ═══ Extensions ═══ */}
-        {activeTab === 'extensions' && isEditMode && profileId && (
-          <ExtensionsTab profileId={profileId} />
+/**
+ * Quick-action chips that open detection-vector test sites in the launched
+ * browser. Disabled in create-mode (no profileId yet) — saves the operator
+ * a click instead of failing silently after they hit a chip.
+ */
+function VerificationChips({ disabled, onOpen }: VerificationChipsProps): React.JSX.Element {
+  return (
+    <div className="mx-5 mt-3 rounded-[--radius-md] bg-elevated/40 border border-border px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+          <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <span>Verification</span>
+        </div>
+        {disabled && (
+          <span
+            id="verification-hint"
+            className="text-[10px] font-medium text-muted-foreground/70"
+          >
+            Available after saving
+          </span>
         )}
       </div>
-    </form>
+      <div
+        role="group"
+        aria-label="Verification test sites"
+        className="flex flex-wrap gap-1.5"
+      >
+        {TEST_SITES.map((site) => (
+          // Use `aria-disabled` + click guard instead of the native `disabled`
+          // attribute so the chip stays in the keyboard tab order and screen
+          // readers can still announce the chip + the "Available after saving"
+          // hint via `aria-describedby`. Native `disabled` removes the element
+          // from the accessibility tree entirely.
+          <button
+            key={site.url}
+            type="button"
+            aria-disabled={disabled || undefined}
+            aria-describedby={disabled ? 'verification-hint' : undefined}
+            onClick={() => {
+              if (disabled) return
+              void onOpen?.(site.label, site.url)
+            }}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full px-2.5 py-1',
+              'text-[11px] font-medium transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+              disabled
+                ? 'bg-card/60 border border-border/50 text-muted-foreground cursor-not-allowed opacity-70'
+                : 'bg-card border border-border text-foreground/85 hover:text-primary hover:border-primary/40 hover:bg-primary/5'
+            )}
+          >
+            {site.label}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }

@@ -8,6 +8,13 @@ interface ProfilesStore {
   loading: boolean
   /** Per-profile error messages (cleared on next action) */
   profileErrors: Record<string, string>
+  /**
+   * Number of profiles whose status is `running` or `starting` — kept in
+   * sync alongside every `profiles` mutation so subscribers can read it as
+   * an O(1) selector instead of running `.filter(...).length` per store
+   * notification (Layout, ProfilesPage `document.title`, etc.).
+   */
+  runningCount: number
   /** Editor panel state — persisted across navigations */
   editorMode: 'edit' | 'create' | null
   editorProfileId: string | null
@@ -34,6 +41,17 @@ interface ProfilesStore {
 // Deletion timers kept outside the store state (non-serializable).
 const deleteTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+// Counts profiles that should be reflected in the LeftRail "running" badge
+// and the document.title chrome — `running` and `starting` together so the
+// indicator lights up the moment a launch is initiated.
+function computeRunningCount(profiles: Profile[]): number {
+  let count = 0
+  for (const p of profiles) {
+    if (p.status === 'running' || p.status === 'starting') count++
+  }
+  return count
+}
+
 function setProfileStatus(
   profiles: Profile[],
   profileId: string,
@@ -50,6 +68,7 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
   sessions: [],
   loading: false,
   profileErrors: {},
+  runningCount: 0,
   editorMode: null,
   editorProfileId: null,
   pendingDeletes: new Set<string>(),
@@ -62,7 +81,7 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
       const profiles = await api.listProfiles()
       // Only apply if this is still the latest request (avoid stale data overwrite)
       if (requestId === fetchProfilesCounter) {
-        set({ profiles })
+        set({ profiles, runningCount: computeRunningCount(profiles) })
       }
     } finally {
       if (requestId === fetchProfilesCounter) {
@@ -158,35 +177,47 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
     // Check max concurrent sessions limit
     const maxConcurrent = await api.getSetting('max_concurrent_sessions') as number | null
     if (maxConcurrent && maxConcurrent > 0) {
-      const running = get().profiles.filter(p => p.status === 'running' || p.status === 'starting').length
-      if (running >= maxConcurrent) {
-        set((state) => ({
-          profileErrors: { ...state.profileErrors, [id]: `Max concurrent sessions (${maxConcurrent}) reached` },
-          profiles: setProfileStatus(state.profiles, id, 'error')
-        }))
+      if (get().runningCount >= maxConcurrent) {
+        set((state) => {
+          const profiles = setProfileStatus(state.profiles, id, 'error')
+          return {
+            profileErrors: { ...state.profileErrors, [id]: `Max concurrent sessions (${maxConcurrent}) reached` },
+            profiles,
+            runningCount: computeRunningCount(profiles)
+          }
+        })
         return
       }
     }
 
     // Clear previous error and set optimistic "starting" state
-    set((state) => ({
-      profileErrors: { ...state.profileErrors, [id]: '' },
-      profiles: setProfileStatus(state.profiles, id, 'starting')
-    }))
+    set((state) => {
+      const profiles = setProfileStatus(state.profiles, id, 'starting')
+      return {
+        profileErrors: { ...state.profileErrors, [id]: '' },
+        profiles,
+        runningCount: computeRunningCount(profiles)
+      }
+    })
     try {
       await api.launchBrowser(id)
       // IPC call succeeded — browser is launching. Set 'running' immediately as fallback.
       // The session:started event will also fire, but this guarantees the UI updates
       // even if event listeners aren't subscribed yet.
-      set((state) => ({
-        profiles: setProfileStatus(state.profiles, id, 'running')
-      }))
+      set((state) => {
+        const profiles = setProfileStatus(state.profiles, id, 'running')
+        return { profiles, runningCount: computeRunningCount(profiles) }
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Launch failed'
-      set((state) => ({
-        profileErrors: { ...state.profileErrors, [id]: msg },
-        profiles: setProfileStatus(state.profiles, id, 'error')
-      }))
+      set((state) => {
+        const profiles = setProfileStatus(state.profiles, id, 'error')
+        return {
+          profileErrors: { ...state.profileErrors, [id]: msg },
+          profiles,
+          runningCount: computeRunningCount(profiles)
+        }
+      })
     }
   },
 
@@ -197,9 +228,10 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
       return
     }
 
-    set((state) => ({
-      profiles: setProfileStatus(state.profiles, id, 'stopping')
-    }))
+    set((state) => {
+      const profiles = setProfileStatus(state.profiles, id, 'stopping')
+      return { profiles, runningCount: computeRunningCount(profiles) }
+    })
     try {
       await api.stopBrowser(id)
       // The child process 'exit' event fires async and will send session:stopped.
@@ -227,9 +259,11 @@ export const useProfilesStore = create<ProfilesStore>((set, get) => ({
     set((state) => {
       const errors = { ...state.profileErrors }
       delete errors[id]
+      const profiles = setProfileStatus(state.profiles, id, 'ready')
       return {
         profileErrors: errors,
-        profiles: setProfileStatus(state.profiles, id, 'ready')
+        profiles,
+        runningCount: computeRunningCount(profiles)
       }
     })
   },
@@ -267,18 +301,26 @@ function initEventListeners(): void {
 
   cleanupFns.push(window.api.onSessionStarted((data) => {
     const info = data as SessionInfo
-    useProfilesStore.setState((state) => ({
-      profiles: setProfileStatus(state.profiles, info.profile_id, 'running'),
-      sessions: [...state.sessions.filter((s) => s.profile_id !== info.profile_id), info]
-    }))
+    useProfilesStore.setState((state) => {
+      const profiles = setProfileStatus(state.profiles, info.profile_id, 'running')
+      return {
+        profiles,
+        runningCount: computeRunningCount(profiles),
+        sessions: [...state.sessions.filter((s) => s.profile_id !== info.profile_id), info]
+      }
+    })
   }))
 
   cleanupFns.push(window.api.onSessionStopped((data) => {
     const { profile_id } = data as { profile_id: string; exit_code: number | null }
-    useProfilesStore.setState((state) => ({
-      profiles: setProfileStatus(state.profiles, profile_id, 'ready'),
-      sessions: state.sessions.filter((s) => s.profile_id !== profile_id)
-    }))
+    useProfilesStore.setState((state) => {
+      const profiles = setProfileStatus(state.profiles, profile_id, 'ready')
+      return {
+        profiles,
+        runningCount: computeRunningCount(profiles),
+        sessions: state.sessions.filter((s) => s.profile_id !== profile_id)
+      }
+    })
   }))
 
   cleanupFns.push(window.api.onSessionState((data) => {
@@ -287,12 +329,16 @@ function initEventListeners(): void {
       status: ProfileStatus
       error?: string
     }
-    useProfilesStore.setState((state) => ({
-      profiles: setProfileStatus(state.profiles, profile_id, status),
-      ...(error
-        ? { profileErrors: { ...state.profileErrors, [profile_id]: error } }
-        : {})
-    }))
+    useProfilesStore.setState((state) => {
+      const profiles = setProfileStatus(state.profiles, profile_id, status)
+      return {
+        profiles,
+        runningCount: computeRunningCount(profiles),
+        ...(error
+          ? { profileErrors: { ...state.profileErrors, [profile_id]: error } }
+          : {})
+      }
+    })
   }))
 }
 
