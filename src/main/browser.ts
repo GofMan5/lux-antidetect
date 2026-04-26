@@ -1623,10 +1623,21 @@ async function launchBrowserInner(
       // Hide automation signals: removes `navigator.webdriver` and silences
       // the "Chrome is being controlled by automated test software" infobar
       // that Chromium shows once a CDP client connects to
-      // --remote-debugging-port. Also kills the "unsupported command-line
-      // flag" banner for --load-extension on older Chromium builds.
+      // --remote-debugging-port.
       args.push('--disable-blink-features=AutomationControlled')
       args.push('--no-default-browser-check')
+
+      // Silence Chrome 137+'s "you're using unsupported command line flags"
+      // yellow infobar. The banner appears whenever \`kBadFlags\` (which
+      // includes --host-resolver-rules) is present, regardless of why the
+      // flag is set. Chromium's BadFlagsPrompt has one bypass:
+      // \`HasSwitch(kTestType)\` returns early. \`--test-type\` is purely a
+      // browser-process switch — \`navigator.webdriver\` is set by
+      // \`--enable-automation\`, not this — so the value is invisible to
+      // page JS. The "webdriver" value matches Puppeteer / Playwright /
+      // Selenium convention so any internal Chrome metric blends with
+      // ordinary automation traffic.
+      args.push('--test-type=webdriver')
 
       // ─── DNS hardening ──────────────────────────────────────────────
       //
@@ -1648,11 +1659,20 @@ async function launchBrowserInner(
       // moment before the proxy IP fetched it. Result: two distinct
       // IPs visible to Google in the same session.
       //
-      // EXCLUDE 127.0.0.1 keeps localhost reachable so the SOCKS5 relay
-      // and dev-server use cases still work. Without proxy, leave DoH
-      // on automatic for ISP privacy.
+      // The EXCLUDE list contains every host Chrome must still be able
+      // to resolve to reach the proxy itself:
+      //   - 127.0.0.1 — SOCKS5 relay binding (and dev-loopback)
+      //   - proxy.host — when Chrome connects directly (HTTP/HTTPS, or
+      //     SOCKS without auth). Without this, MAP * ~NOTFOUND blocks
+      //     the proxy hostname too and every navigation aborts with
+      //     ERR_PROXY_CONNECTION_FAILED.
+      // Without proxy, leave DoH on automatic for ISP privacy.
+      const willUseSocksRelay = !!(proxy && isSocksProxy && proxy.username)
       if (proxy) {
-        args.push('--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1')
+        const excludeHosts = new Set<string>(['127.0.0.1'])
+        if (!willUseSocksRelay) excludeHosts.add(proxy.host)
+        const rules = ['MAP * ~NOTFOUND', ...[...excludeHosts].map((h) => `EXCLUDE ${h}`)].join(' , ')
+        args.push(`--host-resolver-rules=${rules}`)
       } else {
         args.push('--dns-over-https-mode=automatic')
       }
@@ -1786,7 +1806,8 @@ async function launchBrowserInner(
       // Fetch.authRequired nor webRequest.onAuthRequired fires for SOCKS
       // (both are HTTP-layer hooks). HTTP/HTTPS proxies keep the direct
       // path — their auth flows through CDP / the proxy-auth extension.
-      const needsSocksRelay = !!(proxy && isSocksProxy && proxy.username)
+      // Aliased to willUseSocksRelay (declared earlier for the DNS rules).
+      const needsSocksRelay = willUseSocksRelay
       if (proxy) {
         if (needsSocksRelay) {
           const relay = await startSocks5Relay(proxy)
