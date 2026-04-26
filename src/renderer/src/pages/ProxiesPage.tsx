@@ -1671,18 +1671,20 @@ export function ProxiesPage(): React.JSX.Element {
         }
       >
         <div className="space-y-3">
-          <Input
-            label="IP address"
-            placeholder="e.g. 84.54.120.38"
-            value={ipCheckInput}
-            onChange={(e) => setIpCheckInput(e.target.value)}
-            disabled={ipCheckLoading}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && ipCheckInput.trim() && !ipCheckLoading) {
-                handleStandaloneIpCheck()
-              }
-            }}
-          />
+          <div>
+            <label className={cn(LABEL, 'mb-1.5 block')}>IP address</label>
+            <Input
+              placeholder="e.g. 84.54.120.38"
+              value={ipCheckInput}
+              onChange={(e) => setIpCheckInput(e.target.value)}
+              disabled={ipCheckLoading}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && ipCheckInput.trim() && !ipCheckLoading) {
+                  handleStandaloneIpCheck()
+                }
+              }}
+            />
+          </div>
           <p className="text-[11px] text-muted/70 leading-relaxed">
             Privacy note: this query runs from your real machine — both providers will see your
             actual IP alongside the IP under investigation. Use the per-row Recheck action when
