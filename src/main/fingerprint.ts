@@ -2519,21 +2519,18 @@ try{
   }
 }catch(e){}
 
-// 19.b — Credential Management surface (WebAuthn / FedCM / WebOTP / Digital Credentials)
-// Reject every ceremony that asks for hardware-bound or federated identity
-// material. publicKey=WebAuthn, identity=FedCM, otp=WebOTP, digital=Digital
-// Credentials API (mDL / EU eID wallets). Password and legacy
-// FederatedCredential pass through so the browser password manager keeps
-// working. Empty-string DOMException matches Chrome's actual user-cancel
-// shape (the long URL-bearing message text varies by milestone and is
-// itself a tell).
+// 19.b — Credential Management surface (WebAuthn / Digital Credentials)
+// Reject ceremonies that ask for hardware-bound identity material.
+// publicKey=WebAuthn, digital=Digital Credentials API (mDL / EU eID wallets).
+// FedCM and WebOTP stay native because Microsoft/Azure CAPTCHA and login
+// challenge flows rely on their normal browser shape.
 try{
   if(navigator.credentials){
     var _credCreate=navigator.credentials.create;
     var _credGet=navigator.credentials.get;
     if(typeof _credCreate==='function'){
       _cloak(navigator.credentials,'create',function(opts){
-        if(opts&&(opts.publicKey||opts.identity||opts.digital)){
+        if(opts&&(opts.publicKey||opts.digital)){
           return Promise.reject(new DOMException('','NotAllowedError'));
         }
         return _credCreate.apply(this,arguments);
@@ -2541,7 +2538,7 @@ try{
     }
     if(typeof _credGet==='function'){
       _cloak(navigator.credentials,'get',function(opts){
-        if(opts&&(opts.publicKey||opts.identity||opts.otp||opts.digital)){
+        if(opts&&(opts.publicKey||opts.digital)){
           return Promise.reject(new DOMException('','NotAllowedError'));
         }
         return _credGet.apply(this,arguments);
@@ -2554,17 +2551,6 @@ try{
       _cloak(navigator.identity,'get',function(){
         return Promise.reject(new DOMException('','NotAllowedError'));
       });
-    }
-  }
-  // FedCM / Digital Credentials IdP surface
-  if(typeof IdentityProvider!=='undefined'){
-    if(typeof IdentityProvider.getUserInfo==='function'){
-      _cloak(IdentityProvider,'getUserInfo',function(){
-        return Promise.reject(new DOMException('','NotAllowedError'));
-      });
-    }
-    if(typeof IdentityProvider.close==='function'){
-      _cloak(IdentityProvider,'close',function(){});
     }
   }
 }catch(e){}
@@ -2584,41 +2570,6 @@ try{
     if(typeof PaymentRequest.prototype.show==='function'){
       _cloak(PaymentRequest.prototype,'show',function(){
         return Promise.reject(new DOMException('','AbortError'));
-      });
-    }
-  }
-}catch(e){}
-
-// 19.d — Storage Access API
-// In real Chrome \`hasStorageAccess()\` resolves true on top-level documents
-// (no third-party partition exists) and varies for nested contexts. Forcing
-// \`false\` unconditionally is itself a top-frame tell, so mirror Chrome's
-// shape: top-level → true, third-party iframe → false.
-try{
-  if(typeof Document!=='undefined'&&Document.prototype){
-    var _isTopFrame=function(){
-      try{return window.top===window;}catch(e){return false;}
-    };
-    if(typeof Document.prototype.hasStorageAccess==='function'){
-      _cloak(Document.prototype,'hasStorageAccess',function(){
-        return Promise.resolve(_isTopFrame());
-      });
-    }
-    if(typeof Document.prototype.requestStorageAccess==='function'){
-      _cloak(Document.prototype,'requestStorageAccess',function(){
-        return Promise.reject(new DOMException('','NotAllowedError'));
-      });
-    }
-    // hasStorageAccessFor / requestStorageAccessFor (Chrome 119+):
-    // first-party-set lookup. Same posture as the un-suffixed pair.
-    if(typeof Document.prototype.hasStorageAccessFor==='function'){
-      _cloak(Document.prototype,'hasStorageAccessFor',function(){
-        return Promise.resolve(_isTopFrame());
-      });
-    }
-    if(typeof Document.prototype.requestStorageAccessFor==='function'){
-      _cloak(Document.prototype,'requestStorageAccessFor',function(){
-        return Promise.reject(new DOMException('','NotAllowedError'));
       });
     }
   }

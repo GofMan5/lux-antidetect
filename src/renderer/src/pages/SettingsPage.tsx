@@ -1233,7 +1233,7 @@ function FingerprintTab({
                 </Badge>
               </span>
             }
-            description="Blocks passkeys, FedCM, Digital Credentials, DBSC, payment-instrument probes, Storage Access, Privacy Sandbox Topics, and DevTools / CDP detection. Password autofill and standard federated logins are unaffected."
+            description="Blocks passkeys, Digital Credentials, DBSC, payment-instrument probes, Privacy Sandbox Topics, and DevTools / CDP detection. FedCM, WebOTP, Storage Access, and Private State Tokens stay native for Microsoft/Azure CAPTCHA compatibility."
           />
         </CardContent>
       </CardRoot>

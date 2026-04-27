@@ -21,6 +21,7 @@ import { startSocks5Relay, type RelayHandle } from './socks5-relay'
 
 const execFileAsync = promisify(execFile)
 
+const GRACEFUL_BROWSER_CLOSE_TIMEOUT_MS = 8_000
 
 
 const BROWSER_PATHS: Record<BrowserType, string[]> = {
@@ -167,9 +168,10 @@ async function findBrowserPidsByProfileDir(profileDir: string): Promise<number[]
 }
 
 /** Kill a single PID tree (async). */
-async function killPid(pid: number): Promise<void> {
+async function killPid(pid: number, force = true): Promise<void> {
   try {
-    await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+    const args = force ? ['/PID', String(pid), '/T', '/F'] : ['/PID', String(pid), '/T']
+    await execFileAsync('taskkill', args, {
       timeout: 5000,
       windowsHide: true
     })
@@ -178,16 +180,61 @@ async function killPid(pid: number): Promise<void> {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForBrowserExit(profileDir: string, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if ((await findBrowserPidsByProfileDir(profileDir)).length === 0) return true
+    await sleep(300)
+  }
+  return (await findBrowserPidsByProfileDir(profileDir)).length === 0
+}
+
 /** Kill all processes associated with a browser profile directory. (ASYNC) */
 async function killBrowserByProfileDir(profileDir: string): Promise<void> {
   const pids = await findBrowserPidsByProfileDir(profileDir)
-  await Promise.all(pids.map(killPid))
+  await Promise.all(pids.map((pid) => killPid(pid)))
 
   // Second pass: if PIDs were found but processes are sticky, try again
   if (pids.length > 0) {
     const remaining = await findBrowserPidsByProfileDir(profileDir)
-    await Promise.all(remaining.map(killPid))
+    await Promise.all(remaining.map((pid) => killPid(pid)))
   }
+}
+
+async function closeBrowserViaCDP(port: number): Promise<void> {
+  try {
+    await cdpBrowserCommand(port, 'Browser.close', {})
+  } catch {
+    // Browser.close often closes the socket before a response frame arrives.
+  }
+}
+
+/**
+ * Close a profile browser in a data-preserving way. Chromium gets a CDP
+ * Browser.close first so Cookies/Local Storage/IndexedDB LevelDB state is
+ * flushed. If CDP is not available (or Firefox), ask Windows to close the
+ * process tree without /F before falling back to force kill.
+ */
+async function closeBrowserByProfileDir(
+  profileDir: string,
+  cdpPort?: number
+): Promise<void> {
+  if (cdpPort) {
+    await closeBrowserViaCDP(cdpPort)
+    if (await waitForBrowserExit(profileDir, GRACEFUL_BROWSER_CLOSE_TIMEOUT_MS)) return
+  }
+
+  const pids = await findBrowserPidsByProfileDir(profileDir)
+  if (pids.length > 0) {
+    await Promise.all(pids.map((pid) => killPid(pid, false)))
+    if (await waitForBrowserExit(profileDir, GRACEFUL_BROWSER_CLOSE_TIMEOUT_MS)) return
+  }
+
+  await killBrowserByProfileDir(profileDir)
 }
 
 
@@ -495,13 +542,13 @@ async function injectViaCDP(port: number, script: string, fp: Fingerprint, geoOv
 }
 
 /** Send a CDP command via minimal WebSocket (no dependencies, uses Node's http upgrade). */
-async function cdpCommand(port: number, targetId: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+async function cdpCommandAtPath(port: number, path: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const key = randomBytes(16).toString('base64')
     const req = httpRequest({
       hostname: '127.0.0.1',
       port,
-      path: `/devtools/page/${targetId}`,
+      path,
       headers: {
         Connection: 'Upgrade',
         Upgrade: 'websocket',
@@ -585,6 +632,18 @@ async function cdpCommand(port: number, targetId: string, method: string, params
     req.setTimeout(5000, () => { req.destroy(); finish(new Error('CDP timeout')) })
     req.end()
   })
+}
+
+async function cdpCommand(port: number, targetId: string, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  return cdpCommandAtPath(port, `/devtools/page/${targetId}`, method, params)
+}
+
+async function cdpBrowserCommand(port: number, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  const versionRaw = await httpGet(`http://127.0.0.1:${port}/json/version`)
+  const versionInfo = JSON.parse(versionRaw) as { webSocketDebuggerUrl?: string }
+  if (!versionInfo.webSocketDebuggerUrl) throw new Error('WebSocket debugger URL not available')
+  const wsPath = new URL(versionInfo.webSocketDebuggerUrl).pathname
+  return cdpCommandAtPath(port, wsPath, method, params)
 }
 
 function getFingerprintLocale(fp: Fingerprint): { languages: string[]; primaryLanguage: string } {
@@ -1298,8 +1357,9 @@ function startBrowserPolling(
             if (session) {
               const elapsed = (Date.now() - new Date(session.started_at).getTime()) / 60000
               if (elapsed >= timeoutMinutes) {
+                const cdpPort = activeBrowsers.get(profileId)?.cdpPort
+                await closeBrowserByProfileDir(profileDir, cdpPort)
                 markStopped()
-                await killBrowserByProfileDir(profileDir)
                 return
               }
             }
@@ -1333,7 +1393,7 @@ export async function killAllBrowsers(): Promise<void> {
   const relayStops: Promise<void>[] = []
   for (const [profileId, active] of activeBrowsers) {
     clearInterval(active.pollTimer)
-    kills.push(killBrowserByProfileDir(active.profileDir))
+    kills.push(closeBrowserByProfileDir(active.profileDir, active.cdpPort))
     removeSession(profileId, null)
     const injector = cdpInjectors.get(profileId)
     if (injector) injector.stop()
@@ -1677,10 +1737,11 @@ async function launchBrowserInner(
 
     // Hardware identity lockdown — default ON. Master switch for the JS-side
     // injection (fingerprint.ts section 19) and the Chromium feature-disable
-    // flag below. Covers WebAuthn passkeys, FedCM, Digital Credentials, DBSC,
-    // PaymentRequest probes, Storage Access, Topics, and console-probe
-    // CDP detection — see the section 19 banner and the --disable-features
-    // comment for the full surface.
+    // flag below. Covers WebAuthn passkeys, Digital Credentials, DBSC,
+    // PaymentRequest probes, Topics, and console-probe CDP detection.
+    // Browser integrity surfaces used by Microsoft/Azure CAPTCHA (FedCM,
+    // WebOTP, Storage Access, Private State Tokens) intentionally stay in
+    // Chrome's native shape.
     const lockdownRow = db
       .prepare("SELECT value FROM settings WHERE key = 'hardware_identity_lockdown'")
       .get() as { value: string } | undefined
@@ -1869,8 +1930,8 @@ async function launchBrowserInner(
       //   2. Hardware-identity lockdown: gated by the user toggle. JS
       //      API surfaces in fingerprint.ts section 19 are belt-and-
       //      braces alongside these engine-level disables; some surfaces
-      //      (DBSC headers, Topics HTTP requests, FedCM IdP signin
-      //      status header) are reachable only at the engine level.
+      //      (DBSC headers, Topics HTTP requests) are reachable only at
+      //      the engine level.
       const disableFeatures: string[] = [
         // Tier 1 — always on
         'Reporting',                          // Reporting API beacons
@@ -1891,19 +1952,6 @@ async function launchBrowserInner(
           // Tier 2 — Hardware identity lockdown (matches fingerprint.ts §19)
           // Device-Bound Session Credentials (TPM-backed session keys)
           'DeviceBoundSessionCredentials',
-          // Federated Credential Management — every sub-feature gates a
-          // distinct surface; the umbrella alone is insufficient.
-          'FedCm',
-          'FedCmAuthz',
-          'FedCmAutoSelectedFlag',
-          'FedCmButtonMode',
-          'FedCmIdpSigninStatusEnabled',
-          'FedCmIframeOrigin',
-          'FedCmMultipleIdentityProviders',
-          'FedCmRpContext',
-          'FedCmSelectiveDisclosure',
-          'FedCmUserInfo',
-          'FedCmWithoutWellKnownEnforcement',
           // Digital Credentials API (mDL / EU eID / wallet tokens)
           'DigitalCredentials',
           'WebIdentityDigitalCredentials',
@@ -1920,8 +1968,6 @@ async function launchBrowserInner(
           'AttributionReporting',               // Conversion measurement
           'AttributionReportingCrossAppWeb',
           'PrivateAggregationApi',
-          'TrustTokens',                        // Private State Tokens
-          'PrivateStateTokens',
           'Fledge',                             // Protected Audience
           'FledgeBiddingAndAuctionServer',
           'InterestGroupStorage',
@@ -2148,14 +2194,15 @@ export async function stopBrowser(
   // Stop SOCKS auth relay if one was started for this profile
   stopSocksRelay(profileId)
 
-  // Kill by profile directory (finds real browser PIDs) — ASYNC, no longer blocks main thread
+  // Close by profile directory (finds real browser PIDs) — ASYNC, no longer blocks main thread.
+  // Prefer graceful close so Chromium has time to flush cookies/storage.
   if (activeBrowser) {
-    await killBrowserByProfileDir(activeBrowser.profileDir)
+    await closeBrowserByProfileDir(activeBrowser.profileDir, activeBrowser.cdpPort)
   }
 
   // Also try killing via ChildProcess handle (launcher PID — may already be dead)
   const session = getSession(profileId)
-  if (session) {
+  if (session && !activeBrowser) {
     try { session.process.kill() } catch { /* already exited */ }
     // Also try taskkill on the original PID's process tree
     await killPid(session.pid)
