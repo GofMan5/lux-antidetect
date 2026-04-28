@@ -536,6 +536,26 @@ const profilePatchSchema: JsonSchema = {
   }
 }
 
+const automationStepSchema: JsonSchema = {
+  type: 'object',
+  additionalProperties: true,
+  required: ['type'],
+  properties: {
+    id: { type: 'string', description: 'Stable step id.' },
+    type: {
+      type: 'string',
+      enum: ['launch', 'open_url', 'wait', 'wait_selector', 'click', 'type', 'evaluate', 'screenshot', 'stop']
+    },
+    label: { type: 'string' },
+    url: { type: 'string', description: 'http/https URL for open_url or launch.' },
+    selector: { type: 'string', description: 'CSS selector for wait_selector, click, or type.' },
+    text: { type: 'string', description: 'Text for type.' },
+    script: { type: 'string', description: 'JavaScript expression for evaluate.' },
+    duration_ms: { type: 'integer', minimum: 1, maximum: 300000 },
+    timeout_ms: { type: 'integer', minimum: 1, maximum: 300000 }
+  }
+}
+
 const tools: ToolDefinition[] = [
   {
     name: 'list_profiles',
@@ -738,6 +758,101 @@ const tools: ToolDefinition[] = [
         browserId: idSchema
       }
     }
+  },
+  {
+    name: 'list_automation_scripts',
+    description: 'List saved Lux BAS automation scripts.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
+  {
+    name: 'get_automation_script',
+    description: 'Get one saved Lux BAS automation script.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { scriptId: idSchema },
+      required: ['scriptId']
+    }
+  },
+  {
+    name: 'create_automation_script',
+    description: 'Create a saved Lux BAS automation script made of ordered browser steps.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', minLength: 1 },
+        description: { type: 'string' },
+        profileId: idSchema,
+        profile_id: idSchema,
+        steps: { type: 'array', items: automationStepSchema }
+      },
+      required: ['name', 'steps']
+    }
+  },
+  {
+    name: 'update_automation_script',
+    description: 'Update a saved Lux BAS automation script.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        scriptId: idSchema,
+        name: { type: 'string' },
+        description: { type: 'string' },
+        profileId: idSchema,
+        profile_id: idSchema,
+        steps: { type: 'array', items: automationStepSchema }
+      },
+      required: ['scriptId']
+    }
+  },
+  {
+    name: 'delete_automation_script',
+    description: 'Delete a saved Lux BAS automation script.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { scriptId: idSchema },
+      required: ['scriptId']
+    }
+  },
+  {
+    name: 'run_automation_script',
+    description: 'Run a saved Lux BAS automation script and return run logs.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        scriptId: idSchema,
+        profileId: idSchema,
+        profile_id: idSchema
+      },
+      required: ['scriptId']
+    }
+  },
+  {
+    name: 'list_automation_runs',
+    description: 'List recent Lux BAS automation run history, optionally filtered by script id.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { scriptId: idSchema }
+    }
+  },
+  {
+    name: 'run_adhoc_automation',
+    description: 'Run one ad-hoc Lux BAS automation without saving it first.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        profileId: idSchema,
+        profile_id: idSchema,
+        steps: { type: 'array', items: automationStepSchema }
+      },
+      required: ['steps']
+    }
   }
 ]
 
@@ -923,6 +1038,71 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
       return textResult({ ok: true, data: { browserId: profileId, profileId, tab: target, base64: result.data } })
     }
 
+    case 'list_automation_scripts': {
+      return textResult({ ok: true, data: await lux.request('GET', '/automation/scripts') })
+    }
+
+    case 'get_automation_script': {
+      const scriptId = requireString(args, 'scriptId')
+      return textResult({ ok: true, data: await lux.request('GET', `/automation/scripts/${encodeURIComponent(scriptId)}`) })
+    }
+
+    case 'create_automation_script': {
+      const profileId = optionalString(args, 'profileId') ?? optionalString(args, 'profile_id')
+      const payload = {
+        name: requireString(args, 'name'),
+        description: optionalString(args, 'description') ?? '',
+        profile_id: profileId ?? null,
+        steps: Array.isArray(args.steps) ? args.steps : []
+      }
+      return textResult({ ok: true, data: await lux.request('POST', '/automation/scripts', payload) })
+    }
+
+    case 'update_automation_script': {
+      const scriptId = requireString(args, 'scriptId')
+      const profileId = optionalString(args, 'profileId') ?? optionalString(args, 'profile_id')
+      const payload: Record<string, unknown> = {}
+      if (args.name !== undefined) payload.name = args.name
+      if (args.description !== undefined) payload.description = args.description
+      if (profileId !== undefined) payload.profile_id = profileId
+      if (Array.isArray(args.steps)) payload.steps = args.steps
+      return textResult({ ok: true, data: await lux.request('PATCH', `/automation/scripts/${encodeURIComponent(scriptId)}`, payload) })
+    }
+
+    case 'delete_automation_script': {
+      const scriptId = requireString(args, 'scriptId')
+      return textResult({ ok: true, data: await lux.request('DELETE', `/automation/scripts/${encodeURIComponent(scriptId)}`) })
+    }
+
+    case 'run_automation_script': {
+      const scriptId = requireString(args, 'scriptId')
+      const profileId = optionalString(args, 'profileId') ?? optionalString(args, 'profile_id')
+      return textResult({
+        ok: true,
+        data: await lux.request('POST', `/automation/scripts/${encodeURIComponent(scriptId)}/run`, {
+          profile_id: profileId
+        })
+      })
+    }
+
+    case 'list_automation_runs': {
+      const scriptId = optionalString(args, 'scriptId')
+      const suffix = scriptId ? `?scriptId=${encodeURIComponent(scriptId)}` : ''
+      return textResult({ ok: true, data: await lux.request('GET', `/automation/runs${suffix}`) })
+    }
+
+    case 'run_adhoc_automation': {
+      const profileId = optionalString(args, 'profileId') ?? optionalString(args, 'profile_id')
+      if (!profileId) throw new McpError(ErrorCode.InvalidParams, 'profileId is required')
+      return textResult({
+        ok: true,
+        data: await lux.request('POST', '/automation/run', {
+          profile_id: profileId,
+          steps: Array.isArray(args.steps) ? args.steps : []
+        })
+      })
+    }
+
     default:
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`)
   }
@@ -931,7 +1111,7 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
 const server = new Server(
   {
     name: 'lux-antidetect-mcp',
-    version: '1.0.75'
+    version: '1.0.78'
   },
   {
     capabilities: {

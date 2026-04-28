@@ -202,6 +202,38 @@ export function initDatabase(userDataPath: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_ai_messages_chat_created ON ai_messages(chat_id, created_at);
   `)
 
+  // BAS-style automation studio. Scripts are stored as normalized JSON steps;
+  // runs keep immutable logs so users can debug failed browser flows later.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS automation_scripts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+      steps TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_run_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id TEXT PRIMARY KEY,
+      script_id TEXT REFERENCES automation_scripts(id) ON DELETE SET NULL,
+      profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+      status TEXT NOT NULL CHECK(status IN ('running','success','error')),
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      duration_ms INTEGER,
+      error TEXT,
+      logs TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_automation_scripts_updated ON automation_scripts(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_scripts_profile ON automation_scripts(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_script ON automation_runs(script_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_started ON automation_runs(started_at);
+  `)
+
   // Migration: add check_latency_ms column to proxies
   addColumnIfMissing(db, 'proxies', 'check_latency_ms', 'check_latency_ms INTEGER')
 

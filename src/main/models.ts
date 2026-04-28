@@ -350,6 +350,75 @@ export interface AvailableBrowser {
   label: string
 }
 
+export type AutomationStepType =
+  | 'launch'
+  | 'open_url'
+  | 'wait'
+  | 'wait_selector'
+  | 'click'
+  | 'type'
+  | 'evaluate'
+  | 'screenshot'
+  | 'stop'
+
+export interface AutomationStep {
+  id: string
+  type: AutomationStepType
+  label?: string
+  url?: string
+  selector?: string
+  text?: string
+  script?: string
+  duration_ms?: number
+  timeout_ms?: number
+}
+
+export interface AutomationScript {
+  id: string
+  name: string
+  description: string
+  profile_id: string | null
+  steps: string // JSON AutomationStep[]
+  created_at: string
+  updated_at: string
+  last_run_at: string | null
+}
+
+export interface AutomationScriptInput {
+  name: string
+  description?: string
+  profile_id?: string | null
+  steps: AutomationStep[]
+}
+
+export type AutomationRunStatus = 'running' | 'success' | 'error'
+
+export interface AutomationRunLog {
+  ts: string
+  level: 'info' | 'warn' | 'error'
+  message: string
+  step_index?: number
+  step_type?: AutomationStepType
+  data?: unknown
+}
+
+export interface AutomationRun {
+  id: string
+  script_id: string | null
+  profile_id: string | null
+  status: AutomationRunStatus
+  started_at: string
+  finished_at: string | null
+  duration_ms: number | null
+  error: string | null
+  logs: string // JSON AutomationRunLog[]
+}
+
+export interface AutomationRunResult {
+  run: AutomationRun
+  logs: AutomationRunLog[]
+}
+
 function intToBool(v: number | null | undefined): boolean | null {
   return v === null || v === undefined ? null : !!v
 }

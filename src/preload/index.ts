@@ -12,6 +12,11 @@ type UpdateTemplateInput = Parameters<LuxAPI['updateTemplate']>[1]
 type AiSetSettingsInput = Parameters<LuxAPI['aiSetSettings']>[0]
 type AiSendMessageInput = Parameters<LuxAPI['aiSendMessage']>[0]
 type AiApplyActionsInput = Parameters<LuxAPI['aiApplyActions']>[0]
+type ExecuteJavaScriptInput = Parameters<LuxAPI['executeJavaScript']>[1]
+type ScreenshotOptions = Parameters<LuxAPI['captureScreenshotAdvanced']>[1]
+type CreateAutomationScriptInput = Parameters<LuxAPI['createAutomationScript']>[0]
+type UpdateAutomationScriptInput = Parameters<LuxAPI['updateAutomationScript']>[1]
+type AutomationStepsInput = Parameters<LuxAPI['runAdhocAutomation']>[1]
 
 const api: LuxAPI = {
   listProfiles: () => ipcRenderer.invoke('list-profiles'),
@@ -97,6 +102,23 @@ const api: LuxAPI = {
 
   // Automation API
   getCdpInfo: (profileId: string) => ipcRenderer.invoke('get-cdp-info', profileId),
+  listCdpTabs: (profileId: string) => ipcRenderer.invoke('list-cdp-tabs', profileId),
+  executeJavaScript: (profileId: string, input: ExecuteJavaScriptInput) =>
+    ipcRenderer.invoke('execute-js', profileId, input),
+  captureScreenshotAdvanced: (profileId: string, input?: ScreenshotOptions) =>
+    ipcRenderer.invoke('capture-screenshot-advanced', profileId, input),
+  listAutomationScripts: () => ipcRenderer.invoke('automation-list-scripts'),
+  getAutomationScript: (id: string) => ipcRenderer.invoke('automation-get-script', id),
+  createAutomationScript: (input: CreateAutomationScriptInput) =>
+    ipcRenderer.invoke('automation-create-script', input),
+  updateAutomationScript: (id: string, input: UpdateAutomationScriptInput) =>
+    ipcRenderer.invoke('automation-update-script', id, input),
+  deleteAutomationScript: (id: string) => ipcRenderer.invoke('automation-delete-script', id),
+  runAutomationScript: (id: string, overrideProfileId?: string | null) =>
+    ipcRenderer.invoke('automation-run-script', id, overrideProfileId),
+  listAutomationRuns: (scriptId?: string) => ipcRenderer.invoke('automation-list-runs', scriptId),
+  runAdhocAutomation: (profileId: string, steps: AutomationStepsInput) =>
+    ipcRenderer.invoke('automation-run-adhoc', profileId, steps),
 
   // Profile Extensions
   listProfileExtensions: (profileId: string) => ipcRenderer.invoke('list-profile-extensions', profileId),

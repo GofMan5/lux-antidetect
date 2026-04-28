@@ -31,15 +31,30 @@ import {
   parseNetscapeCookies,
   toNetscapeCookies,
   captureScreenshot,
+  captureScreenshotCDP,
+  executeJavaScriptCDP,
   type CdpCookie,
   getActiveBrowserProfileIds,
   getCdpConnectionInfo,
   launchBrowser,
+  listCdpPageTargets,
   openUrlInProfile,
   stopBrowser
 } from './browser'
 import { getAllSessions, getSession, getSessionHistory, onSessionEvent } from './sessions'
+import {
+  createAutomationScript,
+  deleteAutomationScript,
+  getAutomationScript,
+  listAutomationRuns,
+  listAutomationScripts,
+  runAdHocAutomation,
+  runAutomationScript,
+  updateAutomationScript
+} from './automation'
 import type {
+  AutomationScriptInput,
+  AutomationStep,
   BrowserType,
   CreateProfileInput,
   Profile,
@@ -773,8 +788,39 @@ async function handleProfiles(
     sendOk(res, await getCdpConnectionInfo(profileId))
     return
   }
+  if (req.method === 'GET' && action === 'tabs') {
+    sendOk(res, await listCdpPageTargets(profileId))
+    return
+  }
+  if (req.method === 'POST' && action === 'execute-js') {
+    const payload = getBodyObject(body)
+    if (typeof payload.script !== 'string' || !payload.script.trim()) {
+      throw new Error('script is required')
+    }
+    const result = await executeJavaScriptCDP(profileId, payload.script, {
+      tabId: typeof payload.tabId === 'string' ? payload.tabId : undefined,
+      tabIndex: typeof payload.tabIndex === 'number' ? payload.tabIndex : undefined,
+      urlContains: typeof payload.urlContains === 'string' ? payload.urlContains : undefined,
+      awaitPromise: payload.awaitPromise !== false,
+      returnByValue: payload.returnByValue !== false
+    })
+    sendOk(res, result)
+    return
+  }
   if (req.method === 'GET' && action === 'screenshot') {
     sendOk(res, await captureScreenshot(profileId))
+    return
+  }
+  if (req.method === 'POST' && action === 'screenshot') {
+    const payload = getBodyObject(body)
+    sendOk(res, await captureScreenshotCDP(profileId, {
+      tabId: typeof payload.tabId === 'string' ? payload.tabId : undefined,
+      tabIndex: typeof payload.tabIndex === 'number' ? payload.tabIndex : undefined,
+      urlContains: typeof payload.urlContains === 'string' ? payload.urlContains : undefined,
+      format: payload.format === 'jpeg' ? 'jpeg' : 'png',
+      quality: typeof payload.quality === 'number' ? payload.quality : undefined,
+      fullPage: payload.fullPage === true
+    }))
     return
   }
   if (req.method === 'GET' && action === 'cookies') {
@@ -994,13 +1040,106 @@ async function handleAutomation(
   body: unknown,
   context: NonNullable<typeof activeContext>
 ): Promise<void> {
+  const { db, profilesDir, getMainWindow } = context
+
+  if (parts[0] === 'scripts') {
+    const scriptId = parts[1]
+
+    if (!scriptId) {
+      if (req.method === 'GET') {
+        sendOk(res, listAutomationScripts(db))
+        return
+      }
+      if (req.method === 'POST') {
+        const script = createAutomationScript(db, getBodyObject(body) as unknown as AutomationScriptInput)
+        publishEvent('automation.script.created', { script_id: script.id, script })
+        sendOk(res, script)
+        return
+      }
+    }
+
+    if (scriptId) {
+      assertUuid(scriptId)
+      if (req.method === 'GET' && parts.length === 2) {
+        sendOk(res, getAutomationScript(db, scriptId))
+        return
+      }
+      if (req.method === 'PATCH' && parts.length === 2) {
+        const script = updateAutomationScript(
+          db,
+          scriptId,
+          getBodyObject(body) as unknown as Partial<AutomationScriptInput>
+        )
+        publishEvent('automation.script.updated', { script_id: script.id, script })
+        sendOk(res, script)
+        return
+      }
+      if (req.method === 'DELETE' && parts.length === 2) {
+        deleteAutomationScript(db, scriptId)
+        publishEvent('automation.script.deleted', { script_id: scriptId })
+        sendOk(res)
+        return
+      }
+      if (req.method === 'POST' && parts[2] === 'run') {
+        const payload = getBodyObject(body)
+        const profileId =
+          typeof payload.profileId === 'string'
+            ? payload.profileId
+            : typeof payload.profile_id === 'string'
+              ? payload.profile_id
+              : undefined
+        if (profileId) assertUuid(profileId)
+        const result = await runAutomationScript(
+          db,
+          scriptId,
+          profilesDir,
+          getMainWindow(),
+          profileId
+        )
+        publishEvent('automation.run.finished', {
+          run_id: result.run.id,
+          script_id: scriptId,
+          status: result.run.status
+        })
+        sendOk(res, result)
+        return
+      }
+    }
+  }
+
+  if (parts[0] === 'runs' && req.method === 'GET') {
+    const scriptId = getQuery(req).get('scriptId') ?? undefined
+    sendOk(res, listAutomationRuns(db, scriptId))
+    return
+  }
+
+  if (parts[0] === 'run' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const profileId =
+      typeof payload.profileId === 'string'
+        ? payload.profileId
+        : typeof payload.profile_id === 'string'
+          ? payload.profile_id
+          : ''
+    if (!profileId) throw new Error('profileId is required')
+    assertUuid(profileId)
+    const result = await runAdHocAutomation(
+      db,
+      { profile_id: profileId, steps: payload.steps as AutomationStep[] },
+      profilesDir,
+      getMainWindow()
+    )
+    publishEvent('automation.run.finished', { run_id: result.run.id, status: result.run.status })
+    sendOk(res, result)
+    return
+  }
+
   if (req.method !== 'POST' || parts[0] !== 'profile-session') {
     sendError(res, 404, 'Not found')
     return
   }
 
   const payload = getBodyObject(body)
-  const { db, profilesDir, getMainWindow } = context
   const targetUrl = validateHttpUrl(payload.targetUrl ?? payload.url, 'targetUrl')
 
   let proxy: ProxyResponse | null = null
@@ -1227,9 +1366,14 @@ function buildOpenApi(config: ApiServerConfig): Record<string, unknown> {
       '/profiles/{id}/stop': { post: { summary: 'Stop profile browser' } },
       '/profiles/{id}/open-url': { post: { summary: 'Open URL in profile context' } },
       '/profiles/{id}/cdp': { get: { summary: 'Get CDP connection info' } },
+      '/profiles/{id}/tabs': { get: { summary: 'List active CDP page tabs' } },
+      '/profiles/{id}/execute-js': { post: { summary: 'Execute JavaScript in a profile tab' } },
       '/profiles/{id}/cookies': { get: { summary: 'Export cookies from a running profile' } },
       '/profiles/{id}/cookies/import': { post: { summary: 'Import cookies into a running profile' } },
-      '/profiles/{id}/screenshot': { get: { summary: 'Capture profile screenshot' } },
+      '/profiles/{id}/screenshot': {
+        get: { summary: 'Capture profile screenshot' },
+        post: { summary: 'Capture selected tab screenshot' }
+      },
       '/proxies': { get: { summary: 'List proxies' }, post: { summary: 'Create proxy' } },
       '/proxies/parse': { post: { summary: 'Parse a single proxy line' } },
       '/proxies/bulk-import': { post: { summary: 'Parse and import proxy lines' } },
@@ -1240,6 +1384,15 @@ function buildOpenApi(config: ApiServerConfig): Record<string, unknown> {
       '/session-history': { get: { summary: 'Read session history, optionally filtered by profileId' } },
       '/bulk/launch': { post: { summary: 'Launch profiles' } },
       '/bulk/stop': { post: { summary: 'Stop profiles' } },
+      '/automation/scripts': { get: { summary: 'List automation scripts' }, post: { summary: 'Create automation script' } },
+      '/automation/scripts/{id}': {
+        get: { summary: 'Get automation script' },
+        patch: { summary: 'Update automation script' },
+        delete: { summary: 'Delete automation script' }
+      },
+      '/automation/scripts/{id}/run': { post: { summary: 'Run saved automation script' } },
+      '/automation/runs': { get: { summary: 'List automation run history' } },
+      '/automation/run': { post: { summary: 'Run ad-hoc automation steps' } },
       '/automation/profile-session': {
         post: { summary: 'Create/update profile, optionally create proxy, launch, and return CDP info' }
       },

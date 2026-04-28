@@ -1638,6 +1638,33 @@ export interface CdpConnectionInfo {
   httpEndpoint: string
 }
 
+export interface CdpPageTarget {
+  id: string
+  type: string
+  title?: string
+  url?: string
+  attached?: boolean
+  webSocketDebuggerUrl?: string
+  devtoolsFrontendUrl?: string
+}
+
+export interface CdpTargetSelector {
+  tabId?: string
+  tabIndex?: number
+  urlContains?: string
+}
+
+export interface CdpEvaluationOptions extends CdpTargetSelector {
+  awaitPromise?: boolean
+  returnByValue?: boolean
+}
+
+export interface CdpScreenshotOptions extends CdpTargetSelector {
+  format?: 'png' | 'jpeg'
+  quality?: number
+  fullPage?: boolean
+}
+
 /** Get CDP connection info for a running browser, so external tools (Playwright/Puppeteer) can connect. */
 export async function getCdpConnectionInfo(profileId: string): Promise<CdpConnectionInfo> {
   const ab = activeBrowsers.get(profileId)
@@ -1653,6 +1680,73 @@ export async function getCdpConnectionInfo(profileId: string): Promise<CdpConnec
     wsEndpoint: versionInfo.webSocketDebuggerUrl,
     httpEndpoint: `http://127.0.0.1:${ab.cdpPort}`
   }
+}
+
+function getActiveCdpPort(profileId: string): number {
+  const ab = activeBrowsers.get(profileId)
+  if (!ab || !ab.cdpPort) throw new Error('Browser is not running or CDP port unavailable')
+  if (ab.isFirefox) throw new Error('CDP automation is only supported for Chromium-based browsers')
+  return ab.cdpPort
+}
+
+export async function listCdpPageTargets(profileId: string): Promise<CdpPageTarget[]> {
+  const port = getActiveCdpPort(profileId)
+  const targetsRaw = await httpGet(`http://127.0.0.1:${port}/json`)
+  const targets = JSON.parse(targetsRaw) as CdpPageTarget[]
+  return Array.isArray(targets) ? targets.filter((target) => target.type === 'page') : []
+}
+
+function selectCdpTarget(targets: CdpPageTarget[], selector: CdpTargetSelector = {}): CdpPageTarget {
+  if (selector.tabId) {
+    const target = targets.find((item) => item.id === selector.tabId)
+    if (!target) throw new Error(`Tab not found: ${selector.tabId}`)
+    return target
+  }
+
+  if (selector.urlContains) {
+    const target = targets.find((item) => item.url?.includes(selector.urlContains ?? ''))
+    if (!target) throw new Error(`No tab URL contains: ${selector.urlContains}`)
+    return target
+  }
+
+  if (selector.tabIndex !== undefined) {
+    const target = targets[selector.tabIndex]
+    if (!target) throw new Error(`No tab at index ${selector.tabIndex}`)
+    return target
+  }
+
+  const active = targets.find((item) => item.url && !item.url.startsWith('devtools://'))
+  if (!active) throw new Error('No page targets found')
+  return active
+}
+
+export async function executeJavaScriptCDP(
+  profileId: string,
+  script: string,
+  options: CdpEvaluationOptions = {}
+): Promise<unknown> {
+  const port = getActiveCdpPort(profileId)
+  const target = selectCdpTarget(await listCdpPageTargets(profileId), options)
+  return cdpCommand(port, target.id, 'Runtime.evaluate', {
+    expression: script,
+    awaitPromise: options.awaitPromise ?? true,
+    returnByValue: options.returnByValue ?? true,
+    userGesture: true
+  })
+}
+
+export async function captureScreenshotCDP(
+  profileId: string,
+  options: CdpScreenshotOptions = {}
+): Promise<string> {
+  const port = getActiveCdpPort(profileId)
+  const target = selectCdpTarget(await listCdpPageTargets(profileId), options)
+  const result = await cdpCommand(port, target.id, 'Page.captureScreenshot', {
+    format: options.format ?? 'png',
+    quality: options.quality,
+    captureBeyondViewport: options.fullPage ?? false
+  }) as { data: string }
+  return result.data
 }
 
 // ─── Open URL in Profile ─────────────────────────────────────────────────
@@ -1770,19 +1864,7 @@ function teardownStaleBrowserState(profileId: string): void {
 
 /** Capture a screenshot of the active tab via CDP. Returns base64-encoded PNG. */
 export async function captureScreenshot(profileId: string): Promise<string> {
-  const ab = activeBrowsers.get(profileId)
-  if (!ab || !ab.cdpPort) throw new Error('Browser is not running or CDP port unavailable')
-
-  const targetsRaw = await httpGet(`http://127.0.0.1:${ab.cdpPort}/json`)
-  const targets = JSON.parse(targetsRaw) as { id: string; type: string }[]
-  const page = targets.find((t) => t.type === 'page')
-  if (!page) throw new Error('No page targets found')
-
-  const result = await cdpCommand(ab.cdpPort, page.id, 'Page.captureScreenshot', {
-    format: 'png',
-    quality: 80
-  }) as { data: string }
-  return result.data
+  return captureScreenshotCDP(profileId, { format: 'png', quality: 80 })
 }
 
 // ─── Launch / Stop ──────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { create } from 'zustand'
 import {
   Search, LayoutGrid, Globe, Settings, Plus, PlayCircle,
-  Keyboard, Download, Upload
+  Keyboard, Download, Upload, Workflow
 } from 'lucide-react'
 import { useProfilesStore } from '../stores/profiles'
 import { useKeyboardShortcutsStore } from './KeyboardShortcutsHelp'
@@ -152,6 +152,15 @@ export function CommandPalette(): React.JSX.Element | null {
         icon: <Globe className="h-4 w-4" />,
         keywords: 'navigate proxies socks http',
         perform: () => navigate('/proxies')
+      },
+      {
+        id: 'nav-automation',
+        kind: 'navigate',
+        label: 'Go to Automation',
+        hint: 'BAS scripts and browser workflows',
+        icon: <Workflow className="h-4 w-4" />,
+        keywords: 'navigate automation bas scripts workflow cdp',
+        perform: () => navigate('/automation')
       },
       {
         id: 'nav-settings',

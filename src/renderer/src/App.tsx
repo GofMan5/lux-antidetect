@@ -21,6 +21,9 @@ const ProfilesPage = lazy(() =>
 const ProxiesPage = lazy(() =>
   import('./pages/ProxiesPage').then((m) => ({ default: m.ProxiesPage }))
 )
+const AutomationPage = lazy(() =>
+  import('./pages/AutomationPage').then((m) => ({ default: m.AutomationPage }))
+)
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 )
@@ -108,6 +111,7 @@ export default function App(): React.JSX.Element {
           <Route path="/" element={<Navigate to="/profiles" replace />} />
           <Route path="/profiles" element={<LazyRoute><ProfilesPage /></LazyRoute>} />
           <Route path="/proxies" element={<LazyRoute><ProxiesPage /></LazyRoute>} />
+          <Route path="/automation" element={<LazyRoute><AutomationPage /></LazyRoute>} />
           <Route
             path="/ai"
             element={

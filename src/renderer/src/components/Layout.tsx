@@ -10,7 +10,8 @@ import {
   FileText,
   User,
   ExternalLink,
-  Bot
+  Bot,
+  Workflow
 } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import {
@@ -65,6 +66,7 @@ interface RailItem {
 const RAIL_ITEMS: RailItem[] = [
   { to: '/profiles', label: 'Profiles', icon: LayoutGrid, shortcut: 'G P' },
   { to: '/proxies', label: 'Proxies', icon: Globe, shortcut: 'G X' },
+  { to: '/automation', label: 'Automation', icon: Workflow, shortcut: 'G B' },
   ...(FEATURE_AI_ENABLED ? [{ to: '/ai', label: 'AI', icon: Bot, shortcut: 'G A' }] : []),
   ...(FEATURE_TEMPLATES_ENABLED
     ? [{ to: '/templates', label: 'Templates', icon: FileText, shortcut: '', comingSoon: true }]

@@ -22,7 +22,12 @@ import type {
   AiProfileAction,
   AiSendMessageInput,
   AiSendMessageResult,
-  AiSettings
+  AiSettings,
+  AutomationRun,
+  AutomationRunResult,
+  AutomationScript,
+  AutomationScriptInput,
+  AutomationStep
 } from '../main/models'
 import type { ProxyGeoBundle, IpFraudReport } from '../main/geoip'
 import type { PresetDescriptor } from '../main/fingerprint-presets'
@@ -56,6 +61,34 @@ export interface McpServerInfo {
   packagePath: string
   readmePath: string
   installHint: string
+}
+
+export interface CdpPageTarget {
+  id: string
+  type: string
+  title?: string
+  url?: string
+  attached?: boolean
+  webSocketDebuggerUrl?: string
+  devtoolsFrontendUrl?: string
+}
+
+export interface ExecuteJavaScriptInput {
+  script: string
+  tabId?: string
+  tabIndex?: number
+  urlContains?: string
+  awaitPromise?: boolean
+  returnByValue?: boolean
+}
+
+export interface ScreenshotOptions {
+  tabId?: string
+  tabIndex?: number
+  urlContains?: string
+  format?: 'png' | 'jpeg'
+  quality?: number
+  fullPage?: boolean
 }
 
 // Reuse the canonical session payload to keep preload and main in lockstep.
@@ -177,6 +210,18 @@ export interface LuxAPI {
   importCookies(profileId: string, data: string, format?: string): Promise<{ ok: boolean; imported: number; total: number }>
 
   getCdpInfo(profileId: string): Promise<{ port: number; wsEndpoint: string; httpEndpoint: string }>
+  listCdpTabs(profileId: string): Promise<CdpPageTarget[]>
+  executeJavaScript(profileId: string, input: ExecuteJavaScriptInput): Promise<unknown>
+  captureScreenshotAdvanced(profileId: string, input?: ScreenshotOptions): Promise<string>
+
+  listAutomationScripts(): Promise<AutomationScript[]>
+  getAutomationScript(id: string): Promise<AutomationScript>
+  createAutomationScript(input: AutomationScriptInput): Promise<AutomationScript>
+  updateAutomationScript(id: string, input: Partial<AutomationScriptInput>): Promise<AutomationScript>
+  deleteAutomationScript(id: string): Promise<void>
+  runAutomationScript(id: string, overrideProfileId?: string | null): Promise<AutomationRunResult>
+  listAutomationRuns(scriptId?: string): Promise<AutomationRun[]>
+  runAdhocAutomation(profileId: string, steps: AutomationStep[]): Promise<AutomationRunResult>
 
   listProfileExtensions(profileId: string): Promise<ProfileExtension[]>
   addProfileExtension(profileId: string, path: string): Promise<ProfileExtension>

@@ -17,8 +17,18 @@ import {
 } from './profile'
 import { listProxies, createProxy, updateProxy, deleteProxy, testProxy, getProxyGroups, parseProxyLine } from './proxy'
 import { lookupProxyGeo, dryRunProxyMetadata, lookupFraudByIp } from './geoip'
-import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot, openUrlInProfile } from './browser'
+import { launchBrowser, stopBrowser, detectBrowsers, getActiveBrowserProfileIds, exportCookiesCDP, importCookiesCDP, parseNetscapeCookies, toNetscapeCookies, getCdpConnectionInfo, captureScreenshot, openUrlInProfile, listCdpPageTargets, executeJavaScriptCDP, captureScreenshotCDP } from './browser'
 import { getAllSessions, getSessionHistory } from './sessions'
+import {
+  createAutomationScript,
+  deleteAutomationScript,
+  getAutomationScript,
+  listAutomationRuns,
+  listAutomationScripts,
+  runAdHocAutomation,
+  runAutomationScript,
+  updateAutomationScript
+} from './automation'
 import { generateDefaultFingerprint } from './fingerprint'
 import { listFingerprintPresets, generateFingerprintFromPreset } from './fingerprint-presets'
 import { checkForUpdates, installUpdate } from './updater'
@@ -43,6 +53,8 @@ import {
 } from './ai'
 import { v4 as uuidv4 } from 'uuid'
 import type {
+  AutomationScriptInput,
+  AutomationStep,
   AiProfileAction,
   AiSendMessageInput,
   CreateProfileInput,
@@ -918,6 +930,73 @@ export function registerIpcHandlers(
     assertUuid(profileId)
     return getCdpConnectionInfo(profileId)
   })
+
+  ipcMain.handle('list-cdp-tabs', async (_, profileId: string) => {
+    assertUuid(profileId)
+    return listCdpPageTargets(profileId)
+  })
+
+  ipcMain.handle(
+    'execute-js',
+    async (
+      _,
+      profileId: string,
+      input: {
+        script: string
+        tabId?: string
+        tabIndex?: number
+        urlContains?: string
+        awaitPromise?: boolean
+        returnByValue?: boolean
+      }
+    ) => {
+      assertUuid(profileId)
+      if (!input || typeof input.script !== 'string' || !input.script.trim()) {
+        throw new Error('script is required')
+      }
+      return executeJavaScriptCDP(profileId, input.script, input)
+    }
+  )
+
+  ipcMain.handle(
+    'capture-screenshot-advanced',
+    async (
+      _,
+      profileId: string,
+      input?: {
+        tabId?: string
+        tabIndex?: number
+        urlContains?: string
+        format?: 'png' | 'jpeg'
+        quality?: number
+        fullPage?: boolean
+      }
+    ) => {
+      assertUuid(profileId)
+      return captureScreenshotCDP(profileId, input ?? {})
+    }
+  )
+
+  ipcMain.handle('automation-list-scripts', () => listAutomationScripts(db))
+  ipcMain.handle('automation-get-script', (_, id: string) => getAutomationScript(db, id))
+  ipcMain.handle('automation-create-script', (_, input: AutomationScriptInput) =>
+    createAutomationScript(db, input)
+  )
+  ipcMain.handle('automation-update-script', (_, id: string, input: Partial<AutomationScriptInput>) =>
+    updateAutomationScript(db, id, input)
+  )
+  ipcMain.handle('automation-delete-script', (_, id: string) => deleteAutomationScript(db, id))
+  ipcMain.handle(
+    'automation-run-script',
+    (_, id: string, overrideProfileId?: string | null) =>
+      runAutomationScript(db, id, profilesDir, getMainWindow(), overrideProfileId)
+  )
+  ipcMain.handle('automation-list-runs', (_, scriptId?: string) => listAutomationRuns(db, scriptId))
+  ipcMain.handle(
+    'automation-run-adhoc',
+    (_, profileId: string, steps: AutomationStep[]) =>
+      runAdHocAutomation(db, { profile_id: profileId, steps }, profilesDir, getMainWindow())
+  )
 
   // Process health — check which sessions have lost their browser process
   ipcMain.handle('check-process-health', () => {

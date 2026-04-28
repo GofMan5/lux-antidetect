@@ -1,6 +1,6 @@
 {
   "name": "@lux-antidetect/mcp-server",
-  "version": "1.0.77",
+  "version": "1.0.78",
   "description": "Model Context Protocol server for Lux Antidetect local automation API",
   "type": "module",
   "bin": {
