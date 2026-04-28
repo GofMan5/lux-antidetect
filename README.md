@@ -120,6 +120,37 @@ Lux includes an optional local REST API for scripts and automation tools.
 - Supports HMAC-signed webhooks for automation systems that cannot keep an SSE stream open.
 - Includes a kill switch that can stop running sessions, rotate the API token, and disable the API.
 
+### MCP Server
+
+The repository includes a dedicated Model Context Protocol server in `mcp-server/`. It bridges Claude Desktop, Cursor, and other MCP clients to the Lux Local API.
+
+It exposes tools for profile CRUD, profile launch/stop, running browser inventory, browser status, screenshots, active tab listing, and JavaScript execution in live Chromium/Edge sessions through CDP.
+
+```bash
+cd mcp-server
+npm install
+npm run build
+```
+
+Claude Desktop example:
+
+```json
+{
+  "mcpServers": {
+    "lux-antidetect": {
+      "command": "node",
+      "args": ["E:/Projects/!Lux antidetect/mcp-server/dist/index.js"],
+      "env": {
+        "LUX_API_TOKEN": "lux_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "LUX_API_BASE_URL": "http://127.0.0.1:17888/api/v1"
+      }
+    }
+  }
+}
+```
+
+The MCP server can also auto-detect the API port when `LUX_API_BASE_URL` is omitted. See `mcp-server/README.md` for the full environment reference and tool list.
+
 ## Screens
 
 The current UI is optimized for dense profile operations:
@@ -409,9 +440,9 @@ The release workflow is defined in `.github/workflows/build-release.yml`.
 4. Create and push a matching tag:
 
    ```bash
-   git tag -a v1.0.73 -m "Lux Antidetect v1.0.73"
+   git tag -a v1.0.74 -m "Lux Antidetect v1.0.74"
    git push origin master
-   git push origin v1.0.73
+   git push origin v1.0.74
    ```
 
 5. GitHub Actions verifies the tag matches `package.json`, builds all platform artifacts, and publishes the release.
