@@ -165,6 +165,29 @@ export function initDatabase(userDataPath: string): Database.Database {
     );
   `)
 
+  // Local AI assistant state. API keys live in the existing settings table;
+  // chat rows only store user/assistant text and validated action drafts.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_chats (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_messages (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES ai_chats(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+      content TEXT NOT NULL,
+      actions TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ai_chats_updated ON ai_chats(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_chat_created ON ai_messages(chat_id, created_at);
+  `)
+
   // Migration: add check_latency_ms column to proxies
   addColumnIfMissing(db, 'proxies', 'check_latency_ms', 'check_latency_ms INTEGER')
 

@@ -23,6 +23,9 @@ const ProxiesPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 )
+const AiPage = lazy(() =>
+  import('./pages/AiPage').then((m) => ({ default: m.AiPage }))
+)
 
 // Init debug capture once
 initDebugCapture()
@@ -104,6 +107,7 @@ export default function App(): React.JSX.Element {
           <Route path="/" element={<Navigate to="/profiles" replace />} />
           <Route path="/profiles" element={<LazyRoute><ProfilesPage /></LazyRoute>} />
           <Route path="/proxies" element={<LazyRoute><ProxiesPage /></LazyRoute>} />
+          <Route path="/ai" element={<LazyRoute><AiPage /></LazyRoute>} />
           <Route path="/settings" element={<LazyRoute><SettingsPage /></LazyRoute>} />
           <Route path="*" element={<Navigate to="/profiles" replace />} />
         </Route>

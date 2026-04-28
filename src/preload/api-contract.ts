@@ -14,7 +14,14 @@ import type {
   UpdateFingerprintInput,
   UpdateProfileInput,
   ManagedBrowserResponse,
-  AvailableBrowser
+  AvailableBrowser,
+  AiActionApplyResult,
+  AiChat,
+  AiChatMessage,
+  AiProfileAction,
+  AiSendMessageInput,
+  AiSendMessageResult,
+  AiSettings
 } from '../main/models'
 import type { ProxyGeoBundle, IpFraudReport } from '../main/geoip'
 import type { PresetDescriptor } from '../main/fingerprint-presets'
@@ -108,6 +115,15 @@ export interface LuxAPI {
 
   getSetting(key: string): Promise<unknown>
   setSetting(key: string, value: unknown): Promise<void>
+
+  aiGetSettings(): Promise<AiSettings>
+  aiSetSettings(input: { apiKey?: string; model?: string; clearApiKey?: boolean }): Promise<AiSettings>
+  aiListChats(): Promise<AiChat[]>
+  aiCreateChat(title?: string): Promise<AiChat>
+  aiDeleteChat(chatId: string): Promise<void>
+  aiListMessages(chatId: string): Promise<AiChatMessage[]>
+  aiSendMessage(input: AiSendMessageInput): Promise<AiSendMessageResult>
+  aiApplyActions(actions: AiProfileAction[]): Promise<AiActionApplyResult[]>
 
   listTemplates(): Promise<Template[]>
   getTemplate(id: string): Promise<Template>

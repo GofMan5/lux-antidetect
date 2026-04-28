@@ -9,7 +9,8 @@ import {
   Search,
   FileText,
   User,
-  ExternalLink
+  ExternalLink,
+  Bot
 } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import {
@@ -63,6 +64,7 @@ interface RailItem {
 const RAIL_ITEMS: RailItem[] = [
   { to: '/profiles', label: 'Profiles', icon: LayoutGrid, shortcut: 'G P' },
   { to: '/proxies', label: 'Proxies', icon: Globe, shortcut: 'G X' },
+  { to: '/ai', label: 'AI', icon: Bot, shortcut: 'G A' },
   { to: '/templates', label: 'Templates', icon: FileText, shortcut: '', comingSoon: true },
   { to: '/settings', label: 'Settings', icon: Settings, shortcut: 'G S' }
 ]

@@ -184,6 +184,57 @@ export interface UpdateFingerprintInput {
   webrtc_policy?: string
 }
 
+export interface AiChat {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export type AiChatRole = 'user' | 'assistant'
+
+export interface AiProfileAction {
+  id: string
+  profileId: string
+  label: string
+  reason: string
+  profilePatch?: UpdateProfileInput
+  fingerprintPatch?: UpdateFingerprintInput
+}
+
+export interface AiChatMessage {
+  id: string
+  chat_id: string
+  role: AiChatRole
+  content: string
+  actions: AiProfileAction[]
+  created_at: string
+}
+
+export interface AiSettings {
+  hasApiKey: boolean
+  model: string
+  maxContextMessages: number
+}
+
+export interface AiSendMessageInput {
+  chatId?: string | null
+  content: string
+  profileId?: string | null
+}
+
+export interface AiSendMessageResult {
+  chat: AiChat
+  messages: AiChatMessage[]
+  assistant: AiChatMessage
+}
+
+export interface AiActionApplyResult {
+  actionId: string
+  ok: boolean
+  error?: string
+}
+
 export interface ProxyInput {
   name: string
   protocol: ProxyProtocol

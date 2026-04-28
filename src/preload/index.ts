@@ -9,6 +9,9 @@ type UpdateProxyInput = Parameters<LuxAPI['updateProxy']>[1]
 type GenerateFingerprintBrowserType = Parameters<LuxAPI['generateFingerprint']>[0]
 type CreateTemplateInput = Parameters<LuxAPI['createTemplate']>[0]
 type UpdateTemplateInput = Parameters<LuxAPI['updateTemplate']>[1]
+type AiSetSettingsInput = Parameters<LuxAPI['aiSetSettings']>[0]
+type AiSendMessageInput = Parameters<LuxAPI['aiSendMessage']>[0]
+type AiApplyActionsInput = Parameters<LuxAPI['aiApplyActions']>[0]
 
 const api: LuxAPI = {
   listProfiles: () => ipcRenderer.invoke('list-profiles'),
@@ -54,6 +57,16 @@ const api: LuxAPI = {
 
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
+
+  // AI assistant
+  aiGetSettings: () => ipcRenderer.invoke('ai-get-settings'),
+  aiSetSettings: (input: AiSetSettingsInput) => ipcRenderer.invoke('ai-set-settings', input),
+  aiListChats: () => ipcRenderer.invoke('ai-list-chats'),
+  aiCreateChat: (title?: string) => ipcRenderer.invoke('ai-create-chat', title),
+  aiDeleteChat: (chatId: string) => ipcRenderer.invoke('ai-delete-chat', chatId),
+  aiListMessages: (chatId: string) => ipcRenderer.invoke('ai-list-messages', chatId),
+  aiSendMessage: (input: AiSendMessageInput) => ipcRenderer.invoke('ai-send-message', input),
+  aiApplyActions: (actions: AiApplyActionsInput) => ipcRenderer.invoke('ai-apply-actions', actions),
 
   // Templates
   listTemplates: () => ipcRenderer.invoke('list-templates'),

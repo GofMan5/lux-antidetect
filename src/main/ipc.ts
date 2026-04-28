@@ -29,8 +29,28 @@ import {
   getAvailableBrowsers,
   cancelDownload
 } from './browser-manager'
+import {
+  applyAiActions,
+  createAiChat,
+  deleteAiChat,
+  getAiSettings,
+  listAiChats,
+  listAiMessages,
+  sendAiMessage,
+  setAiSettings
+} from './ai'
 import { v4 as uuidv4 } from 'uuid'
-import type { CreateProfileInput, UpdateProfileInput, UpdateFingerprintInput, ProxyInput, BrowserType, TemplateInput, Fingerprint } from './models'
+import type {
+  AiProfileAction,
+  AiSendMessageInput,
+  CreateProfileInput,
+  UpdateProfileInput,
+  UpdateFingerprintInput,
+  ProxyInput,
+  BrowserType,
+  TemplateInput,
+  Fingerprint
+} from './models'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function assertUuid(id: string): void {
@@ -403,6 +423,20 @@ export function registerIpcHandlers(
       JSON.stringify(value)
     )
   })
+
+  // AI assistant
+  ipcMain.handle('ai-get-settings', () => getAiSettings(db))
+  ipcMain.handle(
+    'ai-set-settings',
+    (_, input: { apiKey?: string; model?: string; clearApiKey?: boolean }) =>
+      setAiSettings(db, input)
+  )
+  ipcMain.handle('ai-list-chats', () => listAiChats(db))
+  ipcMain.handle('ai-create-chat', (_, title?: string) => createAiChat(db, title))
+  ipcMain.handle('ai-delete-chat', (_, chatId: string) => deleteAiChat(db, chatId))
+  ipcMain.handle('ai-list-messages', (_, chatId: string) => listAiMessages(db, chatId))
+  ipcMain.handle('ai-send-message', (_, input: AiSendMessageInput) => sendAiMessage(db, input))
+  ipcMain.handle('ai-apply-actions', (_, actions: AiProfileAction[]) => applyAiActions(db, actions))
 
   // Profile Extensions
   ipcMain.handle('list-profile-extensions', (_, profileId: string) => {
