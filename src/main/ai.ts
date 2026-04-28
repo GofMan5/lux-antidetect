@@ -11,6 +11,7 @@ import type {
   AiActionApplyResult,
   AiChat,
   AiChatMessage,
+  AiModel,
   AiProfileAction,
   AiSendMessageInput,
   AiSendMessageResult,
@@ -56,6 +57,13 @@ interface StoredMessageRow {
   content: string
   actions: string | null
   created_at: string
+}
+
+interface GroqModelRow {
+  id?: unknown
+  owned_by?: unknown
+  context_window?: unknown
+  active?: unknown
 }
 
 class GroqApiError extends Error {
@@ -142,6 +150,19 @@ export function setAiSettings(
   }
 
   return getAiSettings(db)
+}
+
+export async function listAiModels(db: Database.Database): Promise<AiModel[]> {
+  const apiKey = getGroqApiKey(db)
+  const currentModel = getGroqModel(db)
+  if (!apiKey) return fallbackAiModels(currentModel)
+
+  try {
+    const models = await fetchGroqModels(apiKey)
+    return ensureModelPresent(models, currentModel)
+  } catch {
+    return fallbackAiModels(currentModel)
+  }
 }
 
 export function listAiChats(db: Database.Database): AiChat[] {
@@ -476,16 +497,59 @@ function buildGroqModelCandidates(requestedModel: string, activeModelIds: string
   return filtered.length > 0 ? filtered : deduped
 }
 
+async function fetchGroqModels(apiKey: string): Promise<AiModel[]> {
+  const response = await fetch(GROQ_MODELS_URL, {
+    headers: { Authorization: `Bearer ${apiKey}` }
+  })
+  if (!response.ok) throw new Error(`Groq models request failed (${response.status})`)
+
+  const parsed = await response.json() as { data?: GroqModelRow[] }
+  const models = parsed.data
+    ?.map(toAiModel)
+    .filter((model): model is AiModel => Boolean(model?.id)) ?? []
+
+  return models.sort((a, b) => a.id.localeCompare(b.id))
+}
+
+function toAiModel(model: GroqModelRow): AiModel | null {
+  if (typeof model.id !== 'string' || !model.id.trim()) return null
+  return {
+    id: model.id.trim(),
+    owned_by: typeof model.owned_by === 'string' ? model.owned_by : null,
+    context_window: typeof model.context_window === 'number' ? model.context_window : null,
+    active: typeof model.active === 'boolean' ? model.active : null
+  }
+}
+
+function fallbackAiModels(currentModel: string): AiModel[] {
+  return ensureModelPresent(
+    FALLBACK_GROQ_MODELS.map((id) => ({
+      id,
+      owned_by: null,
+      context_window: null,
+      active: true
+    })),
+    currentModel
+  )
+}
+
+function ensureModelPresent(models: AiModel[], modelId: string): AiModel[] {
+  if (!modelId || models.some((model) => model.id === modelId)) return models
+  return [
+    {
+      id: modelId,
+      owned_by: null,
+      context_window: null,
+      active: null
+    },
+    ...models
+  ]
+}
+
 async function listGroqModelIds(apiKey: string): Promise<string[] | null> {
   try {
-    const response = await fetch(GROQ_MODELS_URL, {
-      headers: { Authorization: `Bearer ${apiKey}` }
-    })
-    if (!response.ok) return null
-    const parsed = await response.json() as { data?: Array<{ id?: unknown }> }
-    return parsed.data
-      ?.map((model) => model.id)
-      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0) ?? null
+    const models = await fetchGroqModels(apiKey)
+    return models.map((model) => model.id)
   } catch {
     return null
   }

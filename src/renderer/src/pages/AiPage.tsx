@@ -13,6 +13,7 @@ import {
   KeyRound,
   Loader2,
   Plus,
+  RefreshCw,
   Send,
   SlidersHorizontal,
   Trash2
@@ -34,6 +35,7 @@ import {
 import type {
   AiChat,
   AiChatMessage,
+  AiModel,
   AiProfileAction,
   AiSettings,
   Profile
@@ -195,6 +197,7 @@ export function AiPage(): React.JSX.Element {
   const [settings, setSettings] = useState<AiSettings | null>(null)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [modelInput, setModelInput] = useState(DEFAULT_MODEL)
+  const [models, setModels] = useState<AiModel[]>([])
   const [chats, setChats] = useState<AiChat[]>([])
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
   const [messages, setMessages] = useState<AiChatMessage[]>([])
@@ -202,6 +205,7 @@ export function AiPage(): React.JSX.Element {
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
+  const [loadingModels, setLoadingModels] = useState(false)
   const [savingSettings, setSavingSettings] = useState(false)
   const [sending, setSending] = useState(false)
   const [applyingIds, setApplyingIds] = useState<Record<string, boolean>>({})
@@ -220,11 +224,48 @@ export function AiPage(): React.JSX.Element {
     [activeChatId, chats]
   )
 
+  const modelOptions = useMemo(() => {
+    const ids = new Set<string>()
+    const options: { value: string; label: string }[] = []
+    const push = (id: string, suffix = ''): void => {
+      if (!id || ids.has(id)) return
+      ids.add(id)
+      options.push({ value: id, label: suffix ? `${id} ${suffix}` : id })
+    }
+
+    push(modelInput, '(current)')
+    for (const model of models) {
+      const meta = [
+        model.context_window ? `${Math.round(model.context_window / 1000)}k` : '',
+        model.active === false ? 'inactive' : ''
+      ].filter(Boolean)
+      push(model.id, meta.length > 0 ? `(${meta.join(', ')})` : '')
+    }
+    push(DEFAULT_MODEL)
+    return options
+  }, [modelInput, models])
+
   const refreshChats = useCallback(async (): Promise<AiChat[]> => {
     const nextChats = await api.aiListChats()
     setChats(nextChats)
     return nextChats
   }, [])
+
+  const refreshModels = useCallback(async (): Promise<void> => {
+    setLoadingModels(true)
+    try {
+      const nextModels = await api.aiListModels()
+      setModels(nextModels)
+      if (!nextModels.some((model) => model.id === modelInput)) {
+        const preferred = nextModels.find((model) => model.active !== false)?.id ?? DEFAULT_MODEL
+        setModelInput(preferred)
+      }
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : 'Failed to load models', 'error')
+    } finally {
+      setLoadingModels(false)
+    }
+  }, [addToast, modelInput])
 
   useEffect(() => {
     void fetchProfiles()
@@ -233,11 +274,12 @@ export function AiPage(): React.JSX.Element {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    Promise.all([api.aiGetSettings(), api.aiListChats()])
-      .then(([nextSettings, nextChats]) => {
+    Promise.all([api.aiGetSettings(), api.aiListChats(), api.aiListModels()])
+      .then(([nextSettings, nextChats, nextModels]) => {
         if (cancelled) return
         setSettings(nextSettings)
         setModelInput(nextSettings.model || DEFAULT_MODEL)
+        setModels(nextModels)
         setChats(nextChats)
         setActiveChatId((current) => current ?? nextChats[0]?.id ?? null)
       })
@@ -290,25 +332,26 @@ export function AiPage(): React.JSX.Element {
     try {
       const nextSettings = await api.aiSetSettings({
         apiKey: apiKeyInput.trim() || undefined,
-        model: modelInput.trim() || DEFAULT_MODEL
+        model: modelInput || DEFAULT_MODEL
       })
       setSettings(nextSettings)
       setModelInput(nextSettings.model)
       setApiKeyInput('')
+      await refreshModels()
       addToast('AI settings saved', 'success')
     } catch (err) {
       addToast(err instanceof Error ? err.message : 'Failed to save settings', 'error')
     } finally {
       setSavingSettings(false)
     }
-  }, [addToast, apiKeyInput, modelInput])
+  }, [addToast, apiKeyInput, modelInput, refreshModels])
 
   const clearApiKey = useCallback(async (): Promise<void> => {
     setSavingSettings(true)
     try {
       const nextSettings = await api.aiSetSettings({
         clearApiKey: true,
-        model: modelInput.trim() || DEFAULT_MODEL
+        model: modelInput || DEFAULT_MODEL
       })
       setSettings(nextSettings)
       setApiKeyInput('')
@@ -446,12 +489,27 @@ export function AiPage(): React.JSX.Element {
             </div>
             <div>
               <Label htmlFor="ai-model">Model</Label>
-              <Input
-                id="ai-model"
-                value={modelInput}
-                onChange={(event) => setModelInput(event.target.value)}
-                placeholder={DEFAULT_MODEL}
-              />
+              <div className="flex gap-2">
+                <Select
+                  id="ai-model"
+                  value={modelInput}
+                  onChange={(event) => setModelInput(event.target.value)}
+                  options={modelOptions}
+                  disabled={loadingModels}
+                  className="min-w-0 flex-1"
+                />
+                <Button
+                  size="icon"
+                  variant="outline"
+                  loading={loadingModels}
+                  icon={!loadingModels ? <RefreshCw className="h-4 w-4" /> : undefined}
+                  onClick={() => void refreshModels()}
+                  aria-label="Refresh models"
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                {settings?.hasApiKey ? `${models.length} available models` : 'Save key to load Groq models'}
+              </p>
             </div>
             <div className="flex gap-2">
               <Button

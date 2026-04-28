@@ -193,6 +193,13 @@ export interface AiSettings {
   maxContextMessages: number
 }
 
+export interface AiModel {
+  id: string
+  owned_by: string | null
+  context_window: number | null
+  active: boolean | null
+}
+
 export interface AiSendMessageInput {
   chatId?: string | null
   content: string

@@ -62,6 +62,7 @@ const api: LuxAPI = {
   aiGetSettings: () => ipcRenderer.invoke('ai-get-settings'),
   aiSetSettings: (input: AiSetSettingsInput) => ipcRenderer.invoke('ai-set-settings', input),
   aiListChats: () => ipcRenderer.invoke('ai-list-chats'),
+  aiListModels: () => ipcRenderer.invoke('ai-list-models'),
   aiCreateChat: (title?: string) => ipcRenderer.invoke('ai-create-chat', title),
   aiDeleteChat: (chatId: string) => ipcRenderer.invoke('ai-delete-chat', chatId),
   aiListMessages: (chatId: string) => ipcRenderer.invoke('ai-list-messages', chatId),

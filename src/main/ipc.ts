@@ -35,6 +35,7 @@ import {
   deleteAiChat,
   getAiSettings,
   listAiChats,
+  listAiModels,
   listAiMessages,
   sendAiMessage,
   setAiSettings
@@ -432,6 +433,7 @@ export function registerIpcHandlers(
       setAiSettings(db, input)
   )
   ipcMain.handle('ai-list-chats', () => listAiChats(db))
+  ipcMain.handle('ai-list-models', () => listAiModels(db))
   ipcMain.handle('ai-create-chat', (_, title?: string) => createAiChat(db, title))
   ipcMain.handle('ai-delete-chat', (_, chatId: string) => deleteAiChat(db, chatId))
   ipcMain.handle('ai-list-messages', (_, chatId: string) => listAiMessages(db, chatId))

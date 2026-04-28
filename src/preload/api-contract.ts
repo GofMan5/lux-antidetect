@@ -18,6 +18,7 @@ import type {
   AiActionApplyResult,
   AiChat,
   AiChatMessage,
+  AiModel,
   AiProfileAction,
   AiSendMessageInput,
   AiSendMessageResult,
@@ -119,6 +120,7 @@ export interface LuxAPI {
   aiGetSettings(): Promise<AiSettings>
   aiSetSettings(input: { apiKey?: string; model?: string; clearApiKey?: boolean }): Promise<AiSettings>
   aiListChats(): Promise<AiChat[]>
+  aiListModels(): Promise<AiModel[]>
   aiCreateChat(title?: string): Promise<AiChat>
   aiDeleteChat(chatId: string): Promise<void>
   aiListMessages(chatId: string): Promise<AiChatMessage[]>
