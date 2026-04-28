@@ -31,7 +31,7 @@ import {
 } from './automation'
 import { generateDefaultFingerprint } from './fingerprint'
 import { listFingerprintPresets, generateFingerprintFromPreset } from './fingerprint-presets'
-import { checkForUpdates, getUpdateState, installUpdate } from './updater'
+import { checkForUpdates, clearUpdateErrorState, getUpdateState, installUpdate } from './updater'
 import {
   downloadBrowser,
   listManagedBrowsers,
@@ -1048,6 +1048,7 @@ export function registerIpcHandlers(
     }
   })
   ipcMain.handle('get-update-state', () => getUpdateState())
+  ipcMain.handle('clear-update-error-state', () => clearUpdateErrorState())
   ipcMain.handle('install-update', () => installUpdate())
 
   // Browser management (download / list / remove)

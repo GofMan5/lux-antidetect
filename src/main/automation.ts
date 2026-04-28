@@ -66,10 +66,13 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-function positiveInt(value: unknown, fallback: number, max: number): number {
+function optionalInt(value: unknown, field: string, min: number, max: number): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined
   const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
-  if (!Number.isInteger(parsed) || parsed <= 0) return fallback
-  return Math.min(parsed, max)
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${field} must be an integer between ${min} and ${max}`)
+  }
+  return parsed
 }
 
 function sanitizeStep(raw: unknown, index: number): AutomationStep {
@@ -92,8 +95,8 @@ function sanitizeStep(raw: unknown, index: number): AutomationStep {
   if ('selector' in item) step.selector = optionalString(item.selector)
   if ('text' in item) step.text = typeof item.text === 'string' ? item.text : undefined
   if ('script' in item) step.script = optionalString(item.script)
-  if ('duration_ms' in item) step.duration_ms = positiveInt(item.duration_ms, 0, 300_000)
-  if ('timeout_ms' in item) step.timeout_ms = positiveInt(item.timeout_ms, 0, 300_000)
+  step.duration_ms = optionalInt(item.duration_ms, `steps[${index}].duration_ms`, 0, 300_000)
+  step.timeout_ms = optionalInt(item.timeout_ms, `steps[${index}].timeout_ms`, 1, 300_000)
 
   if ((step.type === 'open_url') && !step.url) throw new Error(`Step ${index + 1} requires url`)
   if ((step.type === 'click' || step.type === 'type' || step.type === 'wait_selector') && !step.selector) {
@@ -113,11 +116,12 @@ function sanitizeSteps(rawSteps: unknown): AutomationStep[] {
   return rawSteps.map((step, index) => sanitizeStep(step, index))
 }
 
-function parseSteps(raw: string): AutomationStep[] {
+function parseSavedSteps(raw: string): AutomationStep[] {
   try {
     return sanitizeSteps(JSON.parse(raw))
-  } catch {
-    return []
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Saved automation steps are invalid: ${message}`)
   }
 }
 
@@ -186,7 +190,7 @@ export function updateAutomationScript(
     name: input.name ?? existing.name,
     description: input.description ?? existing.description,
     profile_id: input.profile_id === undefined ? existing.profile_id : input.profile_id,
-    steps: input.steps ?? parseSteps(existing.steps)
+    steps: input.steps ?? parseSavedSteps(existing.steps)
   }
   const normalized = normalizeInput(next)
   db.prepare(
@@ -370,7 +374,7 @@ export async function runAutomationScript(
 
   const run = createRun(db, script.id, profileId)
   const logs: AutomationRunLog[] = []
-  const steps = parseSteps(script.steps)
+  const steps = parseSavedSteps(script.steps)
   addLog(logs, `Started ${script.name}`, { data: { steps: steps.length, profileId } })
 
   try {
@@ -403,6 +407,8 @@ export async function runAdHocAutomation(
 ): Promise<AutomationRunResult> {
   const profileId = input.profile_id
   assertUuid(profileId, 'profile id')
+  const profile = db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+  if (!profile) throw new Error('Profile not found')
   const steps = sanitizeSteps(input.steps)
   const run = createRun(db, null, profileId)
   const logs: AutomationRunLog[] = []

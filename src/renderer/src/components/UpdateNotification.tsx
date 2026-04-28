@@ -83,13 +83,16 @@ export function UpdateNotification(): React.JSX.Element | null {
   }, [applyUpdateState])
 
   const dismiss = useCallback(() => {
+    if (stage === 'error') {
+      void window.api.clearUpdateErrorState()
+    }
     setExiting(true)
     setTimeout(() => {
       setStage('idle')
       setExiting(false)
       setMinimized(false)
     }, 250)
-  }, [])
+  }, [stage])
 
   // Auto-dismiss error after 8s
   useEffect(() => {

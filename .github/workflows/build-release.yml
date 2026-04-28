@@ -103,6 +103,46 @@ jobs:
       - name: Build renderer and main bundles
         run: npm run build
 
+      - name: Configure macOS code signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          MAC_CSC_NAME: ${{ secrets.CSC_NAME }}
+        run: |
+          if [[ -z "$MAC_CSC_LINK" ]]; then
+            exit 0
+          fi
+
+          {
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=true"
+            echo "CSC_LINK=$MAC_CSC_LINK"
+            if [[ -n "$MAC_CSC_KEY_PASSWORD" ]]; then echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"; fi
+            if [[ -n "$MAC_CSC_NAME" ]]; then echo "CSC_NAME=$MAC_CSC_NAME"; fi
+          } >> "$GITHUB_ENV"
+
+      - name: Configure Windows code signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WINDOWS_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD || secrets.CSC_KEY_PASSWORD }}
+          WINDOWS_CSC_NAME: ${{ secrets.WIN_CSC_NAME || secrets.CSC_NAME }}
+        run: |
+          if (-not $env:WINDOWS_CSC_LINK) {
+            exit 0
+          }
+
+          "CSC_IDENTITY_AUTO_DISCOVERY=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CSC_LINK=$env:WINDOWS_CSC_LINK" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($env:WINDOWS_CSC_KEY_PASSWORD) {
+            "CSC_KEY_PASSWORD=$env:WINDOWS_CSC_KEY_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          if ($env:WINDOWS_CSC_NAME) {
+            "CSC_NAME=$env:WINDOWS_CSC_NAME" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
       - name: Package ${{ matrix.name }}
         run: npx electron-builder ${{ matrix.builder_args }} --publish never
 

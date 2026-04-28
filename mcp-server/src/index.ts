@@ -396,6 +396,24 @@ async function cdpCommand<T>(
   }
 }
 
+function assertNoRuntimeException(evaluation: unknown): void {
+  const details = (evaluation as {
+    exceptionDetails?: {
+      text?: string
+      exception?: {
+        description?: string
+        value?: unknown
+      }
+    }
+  } | null)?.exceptionDetails
+  if (!details) return
+
+  const message =
+    details.exception?.description ??
+    String(details.exception?.value ?? details.text ?? 'JavaScript evaluation failed')
+  throw new Error(message)
+}
+
 // Если агент передал новый proxy object, сначала создаем proxy в Lux, затем
 // используем его id при create/update/launch profile.
 async function createProxyIfNeeded(input: Record<string, unknown>): Promise<string | undefined> {
@@ -1014,6 +1032,7 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
         returnByValue: optionalBoolean(args, 'returnByValue', true),
         userGesture: true
       })
+      assertNoRuntimeException(evaluation)
       return textResult({ ok: true, data: { browserId: profileId, profileId, tab: target, evaluation } })
     }
 
@@ -1111,7 +1130,7 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
 const server = new Server(
   {
     name: 'lux-antidetect-mcp',
-    version: '1.0.80'
+    version: '1.0.81'
   },
   {
     capabilities: {

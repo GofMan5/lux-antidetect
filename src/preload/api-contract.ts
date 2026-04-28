@@ -248,6 +248,7 @@ export interface LuxAPI {
   // Auto-updates
   checkForUpdates(): Promise<unknown>
   getUpdateState(): Promise<UpdateState>
+  clearUpdateErrorState(): Promise<UpdateState>
   installUpdate(): Promise<void>
   onUpdateAvailable(callback: (data: { version: string }) => void): () => void
   onUpdateDownloaded(callback: (data: { version: string }) => void): () => void

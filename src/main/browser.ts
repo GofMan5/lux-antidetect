@@ -1665,6 +1665,20 @@ export interface CdpScreenshotOptions extends CdpTargetSelector {
   fullPage?: boolean
 }
 
+interface RuntimeEvaluationResult {
+  result?: {
+    value?: unknown
+    description?: string
+  }
+  exceptionDetails?: {
+    text?: string
+    exception?: {
+      description?: string
+      value?: unknown
+    }
+  }
+}
+
 /** Get CDP connection info for a running browser, so external tools (Playwright/Puppeteer) can connect. */
 export async function getCdpConnectionInfo(profileId: string): Promise<CdpConnectionInfo> {
   const ab = activeBrowsers.get(profileId)
@@ -1727,12 +1741,21 @@ export async function executeJavaScriptCDP(
 ): Promise<unknown> {
   const port = getActiveCdpPort(profileId)
   const target = selectCdpTarget(await listCdpPageTargets(profileId), options)
-  return cdpCommand(port, target.id, 'Runtime.evaluate', {
+  const evaluation = await cdpCommand(port, target.id, 'Runtime.evaluate', {
     expression: script,
     awaitPromise: options.awaitPromise ?? true,
     returnByValue: options.returnByValue ?? true,
     userGesture: true
-  })
+  }) as RuntimeEvaluationResult
+
+  if (evaluation.exceptionDetails) {
+    const message =
+      evaluation.exceptionDetails.exception?.description ??
+      String(evaluation.exceptionDetails.exception?.value ?? evaluation.exceptionDetails.text ?? 'JavaScript evaluation failed')
+    throw new Error(message)
+  }
+
+  return evaluation
 }
 
 export async function captureScreenshotCDP(

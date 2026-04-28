@@ -166,6 +166,13 @@ export function getUpdateState(): UpdateState {
   return currentUpdateState
 }
 
+export function clearUpdateErrorState(): UpdateState {
+  if (currentUpdateState.stage === 'error') {
+    currentUpdateState = { stage: 'idle' }
+  }
+  return currentUpdateState
+}
+
 export function installUpdate(): void {
   // (isSilent, isForceRunAfter)
   //   isSilent=true        -> pass `/S` to NSIS, no UI dialogs / prompts
