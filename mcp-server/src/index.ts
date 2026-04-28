@@ -931,7 +931,7 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
 const server = new Server(
   {
     name: 'lux-antidetect-mcp',
-    version: '1.0.74'
+    version: '1.0.75'
   },
   {
     capabilities: {

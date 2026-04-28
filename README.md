@@ -440,9 +440,9 @@ The release workflow is defined in `.github/workflows/build-release.yml`.
 4. Create and push a matching tag:
 
    ```bash
-   git tag -a v1.0.74 -m "Lux Antidetect v1.0.74"
+   git tag -a v1.0.75 -m "Lux Antidetect v1.0.75"
    git push origin master
-   git push origin v1.0.74
+   git push origin v1.0.75
    ```
 
 5. GitHub Actions verifies the tag matches `package.json`, builds all platform artifacts, and publishes the release.

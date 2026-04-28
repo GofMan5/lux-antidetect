@@ -137,6 +137,63 @@ jobs:
         with:
           path: release-artifacts
 
+      - name: Generate Windows updater metadata
+        shell: bash
+        run: |
+          node <<'NODE'
+          const crypto = require('node:crypto')
+          const fs = require('node:fs')
+          const path = require('node:path')
+
+          const root = path.resolve('release-artifacts')
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, '')
+
+          function findOne(pattern, label) {
+            const matches = []
+            function walk(dir) {
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name)
+                if (entry.isDirectory()) walk(full)
+                else if (pattern.test(entry.name)) matches.push(full)
+              }
+            }
+            walk(root)
+            if (matches.length !== 1) {
+              throw new Error(`Expected exactly one ${label}, found ${matches.length}: ${matches.join(', ')}`)
+            }
+            return matches[0]
+          }
+
+          function fileInfo(file) {
+            const bytes = fs.readFileSync(file)
+            return {
+              url: path.basename(file),
+              sha512: crypto.createHash('sha512').update(bytes).digest('base64'),
+              size: bytes.length
+            }
+          }
+
+          const x64 = fileInfo(findOne(new RegExp(`^lux-antidetect-${version}-x64-setup\\.exe$`), 'Windows x64 installer'))
+          const arm64 = fileInfo(findOne(new RegExp(`^lux-antidetect-${version}-arm64-setup\\.exe$`), 'Windows arm64 installer'))
+
+          const latest = [
+            `version: ${version}`,
+            'files:',
+            `  - url: ${x64.url}`,
+            `    sha512: ${x64.sha512}`,
+            `    size: ${x64.size}`,
+            `  - url: ${arm64.url}`,
+            `    sha512: ${arm64.sha512}`,
+            `    size: ${arm64.size}`,
+            `path: ${x64.url}`,
+            `sha512: ${x64.sha512}`,
+            `releaseDate: '${new Date().toISOString()}'`,
+            ''
+          ].join('\n')
+
+          fs.writeFileSync(path.join(root, 'latest.yml'), latest)
+          NODE
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
