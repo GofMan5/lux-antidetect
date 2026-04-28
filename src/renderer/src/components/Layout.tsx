@@ -271,8 +271,8 @@ function TopBar({ onOpenPalette, onOpenShortcuts }: TopBarProps): React.JSX.Elem
     <header
       className={cn(
         'drag-region shrink-0 flex items-stretch',
-        'border-b border-border/50 bg-card/85 backdrop-blur-md',
-        'relative z-30'
+        'border-b border-border/45 bg-background/90 backdrop-blur-md',
+        'relative z-30 shadow-[0_1px_0_rgba(255,255,255,0.025)]'
       )}
       style={{ height: TOPBAR_HEIGHT_PX }}
     >
@@ -288,7 +288,7 @@ function TopBar({ onOpenPalette, onOpenShortcuts }: TopBarProps): React.JSX.Elem
        * side at the layout's hard 900px minimum width.
        */}
       <div className="flex-1 flex items-center justify-center min-w-0 px-3">
-        <div className="w-full max-w-[420px]">
+        <div className="w-full max-w-[520px]">
           <TopBarSearchTrigger onClick={onOpenPalette} />
         </div>
       </div>
@@ -348,7 +348,7 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
   // Shared row shell — fixed height so rows align and active-rail strip on
   // the left has a known length.
   const itemBaseClass = cn(
-    'group relative flex items-center gap-1 h-10 mx-2 px-1.5',
+    'group relative flex items-center gap-1 h-11 mx-2 px-1.5',
     'rounded-[--radius-md] transition-colors duration-150 ease-[var(--ease-osmosis)]',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40'
   )
@@ -415,7 +415,7 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
         cn(
           itemBaseClass,
           isActive
-            ? 'bg-primary/12 text-primary ring-1 ring-inset ring-primary/15'
+            ? 'bg-elevated/70 text-foreground ring-1 ring-inset ring-primary/20'
             : 'text-muted-foreground hover:bg-elevated/45 hover:text-foreground'
         )
       }
@@ -450,8 +450,8 @@ function LeftRail({ runningCount }: LeftRailProps): React.JSX.Element {
     <nav
       aria-label="Primary navigation"
       className={cn(
-        'shrink-0 flex flex-col bg-card/60 border-r border-border/50',
-        'relative z-20'
+        'shrink-0 flex flex-col bg-background/80 border-r border-border/45',
+        'relative z-20 shadow-[1px_0_0_rgba(255,255,255,0.025)]'
       )}
       style={{ width: SIDEBAR_WIDTH_PX }}
     >
@@ -483,7 +483,7 @@ export function Layout(): React.JSX.Element {
   }, [])
 
   return (
-    <div className="flex flex-col h-screen w-screen min-w-[900px] min-h-[600px] overflow-hidden bg-background">
+    <div className="flex flex-col h-screen w-screen min-w-[900px] min-h-[600px] overflow-hidden bg-background text-foreground">
       <TopBar onOpenPalette={showPalette} onOpenShortcuts={showShortcuts} />
 
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -492,7 +492,7 @@ export function Layout(): React.JSX.Element {
         {/* Keyed by pathname so route transitions get a clean fade. */}
         <main
           key={location.pathname}
-          className="flex-1 min-w-0 overflow-y-auto bg-background flex flex-col animate-fadeIn relative"
+          className="flex-1 min-w-0 overflow-y-auto app-workspace flex flex-col animate-fadeIn relative"
         >
           <Outlet />
         </main>

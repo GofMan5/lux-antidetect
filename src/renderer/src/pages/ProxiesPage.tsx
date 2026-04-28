@@ -425,47 +425,27 @@ const FilterChip = memo(function FilterChip({
   children,
   dotClass
 }: FilterChipProps): React.JSX.Element {
-  if (active && onClear) {
-    return (
-      <span
-        className={cn(
-          'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
-          'bg-primary text-primary-foreground pl-2.5 pr-1'
-        )}
-      >
-        {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
-        <button type="button" onClick={onClick} className="leading-none" aria-pressed="true">
-          {children}
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onClear()
-          }}
-          aria-label={typeof children === 'string' ? `Clear ${children} filter` : 'Clear filter'}
-          className="inline-flex items-center justify-center h-4 w-4 rounded-full hover:bg-white/15"
-        >
-          <X className="h-2.5 w-2.5" />
-        </button>
-      </span>
-    )
-  }
+  const handleClick = active && onClear ? onClear : onClick
+  const label = typeof children === 'string' ? children : 'Filter'
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={handleClick}
       aria-pressed={active}
+      aria-label={label}
+      title={label}
       className={cn(
-        'inline-flex items-center gap-1.5 h-7 rounded-full text-[11.5px] font-medium shrink-0',
-        'transition-colors duration-150 ease-[var(--ease-osmosis)] px-2.5',
+        'inline-flex items-center justify-center gap-1.5 shrink-0',
+        'h-8 px-2.5 rounded-[--radius-md] border text-[11.5px] font-medium',
+        'transition-colors duration-150 ease-[var(--ease-osmosis)]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
         active
-          ? 'bg-primary text-primary-foreground'
-          : 'bg-transparent border border-border text-muted-foreground hover:text-foreground hover:border-edge'
+          ? 'border-primary/35 bg-primary/12 text-primary'
+          : 'border-transparent text-muted-foreground hover:border-border/70 hover:bg-elevated/45 hover:text-foreground'
       )}
     >
       {dotClass && <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)} />}
-      <span>{children}</span>
+      <span className="hidden md:inline">{children}</span>
     </button>
   )
 })
@@ -553,12 +533,17 @@ function ProxyRowComponent({
       onClick={() => onClickRow(proxy)}
       onContextMenu={(e) => onContextMenu(e, proxy)}
       className={cn(
-        'group/row relative flex items-center gap-3 pl-4 pr-2 cursor-pointer select-none',
-        'border-b border-border/40 transition-colors duration-150',
+        'group/row relative flex items-center gap-3 pl-4 pr-2 mx-4 my-1 cursor-pointer select-none overflow-hidden',
+        'rounded-[--radius-md] border border-border/45 bg-card/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]',
+        'transition-colors duration-150',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
-        focused ? 'bg-elevated/55' : selected ? 'bg-primary/[0.05]' : 'hover:bg-elevated/30'
+        focused
+          ? 'border-primary/35 bg-elevated/70'
+          : selected
+            ? 'border-primary/25 bg-primary/[0.07]'
+            : 'hover:border-border/70 hover:bg-elevated/35'
       )}
-      style={{ height: ROW_HEIGHT_BY_DENSITY[density] }}
+      style={{ minHeight: ROW_HEIGHT_BY_DENSITY[density] - 4 }}
     >
       {focused && (
         <span
@@ -2036,8 +2021,8 @@ export function ProxiesPage(): React.JSX.Element {
       {/* ── Sticky filter strip ───────────────────────────────────────── */}
       <div
         className={cn(
-          'sticky top-0 z-10 shrink-0 flex items-center gap-2 px-4 h-12 min-w-0',
-          'bg-card/85 backdrop-blur-sm border-b border-border/50'
+          'sticky top-0 z-10 shrink-0 flex flex-wrap items-center gap-x-2 gap-y-2 px-5 py-3 min-w-0',
+          'entity-toolbar-surface backdrop-blur-sm border-b border-border/50'
         )}
       >
         <SearchInput
@@ -2046,11 +2031,11 @@ export function ProxiesPage(): React.JSX.Element {
           value={searchQuery}
           onChange={setSearchQuery}
           placeholder="Search proxies…"
-          className="w-[280px] shrink-0"
+          className="order-1 w-[300px] max-w-[36vw] shrink-0"
           matchCount={filteredProxies.length}
         />
 
-        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto scrollbar-hide">
+        <div className="order-3 flex w-full flex-wrap items-center gap-x-1.5 gap-y-1.5 min-w-0">
           {/* Status */}
           <FilterChip
             active={statusFilter === 'working'}
@@ -2165,7 +2150,7 @@ export function ProxiesPage(): React.JSX.Element {
             <>
               <div className="h-5 w-px bg-border/60 mx-1" />
               <SelectRoot value={groupFilter} onValueChange={setGroupFilter}>
-                <SelectTrigger className="ml-1 !h-7 !text-[11.5px] min-w-[120px] shrink-0">
+                <SelectTrigger className="ml-1 !h-8 !text-[11.5px] w-[148px] shrink-0">
                   <SelectValue placeholder="Group" />
                 </SelectTrigger>
                 <SelectContent>
@@ -2181,10 +2166,10 @@ export function ProxiesPage(): React.JSX.Element {
           )}
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="order-2 flex flex-nowrap items-center gap-1.5 shrink-0 ml-auto">
           {/* Density toggle — 2-segment pill so both options are visible at once */}
           <div
-            className="inline-flex items-center rounded-[--radius-md] bg-elevated/40 p-0.5"
+            className="inline-flex items-center rounded-[--radius-md] border border-border/50 bg-background/35 p-0.5"
             role="group"
             aria-label="Row density"
           >
@@ -2194,11 +2179,11 @@ export function ProxiesPage(): React.JSX.Element {
               aria-label="Compact density"
               onClick={() => setDensity('compact')}
               className={cn(
-                'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+                'inline-flex items-center gap-1 h-7 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
                 'transition-colors duration-150 ease-[var(--ease-osmosis)]',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
                 density === 'compact'
-                  ? 'bg-card text-foreground shadow-sm'
+                  ? 'bg-elevated text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -2211,11 +2196,11 @@ export function ProxiesPage(): React.JSX.Element {
               aria-label="Comfortable density"
               onClick={() => setDensity('comfortable')}
               className={cn(
-                'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+                'inline-flex items-center gap-1 h-7 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
                 'transition-colors duration-150 ease-[var(--ease-osmosis)]',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
                 density === 'comfortable'
-                  ? 'bg-card text-foreground shadow-sm'
+                  ? 'bg-elevated text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -2233,7 +2218,7 @@ export function ProxiesPage(): React.JSX.Element {
               setSortDir(d)
             }}
           >
-            <SelectTrigger className="!h-7 !text-[11.5px] min-w-[130px]">
+            <SelectTrigger className="!h-8 !text-[11.5px] w-[132px] shrink-0">
               <SelectValue placeholder="Sort by..." />
             </SelectTrigger>
             <SelectContent>
@@ -2252,8 +2237,8 @@ export function ProxiesPage(): React.JSX.Element {
               type="button"
               onClick={openIpCheck}
               className={cn(
-                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
-                'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+                'h-8 w-8 inline-flex items-center justify-center rounded-[--radius-md] border border-transparent',
+                'text-muted-foreground hover:text-foreground hover:border-border/70 hover:bg-elevated/50',
                 'transition-colors duration-150 ease-[var(--ease-osmosis)]'
               )}
               aria-label="Check IP reputation"
@@ -2267,8 +2252,8 @@ export function ProxiesPage(): React.JSX.Element {
               type="button"
               onClick={() => setImportOpen(true)}
               className={cn(
-                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
-                'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+                'h-8 w-8 inline-flex items-center justify-center rounded-[--radius-md] border border-transparent',
+                'text-muted-foreground hover:text-foreground hover:border-border/70 hover:bg-elevated/50',
                 'transition-colors duration-150 ease-[var(--ease-osmosis)]'
               )}
               aria-label="Import proxies"
@@ -2277,7 +2262,7 @@ export function ProxiesPage(): React.JSX.Element {
             </button>
           </Tooltip>
 
-          <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={openAdd}>
+          <Button size="sm" icon={<Plus className="h-3.5 w-3.5" />} onClick={openAdd} className="h-8">
             Add proxy
           </Button>
         </div>

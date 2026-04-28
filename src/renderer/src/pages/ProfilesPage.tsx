@@ -2272,7 +2272,7 @@ export function ProfilesPage(): React.JSX.Element {
       <div
         className={cn(
           'sticky top-0 z-10 shrink-0 flex flex-wrap items-center gap-x-2 gap-y-2 px-5 py-3 min-w-0',
-          'bg-card/88 backdrop-blur-sm border-b border-border/50 shadow-[0_1px_0_rgba(255,255,255,0.025)]'
+          'entity-toolbar-surface backdrop-blur-sm border-b border-border/50'
         )}
       >
         <SearchInput

@@ -382,7 +382,7 @@ export function SettingsPage(): React.JSX.Element {
         <div
           className={cn(
             'sticky top-0 z-10 shrink-0 px-6 pt-5',
-            'bg-card/85 backdrop-blur-sm border-b border-border/50'
+            'entity-toolbar-surface backdrop-blur-sm border-b border-border/50'
           )}
         >
           <h1 className="text-[22px] font-semibold text-foreground tracking-tight mb-3">
