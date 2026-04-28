@@ -91,11 +91,13 @@ writeYaml('latest-mac.yml', [
 writeYaml('latest-linux.yml', [
   artifact(['x64', 'x86_64'], 'AppImage', 'Linux x64 AppImage'),
   artifact(['x64', 'amd64'], 'deb', 'Linux x64 deb'),
-  artifact(['x64', 'x86_64'], 'rpm', 'Linux x64 rpm')
+  artifact(['x64', 'x86_64'], 'rpm', 'Linux x64 rpm'),
+  artifact('x64', 'tar.gz', 'Linux x64 tarball')
 ])
 
 writeYaml('latest-linux-arm64.yml', [
   artifact('arm64', 'AppImage', 'Linux arm64 AppImage'),
   artifact('arm64', 'deb', 'Linux arm64 deb'),
-  artifact(['arm64', 'aarch64'], 'rpm', 'Linux arm64 rpm')
+  artifact(['arm64', 'aarch64'], 'rpm', 'Linux arm64 rpm'),
+  artifact('arm64', 'tar.gz', 'Linux arm64 tarball')
 ])

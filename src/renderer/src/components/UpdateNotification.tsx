@@ -116,7 +116,7 @@ export function UpdateNotification(): React.JSX.Element | null {
           'shadow-2xl shadow-black/40',
           'text-xs font-semibold tracking-wide cursor-pointer',
           'transition-all duration-300 ease-out hover:scale-105',
-          stage === 'downloading' ? 'text-accent' : 'text-ok'
+          stage === 'downloading' ? 'text-accent' : stage === 'error' ? 'text-err' : 'text-ok'
         )}
       >
         {pillText}
