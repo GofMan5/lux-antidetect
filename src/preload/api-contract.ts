@@ -39,6 +39,15 @@ export interface ProfileExtension {
   created_at: string
 }
 
+export interface LocalApiServerStatus {
+  enabled: boolean
+  running: boolean
+  host: string
+  port: number
+  baseUrl: string
+  token: string
+}
+
 // Reuse the canonical session payload to keep preload and main in lockstep.
 export type SessionStartedEvent = SessionInfo
 
@@ -116,6 +125,13 @@ export interface LuxAPI {
 
   getSetting(key: string): Promise<unknown>
   setSetting(key: string, value: unknown): Promise<void>
+  getApiServerStatus(): Promise<LocalApiServerStatus>
+  configureApiServer(input: {
+    enabled?: boolean
+    host?: string
+    port?: number | string
+  }): Promise<LocalApiServerStatus>
+  regenerateApiServerToken(): Promise<LocalApiServerStatus>
 
   aiGetSettings(): Promise<AiSettings>
   aiSetSettings(input: {

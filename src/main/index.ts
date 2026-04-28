@@ -9,6 +9,11 @@ import { killAllBrowsers, refreshAllProfileIdentities } from './browser'
 import { initAutoUpdater } from './updater'
 import { initBrowserManager, setMainWindow as setBrowserManagerMainWindow } from './browser-manager'
 import { initLogger, installCrashHandlers, logger, getLogFilePath } from './logger'
+import {
+  initLocalApiServer,
+  registerLocalApiIpcHandlers,
+  shutdownLocalApiServer
+} from './api-server'
 import type Database from 'better-sqlite3'
 
 // Portable mode: if a "data" directory exists next to the executable, use it
@@ -259,8 +264,16 @@ app.whenReady().then(async () => {
 
   // Register IPC handlers only once (never re-register on macOS activate)
   registerIpcHandlers(db, profilesDir, () => mainWindow)
+  registerLocalApiIpcHandlers(db, profilesDir, () => mainWindow)
   initAutoUpdater(mainWindow, db)
   initBrowserManager(userDataPath, mainWindow)
+  initLocalApiServer(db, profilesDir, () => mainWindow)
+    .then((status) => {
+      if (status.running) logger.info(`local API listening on ${status.baseUrl}`)
+    })
+    .catch((err) => {
+      logger.warn('local API failed to start', err)
+    })
 
   // IPC: autostart toggle
   const { ipcMain } = await import('electron')
@@ -349,9 +362,13 @@ app.on('before-quit', (event) => {
   if (!isQuitting) {
     isQuitting = true
     event.preventDefault()
-    killAllBrowsers().finally(() => {
-      killAllSessions()
-      app.quit()
-    })
+    Promise.resolve()
+      .then(() => shutdownLocalApiServer())
+      .catch((err) => logger.warn('local API shutdown failed', err))
+      .then(() => killAllBrowsers())
+      .finally(() => {
+        killAllSessions()
+        app.quit()
+      })
   }
 })

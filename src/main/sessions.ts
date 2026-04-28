@@ -5,6 +5,27 @@ import type { SessionInfo, BrowserType } from './models'
 
 let _db: Database.Database | null = null
 
+export type SessionEvent =
+  | { type: 'session.started'; data: SessionInfo }
+  | { type: 'session.stopped'; data: { profile_id: string; exit_code: number | null } }
+
+const sessionEventSubscribers = new Set<(event: SessionEvent) => void>()
+
+export function onSessionEvent(callback: (event: SessionEvent) => void): () => void {
+  sessionEventSubscribers.add(callback)
+  return () => sessionEventSubscribers.delete(callback)
+}
+
+function emitSessionEvent(event: SessionEvent): void {
+  for (const callback of sessionEventSubscribers) {
+    try {
+      callback(event)
+    } catch {
+      /* subscriber failures must not affect session tracking */
+    }
+  }
+}
+
 export function initSessionsDb(db: Database.Database): void {
   _db = db
 }
@@ -24,14 +45,15 @@ export function addSession(
 ): void {
   const startedAt = new Date().toISOString()
   const historyId = uuidv4()
-  sessions.set(profileId, {
+  const session: TrackedSession = {
     profile_id: profileId,
     pid,
     browser_type: browserType,
     started_at: startedAt,
     process: proc,
     history_id: historyId
-  })
+  }
+  sessions.set(profileId, session)
   if (_db) {
     try {
       _db.prepare(
@@ -39,6 +61,15 @@ export function addSession(
       ).run(historyId, profileId, startedAt)
     } catch { /* best effort */ }
   }
+  emitSessionEvent({
+    type: 'session.started',
+    data: {
+      profile_id: session.profile_id,
+      pid: session.pid,
+      browser_type: session.browser_type,
+      started_at: session.started_at
+    }
+  })
 }
 
 export function removeSession(profileId: string, exitCode?: number | null): void {
@@ -54,6 +85,12 @@ export function removeSession(profileId: string, exitCode?: number | null): void
     } catch { /* best effort */ }
   }
   sessions.delete(profileId)
+  if (session) {
+    emitSessionEvent({
+      type: 'session.stopped',
+      data: { profile_id: profileId, exit_code: exitCode ?? null }
+    })
+  }
 }
 
 export function getSession(profileId: string): TrackedSession | null {

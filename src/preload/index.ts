@@ -57,6 +57,9 @@ const api: LuxAPI = {
 
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: unknown) => ipcRenderer.invoke('set-setting', key, value),
+  getApiServerStatus: () => ipcRenderer.invoke('api-server-status'),
+  configureApiServer: (input) => ipcRenderer.invoke('api-server-configure', input),
+  regenerateApiServerToken: () => ipcRenderer.invoke('api-server-regenerate-token'),
 
   // AI assistant
   aiGetSettings: () => ipcRenderer.invoke('ai-get-settings'),

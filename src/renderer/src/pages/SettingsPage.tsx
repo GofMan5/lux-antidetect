@@ -41,7 +41,9 @@ import {
   Database,
   Info,
   ShieldCheck,
-  Languages
+  Languages,
+  KeyRound,
+  Server
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
@@ -97,6 +99,15 @@ interface TabSpec {
   icon: typeof Palette
 }
 
+interface LocalApiServerStatus {
+  enabled: boolean
+  running: boolean
+  host: string
+  port: number
+  baseUrl: string
+  token: string
+}
+
 const TAB_ITEMS: TabSpec[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'browsers', label: 'Browsers', icon: HardDrive },
@@ -114,6 +125,8 @@ const NUMERIC_PERSIST_DEBOUNCE_MS = 500
 // Maximum bounds on the numeric session controls. Match the previous values.
 const MAX_CONCURRENT_LIMIT = 50
 const SESSION_TIMEOUT_MAX_MIN = 1440
+const API_PORT_MIN = 1024
+const API_PORT_MAX = 65535
 
 // History table caps at 20 rows in the rendered slice. Backed by a virtual
 // scroll-area so additional rows would just keep flowing off the bottom.
@@ -181,6 +194,8 @@ export function SettingsPage(): React.JSX.Element {
   const [maxConcurrent, setMaxConcurrent] = useState(0)
   const maxConcurrentRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const [autoStartProfileIds, setAutoStartProfileIds] = useState<string[]>([])
+  const [apiServer, setApiServer] = useState<LocalApiServerStatus | null>(null)
+  const [apiServerBusy, setApiServerBusy] = useState(false)
 
   useEffect(() => {
     api.getAutostart().then(setAutostart).catch(() => {})
@@ -202,6 +217,7 @@ export function SettingsPage(): React.JSX.Element {
         if (Array.isArray(v)) setAutoStartProfileIds(v as string[])
       })
       .catch(() => {})
+    api.getApiServerStatus().then(setApiServer).catch(() => {})
   }, [])
 
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryEntry[]>([])
@@ -428,6 +444,10 @@ export function SettingsPage(): React.JSX.Element {
               sessionTimeoutRef={sessionTimeoutRef}
               autoStartProfileIds={autoStartProfileIds}
               setAutoStartProfileIds={setAutoStartProfileIds}
+              apiServer={apiServer}
+              setApiServer={setApiServer}
+              apiServerBusy={apiServerBusy}
+              setApiServerBusy={setApiServerBusy}
               profiles={profiles}
               addToast={addToast}
             />
@@ -951,6 +971,10 @@ interface GeneralTabProps {
   sessionTimeoutRef: React.MutableRefObject<ReturnType<typeof setTimeout> | undefined>
   autoStartProfileIds: string[]
   setAutoStartProfileIds: Dispatch<SetStateAction<string[]>>
+  apiServer: LocalApiServerStatus | null
+  setApiServer: Dispatch<SetStateAction<LocalApiServerStatus | null>>
+  apiServerBusy: boolean
+  setApiServerBusy: Dispatch<SetStateAction<boolean>>
   profiles: Profile[]
   addToast: AddToast
 }
@@ -968,9 +992,37 @@ function GeneralTab({
   sessionTimeoutRef,
   autoStartProfileIds,
   setAutoStartProfileIds,
+  apiServer,
+  setApiServer,
+  apiServerBusy,
+  setApiServerBusy,
   profiles,
   addToast
 }: GeneralTabProps): React.JSX.Element {
+  const [apiPortDraft, setApiPortDraft] = useState<number | null>(null)
+  const apiPortPersistRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const updateApiServer = (patch: { enabled?: boolean; port?: number | string }): void => {
+    setApiServerBusy(true)
+    api
+      .configureApiServer(patch)
+      .then(setApiServer)
+      .catch((err: unknown) =>
+        addToast(err instanceof Error ? err.message : 'Failed to update API server', 'error')
+      )
+      .finally(() => setApiServerBusy(false))
+  }
+
+  const copyApiValue = (value: string, label: string): void => {
+    if (!navigator.clipboard) {
+      addToast('Clipboard is not available', 'error')
+      return
+    }
+    navigator.clipboard
+      .writeText(value)
+      .then(() => addToast(`${label} copied`, 'success'))
+      .catch(() => addToast(`Failed to copy ${label.toLowerCase()}`, 'error'))
+  }
+
   return (
     <>
       <CardRoot>
@@ -1000,6 +1052,100 @@ function GeneralTab({
             label="Minimize to system tray on close"
             description="Keep Lux running in the background."
           />
+        </CardContent>
+      </CardRoot>
+
+      <CardRoot>
+        <CardHeader>
+          <CardTitle className="inline-flex items-center gap-2">
+            <Server className="h-4 w-4 text-primary" />
+            Local API
+          </CardTitle>
+          <CardDescription>
+            Control Lux from scripts and local automation tools through an authenticated REST API.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Toggle
+            checked={apiServer?.enabled ?? false}
+            onChange={(val) => updateApiServer({ enabled: val })}
+            label="Enable local API server"
+            description="Binds to localhost only. Every endpoint except health requires the token below."
+          />
+          <Separator />
+          <NumericRow
+            label="API port"
+            description="Server restarts immediately when the port changes."
+            value={apiPortDraft ?? apiServer?.port ?? 17888}
+            onChange={(val) => {
+              setApiPortDraft(val)
+              clearTimeout(apiPortPersistRef.current)
+              if (val < API_PORT_MIN || val > API_PORT_MAX) return
+              apiPortPersistRef.current = setTimeout(() => {
+                updateApiServer({ port: val })
+                setApiPortDraft(null)
+              }, NUMERIC_PERSIST_DEBOUNCE_MS)
+            }}
+            min={API_PORT_MIN}
+            max={API_PORT_MAX}
+          />
+          <div className="rounded-[--radius-md] border border-border bg-input/40 p-3 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-foreground">Status</p>
+                <p className="text-xs text-muted-foreground">
+                  {apiServer?.running ? 'Running' : apiServer?.enabled ? 'Enabled, not running' : 'Disabled'}
+                  {apiServer?.baseUrl ? ` · ${apiServer.baseUrl}` : ''}
+                </p>
+              </div>
+              <Badge variant={apiServer?.running ? 'success' : 'default'}>
+                {apiServer?.running ? 'Online' : 'Offline'}
+              </Badge>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <KeyRound className="h-3.5 w-3.5" />
+                  Bearer token
+                </Label>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={!apiServer?.token}
+                    onClick={() => apiServer?.token && copyApiValue(apiServer.token, 'Token')}
+                  >
+                    Copy
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={apiServerBusy}
+                    onClick={() => {
+                      setApiServerBusy(true)
+                      api
+                        .regenerateApiServerToken()
+                        .then(setApiServer)
+                        .then(() => addToast('API token regenerated', 'success'))
+                        .catch(() => addToast('Failed to regenerate API token', 'error'))
+                        .finally(() => setApiServerBusy(false))
+                    }}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Rotate
+                  </Button>
+                </div>
+              </div>
+              <code className="block rounded-[--radius-sm] bg-surface px-2 py-2 text-[11px] text-muted-foreground break-all">
+                {apiServer?.token ?? 'Loading...'}
+              </code>
+              <code className="block rounded-[--radius-sm] bg-surface px-2 py-2 text-[11px] text-muted-foreground break-all">
+                {`curl -H "Authorization: Bearer ${apiServer?.token ?? '<token>'}" ${apiServer?.baseUrl ?? 'http://127.0.0.1:17888/api/v1'}/profiles`}
+              </code>
+            </div>
+          </div>
         </CardContent>
       </CardRoot>
 
