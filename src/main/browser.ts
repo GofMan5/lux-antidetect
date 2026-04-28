@@ -1341,8 +1341,13 @@ function startBrowserPolling(
     polling = true
 
     try {
-      // Quick check: if lock file is gone, browser is definitely stopped
-      if (!isBrowserProfileActive(profileDir, isFirefox)) {
+      // Lock files can be missing or stale depending on the Chromium build
+      // and shutdown history. Treat real processes as the source of truth so
+      // we do not stop the SOCKS relay while the browser is still alive.
+      const pids = await findBrowserPidsByProfileDir(profileDir)
+      const cdpPort = activeBrowsers.get(profileId)?.cdpPort
+      const cdpAlive = cdpPort ? await isCdpReachable(cdpPort) : false
+      if (pids.length === 0 && !cdpAlive && !isBrowserProfileActive(profileDir, isFirefox)) {
         markStopped()
         return
       }
@@ -1357,7 +1362,6 @@ function startBrowserPolling(
             if (session) {
               const elapsed = (Date.now() - new Date(session.started_at).getTime()) / 60000
               if (elapsed >= timeoutMinutes) {
-                const cdpPort = activeBrowsers.get(profileId)?.cdpPort
                 await closeBrowserByProfileDir(profileDir, cdpPort)
                 markStopped()
                 return
@@ -1367,9 +1371,8 @@ function startBrowserPolling(
         }
       } catch { /* best effort */ }
 
-      // Lock file still exists (can be stale on Windows) — check actual processes
-      const pids = await findBrowserPidsByProfileDir(profileDir)
-      if (pids.length === 0) {
+      // Lock file still exists (can be stale on Windows) — rely on actual processes
+      if (pids.length === 0 && !cdpAlive) {
         markStopped()
       }
     } finally {
