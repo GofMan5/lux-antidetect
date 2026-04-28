@@ -14,8 +14,7 @@
  * rings, and active nav. Status pills use a separate, muted sage / amber /
  * coral / sky set so the blue doesn't have to do everything.
  *
- * Typography: Inter Variable, tabular-nums for IDs/timestamps. Slightly
- * negative letter-spacing keeps dense rows compact.
+ * Typography: Inter Variable, tabular-nums for IDs/timestamps.
  *
  * Motion uses a single curve everywhere — `cubic-bezier(0.32, 0.72, 0,
  * 1)` — the "osmosis" curve. Spring overshoot on entry, no bounce.
@@ -186,7 +185,7 @@ body {
   font-size: 13px;
   font-feature-settings: 'cv11', 'ss01', 'ss03'; /* curated alternates: open 4, alt 1/L, alt G */
   font-variation-settings: 'opsz' 14;
-  letter-spacing: -0.012em;
+  letter-spacing: 0;
   overflow: hidden;
   /* Subtle vignette — cool blue glow at the top, deeper black at the edges. */
   background-image: radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.022) 0%, transparent 60%),

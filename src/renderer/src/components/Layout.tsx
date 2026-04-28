@@ -34,7 +34,7 @@ const TOPBAR_HEIGHT_PX = 56
 // top bar) plus a label column wide enough for "Templates" without truncation
 // at the default font scale. Brand row is locked to this same width so the
 // shield sits flush with the rail's icon column underneath.
-const SIDEBAR_WIDTH_PX = 216
+const SIDEBAR_WIDTH_PX = 208
 // Width of the icon column inside the sidebar — also drives BrandMark's
 // shield zone so the shield is vertically centered on the rail icons below.
 const SIDEBAR_ICON_COL_PX = 48
@@ -127,7 +127,7 @@ function TopBarSearchTrigger({ onClick }: TopBarSearchTriggerProps): React.JSX.E
       type="button"
       onClick={onClick}
       className={cn(
-        'no-drag group relative w-full max-w-[420px] h-9 rounded-[--radius-md]',
+        'no-drag group relative w-full max-w-[460px] h-9 rounded-[--radius-md]',
         'flex items-center gap-2 pl-3 pr-2 text-left',
         'bg-input border border-border',
         'transition-colors duration-150 ease-[var(--ease-osmosis)]',
@@ -285,7 +285,7 @@ function TopBar({ onOpenPalette, onOpenShortcuts }: TopBarProps): React.JSX.Elem
        * side at the layout's hard 900px minimum width.
        */}
       <div className="flex-1 flex items-center justify-center min-w-0 px-3">
-        <div className="w-full max-w-[360px]">
+        <div className="w-full max-w-[420px]">
           <TopBarSearchTrigger onClick={onOpenPalette} />
         </div>
       </div>
@@ -394,7 +394,15 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
   ) : null
 
   const shortcutHint = !showRunningBadge && item.shortcut ? (
-    <span className="mr-1 font-mono text-[10px] text-muted-foreground/60">{item.shortcut}</span>
+    <span
+      className={cn(
+        'mr-1 rounded-[--radius-sm] border border-border/60 bg-background/30 px-1 py-0.5',
+        'font-mono text-[9px] leading-none text-muted-foreground/55 opacity-0',
+        'transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100'
+      )}
+    >
+      {item.shortcut}
+    </span>
   ) : null
 
   return (
@@ -404,8 +412,8 @@ function LeftRailItem({ item, runningCount }: LeftRailItemProps): React.JSX.Elem
         cn(
           itemBaseClass,
           isActive
-            ? 'bg-primary/10 text-primary'
-            : 'text-muted-foreground hover:bg-elevated/40 hover:text-foreground'
+            ? 'bg-primary/12 text-primary ring-1 ring-inset ring-primary/15'
+            : 'text-muted-foreground hover:bg-elevated/45 hover:text-foreground'
         )
       }
       aria-label={item.label}

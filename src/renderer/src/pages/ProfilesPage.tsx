@@ -114,10 +114,10 @@ type ProxyFilterValue = 'all' | 'with-proxy' | 'no-proxy'
 // Pixel heights per density for virtualization. Group headers add a fixed
 // 28px stripe between sections.
 const ROW_HEIGHT_BY_DENSITY: Record<Density, number> = {
-  compact: 40,
-  comfortable: 56
+  compact: 48,
+  comfortable: 64
 }
-const GROUP_HEADER_HEIGHT_PX = 28
+const GROUP_HEADER_HEIGHT_PX = 32
 const OVERSCAN = 5
 
 // LocalStorage keys for compact persistence (UI prefs only — never the data).
@@ -473,23 +473,23 @@ const FilterChip = memo(function FilterChip({
       title={label}
       className={cn(
         'inline-flex items-center justify-center gap-1.5 shrink-0',
-        'h-7 w-7 lg:w-auto lg:px-2.5',
-        'rounded-[--radius-md] text-[11.5px] font-medium',
+        'h-8 px-2.5',
+        'rounded-[--radius-md] border text-[11.5px] font-medium',
         'transition-colors duration-150 ease-[var(--ease-osmosis)]',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
         active
-          ? 'bg-primary text-primary-foreground'
-          : 'text-muted-foreground hover:bg-elevated/60 hover:text-foreground'
+          ? 'border-primary/35 bg-primary/12 text-primary'
+          : 'border-transparent text-muted-foreground hover:border-border/70 hover:bg-elevated/45 hover:text-foreground'
       )}
     >
       {dotClass && (
         <span
           aria-hidden
-          className={cn('h-2 w-2 lg:h-1.5 lg:w-1.5 rounded-full shrink-0', dotClass)}
+          className={cn('h-1.5 w-1.5 rounded-full shrink-0', dotClass)}
         />
       )}
       {icon}
-      <span className="hidden lg:inline">{label}</span>
+      <span className="hidden md:inline">{label}</span>
     </button>
   )
 })
@@ -719,16 +719,17 @@ function ProfileRowComponent({
         })
       }
       className={cn(
-        'group/row relative flex items-center gap-3 pl-4 pr-2 cursor-pointer select-none',
-        'border-b border-border/40 transition-colors duration-150',
+        'group/row relative flex items-center gap-3 pl-4 pr-2 cursor-pointer select-none overflow-hidden',
+        'rounded-[--radius-md] border border-border/45 bg-card/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]',
+        'transition-colors duration-150',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
         focused
-          ? 'bg-elevated/55'
+          ? 'border-primary/35 bg-elevated/70'
           : selected
-            ? 'bg-primary/[0.05]'
-            : 'hover:bg-elevated/30'
+            ? 'border-primary/25 bg-primary/[0.07]'
+            : 'hover:border-border/70 hover:bg-elevated/35'
       )}
-      style={{ height: ROW_HEIGHT_BY_DENSITY[density] }}
+      style={{ height: ROW_HEIGHT_BY_DENSITY[density] - 6, marginTop: 3 }}
     >
       {/* Left group-color stripe */}
       <span
@@ -840,8 +841,8 @@ function ProfileRowComponent({
       )}
 
       {/* Name + meta line */}
-      <div className="flex-1 min-w-0 flex flex-col gap-0.5 leading-tight">
-        <span className="font-medium text-foreground truncate">
+      <div className="flex-1 min-w-[160px] flex flex-col gap-0.5 leading-tight">
+        <span className="text-[13px] font-semibold text-foreground truncate">
           {profile.name}
         </span>
         {isComfortable && (
@@ -866,7 +867,7 @@ function ProfileRowComponent({
 
       {/* Compact-density meta inline (browser + group on a single line, hidden in comfortable) */}
       {!isComfortable && (
-        <span className="hidden md:flex items-center gap-1.5 text-[11px] text-muted-foreground/80 shrink-0 max-w-[160px] truncate">
+        <span className="hidden md:flex items-center gap-1.5 text-[11px] text-muted-foreground/80 shrink-0 w-[150px] truncate">
           <BrowserIcon className="h-3 w-3" />
           <span>{BROWSER_LABEL[profile.browser_type]}</span>
           {profile.group_name && (
@@ -879,12 +880,12 @@ function ProfileRowComponent({
       )}
 
       {/* Tags */}
-      <div className="hidden lg:flex items-center min-w-0 max-w-[200px]">
+      <div className="hidden lg:flex items-center min-w-0 w-[190px]">
         <TagChips tags={tags} />
       </div>
 
       {/* Proxy chip */}
-      <div className="hidden md:flex items-center min-w-0 max-w-[180px] shrink-0">
+      <div className="hidden md:flex items-center min-w-0 w-[180px] shrink-0">
         {proxy ? (
           <ProxyChip proxy={proxy} />
         ) : (
@@ -976,11 +977,11 @@ function GroupHeaderRow({ label, count, collapsed, onToggle }: GroupHeaderProps)
       type="button"
       onClick={onToggle}
       className={cn(
-        'w-full flex items-center gap-2 pl-4 pr-4 text-[11px] font-semibold uppercase tracking-[0.08em]',
-        'bg-card/70 border-b border-border/40 text-muted-foreground hover:text-foreground',
+        'w-full flex items-center gap-2 pl-3 pr-3 text-[11px] font-semibold uppercase tracking-[0.08em]',
+        'rounded-[--radius-md] border border-border/35 bg-card/55 text-muted-foreground hover:border-border/65 hover:text-foreground',
         'transition-colors duration-150 ease-[var(--ease-osmosis)]'
       )}
-      style={{ height: GROUP_HEADER_HEIGHT_PX }}
+      style={{ height: GROUP_HEADER_HEIGHT_PX - 6, marginTop: 3 }}
       aria-expanded={!collapsed}
     >
       <ChevronDown
@@ -2270,8 +2271,8 @@ export function ProfilesPage(): React.JSX.Element {
        */}
       <div
         className={cn(
-          'sticky top-0 z-10 shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 py-1.5 min-h-12 min-w-0',
-          'bg-card/85 backdrop-blur-sm border-b border-border/50'
+          'sticky top-0 z-10 shrink-0 flex flex-wrap items-center gap-x-2 gap-y-2 px-5 py-3 min-w-0',
+          'bg-card/88 backdrop-blur-sm border-b border-border/50 shadow-[0_1px_0_rgba(255,255,255,0.025)]'
         )}
       >
         <SearchInput
@@ -2279,11 +2280,11 @@ export function ProfilesPage(): React.JSX.Element {
           value={searchQuery}
           onChange={setSearchQuery}
           placeholder="Search profiles…"
-          className="w-full sm:w-[240px] md:w-[260px] shrink-0"
+          className="order-1 w-[300px] max-w-[36vw] shrink-0"
           matchCount={filteredProfiles.length}
         />
 
-        <div className="flex flex-wrap items-center gap-x-1 gap-y-1 grow shrink-0 basis-auto">
+        <div className="order-3 flex w-full flex-wrap items-center gap-x-1.5 gap-y-1.5 min-w-0">
           <FilterChip
             active={statusFilter === 'running'}
             onClick={setStatusRunning}
@@ -2356,7 +2357,7 @@ export function ProfilesPage(): React.JSX.Element {
             >
               {/* w-[120px] at narrow / w-[150px] at lg overrides the trigger's
                   baked-in w-full so it doesn't stretch on a wrapped row. */}
-              <SelectTrigger className="ml-1 !h-7 !text-[11.5px] w-[120px] lg:w-[150px] shrink-0">
+              <SelectTrigger className="ml-1 !h-8 !text-[11.5px] w-[148px] shrink-0">
                 <SelectValue placeholder="Group" />
               </SelectTrigger>
               <SelectContent>
@@ -2375,11 +2376,11 @@ export function ProfilesPage(): React.JSX.Element {
         {/* Right block stays as a single row so density/sort/actions don't
             split apart vertically. Whole block wraps as one unit when the
             outer flex-wrap can't fit it alongside chips. */}
-        <div className="flex flex-nowrap items-center gap-1 shrink-0 ml-auto">
+        <div className="order-2 flex flex-nowrap items-center gap-1.5 shrink-0 ml-auto">
 
         {/* Density toggle — 2-segment pill so both options are visible at once */}
         <div
-          className="inline-flex items-center rounded-[--radius-md] bg-elevated/40 p-0.5"
+          className="inline-flex items-center rounded-[--radius-md] border border-border/50 bg-background/35 p-0.5"
           role="group"
           aria-label="Row density"
         >
@@ -2389,11 +2390,11 @@ export function ProfilesPage(): React.JSX.Element {
             aria-label="Compact density"
             onClick={() => setDensity('compact')}
             className={cn(
-              'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+              'inline-flex items-center gap-1 h-7 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
               'transition-colors duration-150 ease-[var(--ease-osmosis)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
               density === 'compact'
-                ? 'bg-card text-foreground shadow-sm'
+                ? 'bg-elevated text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
@@ -2406,11 +2407,11 @@ export function ProfilesPage(): React.JSX.Element {
             aria-label="Comfortable density"
             onClick={() => setDensity('comfortable')}
             className={cn(
-              'inline-flex items-center gap-1 h-6 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
+              'inline-flex items-center gap-1 h-7 px-2 rounded-[calc(var(--radius-md)-2px)] text-[11px] font-medium',
               'transition-colors duration-150 ease-[var(--ease-osmosis)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
               density === 'comfortable'
-                ? 'bg-card text-foreground shadow-sm'
+                ? 'bg-elevated text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
@@ -2428,7 +2429,7 @@ export function ProfilesPage(): React.JSX.Element {
             setSortDir(d)
           }}
         >
-          <SelectTrigger className="!h-7 !text-[11.5px] w-[110px] lg:w-[130px] shrink-0">
+          <SelectTrigger className="!h-8 !text-[11.5px] w-[132px] shrink-0">
             <SelectValue placeholder="Sort by..." />
           </SelectTrigger>
           <SelectContent>
@@ -2445,8 +2446,8 @@ export function ProfilesPage(): React.JSX.Element {
             type="button"
             onClick={handleImportProfiles}
             className={cn(
-              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
-              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'h-8 w-8 inline-flex items-center justify-center rounded-[--radius-md] border border-transparent',
+              'text-muted-foreground hover:text-foreground hover:border-border/70 hover:bg-elevated/50',
               'transition-colors duration-150 ease-[var(--ease-osmosis)]'
             )}
             aria-label="Import profiles"
@@ -2459,8 +2460,8 @@ export function ProfilesPage(): React.JSX.Element {
             type="button"
             onClick={handleExportProfiles}
             className={cn(
-              'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
-              'text-muted-foreground hover:text-foreground hover:bg-elevated/60',
+              'h-8 w-8 inline-flex items-center justify-center rounded-[--radius-md] border border-transparent',
+              'text-muted-foreground hover:text-foreground hover:border-border/70 hover:bg-elevated/50',
               'transition-colors duration-150 ease-[var(--ease-osmosis)]'
             )}
             aria-label="Export profiles"
@@ -2474,6 +2475,7 @@ export function ProfilesPage(): React.JSX.Element {
           icon={<Plus className="h-3.5 w-3.5" />}
           onClick={handleNewProfile}
           aria-label="New profile"
+          className="h-8"
         >
           <span className="hidden md:inline">New profile</span>
         </Button>
@@ -2486,7 +2488,7 @@ export function ProfilesPage(): React.JSX.Element {
               aria-label="New from preset"
               title="New from preset"
               className={cn(
-                'h-7 w-7 inline-flex items-center justify-center rounded-[--radius-sm]',
+                'h-8 w-8 inline-flex items-center justify-center rounded-[--radius-md]',
                 'bg-primary/10 text-primary ring-1 ring-inset ring-primary/20',
                 'hover:bg-primary/15 hover:ring-primary/30',
                 'transition-colors duration-150 ease-[var(--ease-osmosis)]'
@@ -2570,8 +2572,8 @@ export function ProfilesPage(): React.JSX.Element {
               const style: CSSProperties = {
                 position: 'absolute',
                 top,
-                left: 0,
-                right: 0
+                left: 16,
+                right: 16
               }
 
               if (row.kind === 'group') {
