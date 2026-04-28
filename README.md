@@ -203,8 +203,8 @@ GitHub Actions builds release artifacts for:
 Push a tag like `v1.0.71` to run the full matrix and publish assets to the GitHub release:
 
 ```bash
-git tag -a v1.0.71 -m "Lux Antidetect v1.0.71"
-git push origin v1.0.71
+git tag -a v1.0.72 -m "Lux Antidetect v1.0.72"
+git push origin v1.0.72
 ```
 
 ### Type Check
