@@ -89,13 +89,15 @@ import {
   PRESET_BROWSER_MAP,
   buildPresetMenuItems
 } from '../lib/preset-menu'
+import { parseTags } from '../lib/tags'
 import type {
   BrowserType,
   ProfileStatus,
   Profile,
   ProxyResponse,
   FraudRisk,
-  SessionInfo
+  SessionInfo,
+  UpdateFingerprintInput
 } from '../lib/types'
 import type { PresetDescriptor } from '../../../preload/api-contract'
 
@@ -201,9 +203,95 @@ function countryFlagEmoji(code: string | null): string {
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-function parseTags(tags: string): string[] {
-  if (!tags) return []
-  return tags.split(',').map((t) => t.trim()).filter(Boolean)
+const FINGERPRINT_EXPORT_KEYS = [
+  'user_agent',
+  'platform',
+  'hardware_concurrency',
+  'device_memory',
+  'languages',
+  'screen_width',
+  'screen_height',
+  'color_depth',
+  'pixel_ratio',
+  'timezone',
+  'canvas_noise_seed',
+  'webgl_vendor',
+  'webgl_renderer',
+  'audio_context_noise',
+  'fonts_list',
+  'webrtc_policy',
+  'video_inputs',
+  'audio_inputs',
+  'audio_outputs',
+  'device_type'
+] as const satisfies readonly (keyof InitialFingerprint)[]
+
+function pickFingerprintFields(raw: unknown): Partial<InitialFingerprint> | undefined {
+  if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined
+  }
+
+  const source = raw as Record<string, unknown>
+  const picked: Record<string, unknown> = {}
+  for (const key of FINGERPRINT_EXPORT_KEYS) {
+    const value = source[key]
+    if (value !== undefined) picked[key] = value
+  }
+
+  return Object.keys(picked).length > 0
+    ? (picked as Partial<InitialFingerprint>)
+    : undefined
+}
+
+function parseFingerprintLanguages(raw: unknown): string[] | undefined {
+  let values = raw
+
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return undefined
+    try {
+      values = JSON.parse(trimmed) as unknown
+    } catch {
+      values = trimmed.split(',')
+    }
+  }
+
+  if (!Array.isArray(values)) return undefined
+
+  const languages = values
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  return languages.length > 0 ? languages : undefined
+}
+
+function pickUpdateFingerprintInput(raw: unknown): UpdateFingerprintInput | undefined {
+  const fingerprint = pickFingerprintFields(raw)
+  if (!fingerprint) return undefined
+
+  const input: UpdateFingerprintInput = {
+    user_agent: fingerprint.user_agent,
+    platform: fingerprint.platform,
+    hardware_concurrency: fingerprint.hardware_concurrency,
+    device_memory: fingerprint.device_memory,
+    screen_width: fingerprint.screen_width,
+    screen_height: fingerprint.screen_height,
+    color_depth: fingerprint.color_depth,
+    pixel_ratio: fingerprint.pixel_ratio,
+    device_type: fingerprint.device_type,
+    timezone: fingerprint.timezone,
+    webgl_vendor: fingerprint.webgl_vendor,
+    webgl_renderer: fingerprint.webgl_renderer,
+    webrtc_policy: fingerprint.webrtc_policy,
+    languages: parseFingerprintLanguages(fingerprint.languages)
+  }
+
+  for (const key of Object.keys(input) as (keyof UpdateFingerprintInput)[]) {
+    if (input[key] === undefined) delete input[key]
+  }
+
+  return Object.keys(input).length > 0 ? input : undefined
 }
 
 function readDensityFromStorage(): Density {
@@ -1394,21 +1482,11 @@ export function ProfilesPage(): React.JSX.Element {
           browser_type: detail.profile.browser_type,
           group_name: detail.profile.group_name,
           group_color: detail.profile.group_color,
+          tags: parseTags(detail.profile.tags),
           notes: detail.profile.notes,
+          proxy_id: detail.profile.proxy_id,
           start_url: detail.profile.start_url,
-          fingerprint: {
-            user_agent: detail.fingerprint.user_agent,
-            platform: detail.fingerprint.platform,
-            screen_width: detail.fingerprint.screen_width,
-            screen_height: detail.fingerprint.screen_height,
-            timezone: detail.fingerprint.timezone,
-            hardware_concurrency: detail.fingerprint.hardware_concurrency,
-            device_memory: detail.fingerprint.device_memory,
-            webgl_vendor: detail.fingerprint.webgl_vendor,
-            webgl_renderer: detail.fingerprint.webgl_renderer,
-            webrtc_policy: detail.fingerprint.webrtc_policy,
-            languages: detail.fingerprint.languages
-          }
+          fingerprint: pickFingerprintFields(detail.fingerprint) ?? {}
         })
       }
       const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
@@ -1438,21 +1516,28 @@ export function ProfilesPage(): React.JSX.Element {
           browser_type: string
           group_name?: string
           group_color?: string
+          tags?: unknown
           notes?: string
+          proxy_id?: string | null
           start_url?: string
-          fingerprint?: Record<string, unknown>
+          fingerprint?: unknown
         }>
         if (!Array.isArray(data)) throw new Error('Invalid format')
         for (const item of data) {
-          await api.createProfile({
+          const fingerprint = pickFingerprintFields(item.fingerprint)
+          const fingerprintUpdate = pickUpdateFingerprintInput(item.fingerprint)
+          const created = await api.createProfile({
             name: item.name,
             browser_type: item.browser_type as BrowserType,
             group_name: item.group_name,
             group_color: item.group_color,
+            tags: parseTags(item.tags),
             notes: item.notes,
+            proxy_id: item.proxy_id ?? null,
             start_url: item.start_url,
-            fingerprint: item.fingerprint
+            fingerprint
           })
+          if (fingerprintUpdate) await api.updateFingerprint(created.id, fingerprintUpdate)
         }
         fetchProfiles()
         addToast(`Imported ${data.length} profile(s)`, 'success')
@@ -2779,7 +2864,7 @@ function OnboardingWelcome({
           </div>
           <h2 className="text-[22px] font-bold text-foreground tracking-tight">Welcome to Lux</h2>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed max-w-md">
-            Three quick steps. About a minute. Then you're ready to run isolated browser
+            Three quick steps. About a minute. Then you&apos;re ready to run isolated browser
             profiles with distinct fingerprints.
           </p>
         </div>

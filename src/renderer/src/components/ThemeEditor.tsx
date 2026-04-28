@@ -45,11 +45,13 @@ export function ThemeEditor({ open, editingTheme, onClose }: ThemeEditorProps): 
 
   // Reset state when opening with a different theme
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    const id = requestAnimationFrame(() => {
       setName(editingTheme?.name ?? '')
       setColors(editingTheme?.colors ? { ...editingTheme.colors } : { ...DEFAULT_CUSTOM_COLORS })
       setActiveColor(null)
-    }
+    })
+    return () => cancelAnimationFrame(id)
   }, [open, editingTheme])
 
   // Store original theme to restore on cancel
@@ -80,7 +82,7 @@ export function ThemeEditor({ open, editingTheme, onClose }: ThemeEditorProps): 
     onClose()
   }, [customThemes, onClose])
 
-  const handleSave = () => {
+  const handleSave = (): void => {
     if (!name.trim()) {
       addToast('Theme name is required', 'error')
       return
@@ -104,17 +106,17 @@ export function ThemeEditor({ open, editingTheme, onClose }: ThemeEditorProps): 
     onClose()
   }
 
-  const setColor = (key: keyof ThemeColors, value: string) => {
+  const setColor = (key: keyof ThemeColors, value: string): void => {
     setColors(prev => ({ ...prev, [key]: value }))
   }
 
-  const handleExport = () => {
+  const handleExport = (): void => {
     const data = JSON.stringify({ name, colors }, null, 2)
     navigator.clipboard.writeText(data)
     addToast('Theme copied to clipboard', 'success')
   }
 
-  const handleImport = async () => {
+  const handleImport = async (): Promise<void> => {
     try {
       const text = await navigator.clipboard.readText()
       const data = JSON.parse(text) as { name?: string; colors?: Partial<ThemeColors> }
@@ -128,7 +130,7 @@ export function ThemeEditor({ open, editingTheme, onClose }: ThemeEditorProps): 
     }
   }
 
-  const openPicker = (key: keyof ThemeColors) => {
+  const openPicker = (key: keyof ThemeColors): void => {
     if (activeColor === key) { setActiveColor(null); return }
     const btn = triggerRefs.current.get(key)
     if (btn) {
@@ -143,7 +145,7 @@ export function ThemeEditor({ open, editingTheme, onClose }: ThemeEditorProps): 
     setActiveColor(key)
   }
 
-  const handleResetGroup = (keys: (keyof ThemeColors)[]) => {
+  const handleResetGroup = (keys: (keyof ThemeColors)[]): void => {
     const base = editingTheme?.colors ?? DEFAULT_CUSTOM_COLORS
     setColors(prev => {
       const next = { ...prev }
@@ -154,7 +156,7 @@ export function ThemeEditor({ open, editingTheme, onClose }: ThemeEditorProps): 
 
   // Close picker on outside click
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const handler = (e: MouseEvent): void => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
         setActiveColor(null)
       }

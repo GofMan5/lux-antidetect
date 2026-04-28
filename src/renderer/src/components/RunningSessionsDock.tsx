@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { create } from 'zustand'
@@ -21,6 +21,7 @@ interface DockStore {
   setHidden: (v: boolean) => void
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- Dock visibility is controlled from outside the dock host.
 export const useDockStore = create<DockStore>((set) => ({
   collapsed: false,
   hidden: false,
@@ -95,13 +96,14 @@ export function RunningSessionsDock(): React.JSX.Element | null {
   // If sessions just appeared while the dock was hidden, re-reveal it so
   // the user can always see their running state. Tracked via a ref-like
   // counter so we don't fight with explicit dismiss clicks.
-  const [prevCount, setPrevCount] = useState(rows.length)
+  const prevCountRef = useRef(rows.length)
   useEffect(() => {
+    const prevCount = prevCountRef.current
     if (rows.length > prevCount && hidden) {
       setHidden(false)
     }
-    setPrevCount(rows.length)
-  }, [rows.length, prevCount, hidden, setHidden])
+    prevCountRef.current = rows.length
+  }, [rows.length, hidden, setHidden])
 
   if (rows.length === 0 || hidden) return null
 

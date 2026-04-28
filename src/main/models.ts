@@ -214,6 +214,7 @@ export interface AiChatMessage {
 export interface AiSettings {
   hasApiKey: boolean
   model: string
+  proxyId: string | null
   maxContextMessages: number
 }
 

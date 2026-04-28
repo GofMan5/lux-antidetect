@@ -34,7 +34,7 @@ function timeAgo(ts: number): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-function NotificationItem({ n, onRead }: { n: Notification; onRead: () => void }) {
+function NotificationItem({ n, onRead }: { n: Notification; onRead: () => void }): React.JSX.Element {
   const Icon = typeIcons[n.type]
 
   return (
@@ -72,7 +72,7 @@ export function NotificationCenter(): React.JSX.Element {
 
   const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null)
 
-  const updatePos = useCallback(() => {
+  const updatePos = useCallback((): void => {
     if (!bellRef.current) return
     const rect = bellRef.current.getBoundingClientRect()
     setPos({
@@ -91,7 +91,7 @@ export function NotificationCenter(): React.JSX.Element {
   // Close on outside click
   useEffect(() => {
     if (!open) return
-    const handler = (e: MouseEvent) => {
+    const handler = (e: MouseEvent): void => {
       const target = e.target as Node
       if (panelRef.current?.contains(target)) return
       if (bellRef.current?.contains(target)) return

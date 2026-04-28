@@ -15,6 +15,7 @@ const PROXY_TEST_TARGET_PATH = '/generate_204'
 const PROXY_TEST_EXPECTED_STATUS = 204
 const HTTP_PROXY_AUTH_REQUIRED = 407
 const INTERNAL_CHECK_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36'
+const PROXY_PROTOCOLS = new Set<ProxyProtocol>(['http', 'https', 'socks4', 'socks5'])
 
 const SOCKS5_VERSION = 0x05
 const SOCKS5_AUTH_NONE = 0x00
@@ -65,6 +66,66 @@ function normalizeOptional(value: string | undefined | null): string | null {
   return trimmed === '' ? null : trimmed
 }
 
+function normalizeOptionalStringField(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') throw new Error(`${field} must be a string`)
+  return value
+}
+
+function normalizeCredentialField(value: unknown, field: string): string | null | undefined {
+  if (value === undefined || value === null) return value
+  if (typeof value !== 'string') throw new Error(`${field} must be a string`)
+  return value
+}
+
+function normalizeProxyPort(value: unknown): number {
+  const port =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : NaN
+
+  if (!Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT) {
+    throw new Error(`Port must be an integer between ${MIN_PORT} and ${MAX_PORT}`)
+  }
+  return port
+}
+
+function normalizeProxyInput(input: ProxyInput): ProxyInput {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Proxy input must be an object')
+  }
+
+  const source = input as unknown as Record<string, unknown>
+  if (!PROXY_PROTOCOLS.has(source.protocol as ProxyProtocol)) {
+    throw new Error('Protocol must be one of: http, https, socks4, socks5')
+  }
+  if (typeof source.host !== 'string') throw new Error('Host is required')
+
+  let host = source.host.trim()
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1)
+  if (!host) throw new Error('Host is required')
+  if (/[\s/]/.test(host)) throw new Error('Host contains invalid characters')
+
+  const port = normalizeProxyPort(source.port)
+  const name =
+    typeof source.name === 'string' && source.name.trim()
+      ? source.name.trim()
+      : `${host}:${port}`
+
+  return {
+    name,
+    protocol: source.protocol as ProxyProtocol,
+    host,
+    port,
+    username: normalizeCredentialField(source.username, 'username'),
+    password: normalizeCredentialField(source.password, 'password'),
+    country: normalizeOptionalStringField(source.country, 'country'),
+    group_tag: normalizeOptionalStringField(source.group_tag, 'group_tag')
+  }
+}
+
 /**
  * Credential tri-state resolver for createProxy.
  *   undefined | '' → null (no value)
@@ -91,9 +152,7 @@ function resolveCredentialForUpdate(value: string | null | undefined): string | 
 }
 
 export function createProxy(db: Database.Database, input: ProxyInput): ProxyResponse {
-  if (input.port < MIN_PORT || input.port > MAX_PORT)
-    throw new Error(`Port must be between ${MIN_PORT} and ${MAX_PORT}`)
-  if (!input.host.trim()) throw new Error('Host is required')
+  const normalized = normalizeProxyInput(input)
 
   const id = uuidv4()
   db.prepare(
@@ -101,14 +160,14 @@ export function createProxy(db: Database.Database, input: ProxyInput): ProxyResp
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
   ).run(
     id,
-    input.name,
-    input.protocol,
-    input.host.trim(),
-    input.port,
-    resolveCredentialForCreate(input.username),
-    resolveCredentialForCreate(input.password),
-    normalizeOptional(input.country),
-    normalizeOptional(input.group_tag)
+    normalized.name,
+    normalized.protocol,
+    normalized.host,
+    normalized.port,
+    resolveCredentialForCreate(normalized.username),
+    resolveCredentialForCreate(normalized.password),
+    normalizeOptional(normalized.country),
+    normalizeOptional(normalized.group_tag)
   )
 
   return toProxyResponse(
@@ -124,9 +183,7 @@ export function updateProxy(
   const existing = db.prepare('SELECT id FROM proxies WHERE id = ?').get(proxyId)
   if (!existing) throw new Error(`Proxy not found: ${proxyId}`)
 
-  if (input.port < MIN_PORT || input.port > MAX_PORT)
-    throw new Error(`Port must be between ${MIN_PORT} and ${MAX_PORT}`)
-  if (!input.host.trim()) throw new Error('Host is required')
+  const normalized = normalizeProxyInput(input)
 
   // Credential tri-state:
   //   undefined / '' → keep existing column value (no SET clause emitted)
@@ -134,20 +191,20 @@ export function updateProxy(
   //   non-empty      → set to trimmed value
   const sets: string[] = ['name = ?', 'protocol = ?', 'host = ?', 'port = ?', 'country = ?', 'group_tag = ?']
   const params: (string | number | null)[] = [
-    input.name,
-    input.protocol,
-    input.host.trim(),
-    input.port,
-    normalizeOptional(input.country),
-    normalizeOptional(input.group_tag)
+    normalized.name,
+    normalized.protocol,
+    normalized.host,
+    normalized.port,
+    normalizeOptional(normalized.country),
+    normalizeOptional(normalized.group_tag)
   ]
 
-  const nextUsername = resolveCredentialForUpdate(input.username)
+  const nextUsername = resolveCredentialForUpdate(normalized.username)
   if (nextUsername !== 'keep') {
     sets.push('username = ?')
     params.push(nextUsername)
   }
-  const nextPassword = resolveCredentialForUpdate(input.password)
+  const nextPassword = resolveCredentialForUpdate(normalized.password)
   if (nextPassword !== 'keep') {
     sets.push('password = ?')
     params.push(nextPassword)
@@ -248,8 +305,14 @@ function parseUrlForm(protocol: ProxyProtocol, rest: string): ParseResult {
   let host = url.hostname
   if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1)
 
-  const username = url.username ? decodeURIComponent(url.username) : undefined
-  const password = url.password ? decodeURIComponent(url.password) : undefined
+  let username: string | undefined
+  let password: string | undefined
+  try {
+    username = url.username ? decodeURIComponent(url.username) : undefined
+    password = url.password ? decodeURIComponent(url.password) : undefined
+  } catch {
+    return { ok: false, error: 'Invalid credential encoding' }
+  }
   return validatedProxy(protocol, host, port, username, password)
 }
 
@@ -848,12 +911,53 @@ function readUntilCloseOrLimit(sock: Socket, maxBytes: number, initialBuffer?: B
 }
 
 function parseHttpResponse(buf: Buffer): { status: number; body: string } | null {
+  const parsed = parseHttpResponseWithHeaders(buf)
+  return parsed ? { status: parsed.status, body: parsed.body.toString('utf8') } : null
+}
+
+function parseHttpResponseWithHeaders(buf: Buffer): {
+  status: number
+  headers: Record<string, string>
+  body: Buffer
+} | null {
   const headerEnd = findHeaderEndSize(buf)
   if (headerEnd <= 0) return null
   const status = parseHttpStatusCode(buf)
   if (status === null) return null
-  const body = buf.subarray(headerEnd).toString('utf8')
-  return { status, body }
+
+  const headerText = buf.subarray(0, headerEnd).toString('latin1')
+  const headers: Record<string, string> = {}
+  for (const line of headerText.split(/\r?\n/).slice(1)) {
+    const idx = line.indexOf(':')
+    if (idx <= 0) continue
+    headers[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim()
+  }
+
+  let body = buf.subarray(headerEnd)
+  if (headers['transfer-encoding']?.toLowerCase().includes('chunked')) {
+    body = decodeChunkedBody(body) ?? body
+  }
+  return { status, headers, body }
+}
+
+function decodeChunkedBody(body: Buffer): Buffer | null {
+  const chunks: Buffer[] = []
+  let offset = 0
+  while (offset < body.length) {
+    const lineEnd = body.indexOf('\r\n', offset, 'latin1')
+    if (lineEnd < 0) return null
+    const sizeText = body.subarray(offset, lineEnd).toString('latin1').split(';')[0].trim()
+    const size = parseInt(sizeText, 16)
+    if (!Number.isFinite(size) || size < 0) return null
+    offset = lineEnd + 2
+    if (size === 0) return Buffer.concat(chunks)
+    if (offset + size > body.length) return null
+    chunks.push(body.subarray(offset, offset + size))
+    offset += size
+    if (body.subarray(offset, offset + 2).toString('latin1') !== '\r\n') return null
+    offset += 2
+  }
+  return null
 }
 
 /**
@@ -1117,7 +1221,6 @@ export async function httpGetDirect(
   timeoutMs: number
 ): Promise<{ status: number; body: string } | null> {
   let sock: Socket | null = null
-  let timer: NodeJS.Timeout | null = null
   try {
     sock = createConnection({
       host: targetHost,
@@ -1147,7 +1250,6 @@ export async function httpGetDirect(
   } catch {
     return null
   } finally {
-    if (timer) clearTimeout(timer)
     if (sock) sock.destroy()
   }
 }

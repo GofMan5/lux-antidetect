@@ -75,6 +75,28 @@ function browserLabel(browser: Browser): string {
   return String(browser)
 }
 
+const REMOVABLE_BROWSERS = new Set<Browser>([Browser.CHROMIUM, Browser.CHROME, Browser.FIREFOX])
+
+function validateRemovableBrowser(rawBrowser: string): Browser {
+  if (typeof rawBrowser !== 'string') throw new Error('Unsupported managed browser')
+  if (REMOVABLE_BROWSERS.has(rawBrowser as Browser)) return rawBrowser as Browser
+  throw new Error('Unsupported managed browser')
+}
+
+function validateBuildIdSegment(rawBuildId: string): string {
+  if (
+    typeof rawBuildId !== 'string' ||
+    !rawBuildId ||
+    rawBuildId === '.' ||
+    rawBuildId === '..' ||
+    rawBuildId.includes('/') ||
+    rawBuildId.includes('\\') ||
+    !/^[A-Za-z0-9._+-]+$/.test(rawBuildId)
+  ) {
+    throw new Error('Invalid browser buildId')
+  }
+  return rawBuildId
+}
 
 /* -------------------------------------------------------------------------- */
 /*  State                                                                     */
@@ -231,10 +253,12 @@ export async function listManagedBrowsers(): Promise<ManagedBrowser[]> {
 export async function removeManagedBrowser(browser: string, buildId: string): Promise<void> {
   if (!browsersDir) throw new Error('Browser manager not initialized')
   const platform = getPlatform()
+  const validatedBrowser = validateRemovableBrowser(browser)
+  const validatedBuildId = validateBuildIdSegment(buildId)
   await uninstall({
     cacheDir: browsersDir,
-    browser: browser as Browser,
-    buildId,
+    browser: validatedBrowser,
+    buildId: validatedBuildId,
     platform: platform as BrowserPlatform
   })
 }

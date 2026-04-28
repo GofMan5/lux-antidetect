@@ -140,4 +140,5 @@ function Spinner(): React.JSX.Element {
 }
 
 Button.displayName = 'Button'
+// eslint-disable-next-line react-refresh/only-export-components -- shadcn-style variant helper is intentionally exported with the component.
 export { Button, buttonVariants }

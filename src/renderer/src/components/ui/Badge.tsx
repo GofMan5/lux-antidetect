@@ -65,4 +65,5 @@ const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
 
 Badge.displayName = 'Badge'
 
+// eslint-disable-next-line react-refresh/only-export-components -- shadcn-style variant helper is intentionally exported with the component.
 export { Badge, badgeVariants }

@@ -62,7 +62,7 @@ const MAX_CONCURRENT_CONNECTIONS = 256
 // RFC 1035 — labels are alnum/hyphen, 63 char per label, 253 total. Allow
 // dots, brackets (rare for SOCKS5 but harmless), colons (IPv6 literal),
 // underscore (some service domains use it). Reject control bytes / NUL.
-const DOMAIN_ATYP_REGEX = /^[A-Za-z0-9._:[\]\-]{1,253}$/
+const DOMAIN_ATYP_REGEX = /^[A-Za-z0-9._:[\]-]{1,253}$/
 
 // Pre-allocated reply buffers. Sharing across connections is safe because
 // `Socket.write` does not mutate the source Buffer.

@@ -121,6 +121,30 @@ const MAC_GPUS: GpuConfig[] = [
   }
 ]
 
+const LINUX_GPUS: GpuConfig[] = [
+  {
+    vendor: 'Google Inc. (NVIDIA)',
+    renderers: [
+      'ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 4060/PCIe/SSE2, OpenGL 4.5)',
+      'ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3060/PCIe/SSE2, OpenGL 4.5)'
+    ]
+  },
+  {
+    vendor: 'Google Inc. (Intel)',
+    renderers: [
+      'ANGLE (Intel, Mesa Intel(R) UHD Graphics 620, OpenGL 4.6)',
+      'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics, OpenGL 4.6)'
+    ]
+  },
+  {
+    vendor: 'Google Inc. (AMD)',
+    renderers: [
+      'ANGLE (AMD, AMD Radeon RX 6700 XT, OpenGL 4.6)',
+      'ANGLE (AMD, AMD Radeon RX 7600, OpenGL 4.6)'
+    ]
+  }
+]
+
 // ─── Mobile device configs ───────────────────────────────────────────────
 
 const MOBILE_SCREENS: [number, number][] = [
@@ -339,7 +363,7 @@ const MEDIA_CONFIGS: MediaConfig[] = [
   { video: 2, audioIn: 1, audioOut: 1 }
 ]
 
-type DesktopOsModel = 'windows' | 'mac'
+type DesktopOsModel = 'windows' | 'mac' | 'linux'
 type FingerprintDraft = Omit<Fingerprint, 'id' | 'profile_id'>
 
 function parseStringList(raw: unknown): string[] {
@@ -364,8 +388,15 @@ function parseStringList(raw: unknown): string[] {
 }
 
 function normalizeTimezone(timezone?: string): string {
-  if (typeof timezone === 'string' && (ALL_TIMEZONES as readonly string[]).includes(timezone)) {
-    return timezone
+  if (typeof timezone === 'string' && timezone.trim()) {
+    const trimmed = timezone.trim()
+    try {
+      // eslint-disable-next-line no-new
+      new Intl.DateTimeFormat('en-US', { timeZone: trimmed })
+      return trimmed
+    } catch {
+      // Fall through to a generated fallback only when the value is invalid.
+    }
   }
 
   return pick(ALL_TIMEZONES)
@@ -378,15 +409,25 @@ export function parseFingerprintLanguages(raw: unknown, fallbackTimezone?: strin
 }
 
 function getHostDesktopOsModel(): DesktopOsModel {
+  if (process.platform === 'linux') return 'linux'
   return process.platform === 'darwin' ? 'mac' : 'windows'
+}
+
+function inferDesktopOsModel(fingerprint?: Partial<Fingerprint>): DesktopOsModel {
+  const platform = typeof fingerprint?.platform === 'string' ? fingerprint.platform : ''
+  const ua = typeof fingerprint?.user_agent === 'string' ? fingerprint.user_agent : ''
+
+  if (platform === 'MacIntel' || /Macintosh|Mac OS X/i.test(ua)) return 'mac'
+  if (platform.toLowerCase().startsWith('linux') || (/Linux|X11/i.test(ua) && !/Android/i.test(ua))) {
+    return 'linux'
+  }
+  if (platform === 'Win32' || /Windows/i.test(ua)) return 'windows'
+
+  return getHostDesktopOsModel()
 }
 
 function extractChromeVersion(userAgent?: string): string | null {
   return userAgent?.match(/Chrome\/([\d.]+)/)?.[1] ?? null
-}
-
-function extractMacVersion(userAgent?: string): string | null {
-  return userAgent?.match(/Mac OS X ([\d_]+)/)?.[1] ?? null
 }
 
 function extractAndroidModel(userAgent?: string): string | null {
@@ -400,6 +441,59 @@ function buildWindowsUserAgent(chromeVersion: string): string {
 function buildMacUserAgent(chromeVersion: string, macVersion?: string): string {
   const resolvedMacVersion = macVersion ?? pick(MAC_VERSIONS)
   return `Mozilla/5.0 (Macintosh; Intel Mac OS X ${resolvedMacVersion}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
+}
+
+function buildLinuxUserAgent(chromeVersion: string): string {
+  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
+}
+
+function buildEdgeUserAgent(osModel: DesktopOsModel, chromeVersion: string): string {
+  const base =
+    osModel === 'mac'
+      ? buildMacUserAgent(chromeVersion)
+      : osModel === 'linux'
+        ? buildLinuxUserAgent(chromeVersion)
+        : buildWindowsUserAgent(chromeVersion)
+  return `${base} Edg/${chromeVersion}`
+}
+
+function buildFirefoxUserAgent(osModel: DesktopOsModel): string {
+  const version = '140.0'
+  if (osModel === 'mac') {
+    return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:${version}) Gecko/20100101 Firefox/${version}`
+  }
+  if (osModel === 'linux') {
+    return `Mozilla/5.0 (X11; Linux x86_64; rv:${version}) Gecko/20100101 Firefox/${version}`
+  }
+  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:${version}) Gecko/20100101 Firefox/${version}`
+}
+
+function buildDefaultDesktopUserAgent(
+  browserType: BrowserType,
+  osModel: DesktopOsModel,
+  chromeVersion: string
+): string {
+  if (browserType === 'firefox') return buildFirefoxUserAgent(osModel)
+  if (browserType === 'edge') return buildEdgeUserAgent(osModel, chromeVersion)
+  if (osModel === 'mac') return buildMacUserAgent(chromeVersion)
+  if (osModel === 'linux') return buildLinuxUserAgent(chromeVersion)
+  return buildWindowsUserAgent(chromeVersion)
+}
+
+function defaultDesktopPlatform(osModel: DesktopOsModel): string {
+  if (osModel === 'mac') return 'MacIntel'
+  if (osModel === 'linux') return 'Linux x86_64'
+  return 'Win32'
+}
+
+function normalizeDesktopUserAgent(userAgent: string | undefined, osModel: DesktopOsModel): string {
+  const trimmed = typeof userAgent === 'string' ? userAgent.trim() : ''
+  if (trimmed) return trimmed
+
+  const chromeVersion = randomChromeVersion()
+  if (osModel === 'mac') return buildMacUserAgent(chromeVersion)
+  if (osModel === 'linux') return buildLinuxUserAgent(chromeVersion)
+  return buildWindowsUserAgent(chromeVersion)
 }
 
 function buildMobileUserAgent(chromeVersion: string, model?: string): string {
@@ -424,11 +518,11 @@ function normalizeAudioNoise(value: number | undefined): number {
 }
 
 function normalizeDesktopPixelRatio(osModel: DesktopOsModel, pixelRatio?: number): number {
-  if (osModel === 'mac') return 2.0
+  if (typeof pixelRatio === 'number' && Number.isFinite(pixelRatio) && pixelRatio >= 1 && pixelRatio <= 4) {
+    return pixelRatio
+  }
 
-  return typeof pixelRatio === 'number' && Number.isFinite(pixelRatio) && pixelRatio >= 1 && pixelRatio <= 3
-    ? pixelRatio
-    : pick([1.0, 1.25, 1.5, 1.75, 2.0])
+  return osModel === 'mac' ? 2.0 : pick([1.0, 1.25, 1.5, 1.75, 2.0])
 }
 
 function normalizeMobilePixelRatio(pixelRatio?: number): number {
@@ -462,12 +556,36 @@ function isDesktopGpuCompatible(
   renderer?: string
 ): boolean {
   if (!vendor || !renderer) return false
+  if (vendor === 'Mozilla' && renderer === 'Mozilla') return true
 
   if (osModel === 'windows') {
     return vendor.startsWith('Google Inc. (') && renderer.includes('Direct3D')
   }
+  if (osModel === 'linux') {
+    return vendor.startsWith('Google Inc. (') && !renderer.includes('Direct3D')
+  }
 
-  return vendor === 'Apple' && !renderer.includes('Direct3D')
+  return (
+    (vendor === 'Apple' || vendor === 'Apple Inc.' || vendor.includes('(Apple)')) &&
+    !renderer.includes('Direct3D')
+  )
+}
+
+function desktopScreensForOs(osModel: DesktopOsModel): readonly [number, number][] {
+  if (osModel === 'mac') return MAC_SCREENS
+  return WINDOWS_SCREENS
+}
+
+function desktopGpusForOs(osModel: DesktopOsModel): readonly GpuConfig[] {
+  if (osModel === 'mac') return MAC_GPUS
+  if (osModel === 'linux') return LINUX_GPUS
+  return WINDOWS_GPUS
+}
+
+function desktopFontsForOs(osModel: DesktopOsModel): readonly string[] {
+  if (osModel === 'mac') return MAC_FONTS_POOL
+  if (osModel === 'linux') return LINUX_FONTS_POOL
+  return WIN_FONTS_POOL
 }
 
 function resolveDesktopGpu(
@@ -486,7 +604,7 @@ function resolveDesktopGpu(
     return { vendor: resolvedVendor, renderer: resolvedRenderer }
   }
 
-  const gpuConfig = pick(osModel === 'windows' ? WINDOWS_GPUS : MAC_GPUS)
+  const gpuConfig = pick(desktopGpusForOs(osModel))
   return {
     vendor: gpuConfig.vendor,
     renderer: pick(gpuConfig.renderers)
@@ -495,6 +613,10 @@ function resolveDesktopGpu(
 
 function isMobileGpuCompatible(vendor?: string, renderer?: string): boolean {
   if (!vendor || !renderer) return false
+
+  if ((vendor === 'Apple' || vendor === 'Apple Inc.') && renderer.includes('Apple')) {
+    return true
+  }
 
   return MOBILE_GPUS.some(
     (gpuConfig) => gpuConfig.vendor === vendor && gpuConfig.renderers.includes(renderer)
@@ -547,10 +669,18 @@ export function normalizeFingerprintDraft(fingerprint: Partial<Fingerprint>): Fi
     )
     const gpu = resolveMobileGpu(fingerprint.webgl_vendor, fingerprint.webgl_renderer)
     const model = extractAndroidModel(fingerprint.user_agent) ?? undefined
+    const userAgent =
+      typeof fingerprint.user_agent === 'string' && fingerprint.user_agent.trim()
+        ? fingerprint.user_agent.trim()
+        : buildMobileUserAgent(chromeVersion, model)
+    const platform =
+      typeof fingerprint.platform === 'string' && fingerprint.platform.trim()
+        ? fingerprint.platform.trim()
+        : 'Linux armv8l'
 
     return {
-      user_agent: buildMobileUserAgent(chromeVersion, model),
-      platform: 'Linux armv81',
+      user_agent: userAgent,
+      platform,
       hardware_concurrency: Math.min(
         normalizePositiveInteger(fingerprint.hardware_concurrency, hardware.concurrency),
         8
@@ -575,22 +705,23 @@ export function normalizeFingerprintDraft(fingerprint: Partial<Fingerprint>): Fi
     }
   }
 
-  const osModel = getHostDesktopOsModel()
-  const chromeVersion = extractChromeVersion(fingerprint.user_agent) ?? randomChromeVersion()
+  const osModel = inferDesktopOsModel(fingerprint)
   const [screenWidth, screenHeight] = resolveScreen(
     fingerprint.screen_width,
     fingerprint.screen_height,
-    osModel === 'windows' ? WINDOWS_SCREENS : MAC_SCREENS
+    desktopScreensForOs(osModel)
   )
   const gpu = resolveDesktopGpu(osModel, fingerprint.webgl_vendor, fingerprint.webgl_renderer)
   const media = pick(MEDIA_CONFIGS)
+  const userAgent = normalizeDesktopUserAgent(fingerprint.user_agent, osModel)
+  const platform =
+    typeof fingerprint.platform === 'string' && fingerprint.platform.trim()
+      ? fingerprint.platform.trim()
+      : defaultDesktopPlatform(osModel)
 
   return {
-    user_agent:
-      osModel === 'windows'
-        ? buildWindowsUserAgent(chromeVersion)
-        : buildMacUserAgent(chromeVersion, extractMacVersion(fingerprint.user_agent) ?? undefined),
-    platform: osModel === 'windows' ? 'Win32' : 'MacIntel',
+    user_agent: userAgent,
+    platform,
     hardware_concurrency: normalizePositiveInteger(
       fingerprint.hardware_concurrency,
       hardware.concurrency
@@ -609,7 +740,7 @@ export function normalizeFingerprintDraft(fingerprint: Partial<Fingerprint>): Fi
     fonts_list: JSON.stringify(
       normalizeFontList(
         fingerprint.fonts_list,
-        osModel === 'windows' ? WIN_FONTS_POOL : MAC_FONTS_POOL
+        desktopFontsForOs(osModel)
       )
     ),
     webrtc_policy: fingerprint.webrtc_policy ?? 'disable_non_proxied_udp',
@@ -673,7 +804,7 @@ export function applyProxyGeoToFingerprint(
 // ─── Main fingerprint generator ──────────────────────────────────────────
 
 export function generateDefaultFingerprint(
-  _browserType: BrowserType,
+  browserType: BrowserType,
   overrides?: Partial<Fingerprint>
 ): Omit<Fingerprint, 'id' | 'profile_id'> {
   const deviceType = overrides?.device_type ?? 'desktop'
@@ -683,22 +814,20 @@ export function generateDefaultFingerprint(
     return generateMobileFingerprint(overrides)
   }
 
-  const osModel = getHostDesktopOsModel()
+  const osModel = inferDesktopOsModel(overrides)
   const chromeVersion = extractChromeVersion(overrides?.user_agent) ?? randomChromeVersion()
   const [screenWidth, screenHeight] = pick(
-    osModel === 'windows' ? WINDOWS_SCREENS : MAC_SCREENS
+    desktopScreensForOs(osModel)
   )
-  const gpuConfig = pick(osModel === 'windows' ? WINDOWS_GPUS : MAC_GPUS)
+  const gpuConfig = pick(desktopGpusForOs(osModel))
   const hardware = pickWeighted(HARDWARE_CONFIGS)
   const media = pick(MEDIA_CONFIGS)
 
   return normalizeFingerprintDraft({
     user_agent:
       overrides?.user_agent ??
-      (osModel === 'windows'
-        ? buildWindowsUserAgent(chromeVersion)
-        : buildMacUserAgent(chromeVersion)),
-    platform: overrides?.platform ?? (osModel === 'windows' ? 'Win32' : 'MacIntel'),
+      buildDefaultDesktopUserAgent(browserType, osModel, chromeVersion),
+    platform: overrides?.platform ?? defaultDesktopPlatform(osModel),
     hardware_concurrency: overrides?.hardware_concurrency ?? hardware.concurrency,
     device_memory: overrides?.device_memory ?? hardware.memory,
     languages: overrides?.languages,
@@ -731,7 +860,7 @@ function generateMobileFingerprint(
 
   return normalizeFingerprintDraft({
     user_agent: overrides?.user_agent ?? buildMobileUserAgent(chromeVer, device.model),
-    platform: overrides?.platform ?? 'Linux armv81',
+    platform: overrides?.platform ?? 'Linux armv8l',
     hardware_concurrency: overrides?.hardware_concurrency ?? Math.min(hw.concurrency, 8),
     device_memory: overrides?.device_memory ?? Math.min(hw.memory, 8),
     languages: overrides?.languages,

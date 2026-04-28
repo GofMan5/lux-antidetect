@@ -69,9 +69,10 @@ import { TEXTAREA } from '../lib/ui'
 import { validateProfileFingerprint } from '../lib/fingerprint-validator'
 import type { ValidationWarning } from '../lib/fingerprint-validator'
 import { PRESET_BROWSER_MAP, buildPresetMenuItems } from '../lib/preset-menu'
+import { formatTagsForForm, parseTagsFromForm } from '../lib/tags'
 import { CookiesTab } from '../components/profile/CookiesTab'
 import { ExtensionsTab } from '../components/profile/ExtensionsTab'
-import type { Fingerprint } from '../lib/types'
+import type { Fingerprint, UpdateFingerprintInput } from '../lib/types'
 import type { PresetDescriptor } from '../../../preload/api-contract'
 
 // ---------------------------------------------------------------------------
@@ -262,6 +263,42 @@ function toScreenValue(w: number, h: number): string {
   return `${w}x${h}`
 }
 
+function formatLanguagesForForm(raw: unknown): string {
+  const normalizeList = (values: unknown[]): string =>
+    values
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join(', ')
+
+  if (Array.isArray(raw)) return normalizeList(raw)
+  if (typeof raw !== 'string') return ''
+
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (Array.isArray(parsed)) return normalizeList(parsed)
+  } catch {
+    // Plain comma-separated form value.
+  }
+
+  return trimmed
+}
+
+function parseLanguageListFromForm(value: string): string[] {
+  return formatLanguagesForForm(value)
+    .split(',')
+    .map((lang) => lang.trim())
+    .filter(Boolean)
+}
+
+function parseLanguagesFromForm(value: string): string[] {
+  const parsed = parseLanguageListFromForm(value)
+  return parsed.length > 0 ? parsed : ['en-US', 'en']
+}
+
 function getFingerprintStrength(
   watchedFields: [string, string, string | number, string, string]
 ): { score: number; issues: string[] } {
@@ -444,7 +481,7 @@ export function ProfileEditorPanel({
     getValues,
     watch,
     control,
-    formState: { errors, isDirty }
+    formState: { errors, isDirty, dirtyFields }
   } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: DEFAULT_VALUES
@@ -591,13 +628,6 @@ export function ProfileEditorPanel({
     if (!profileId) {
       if (initialFingerprint) {
         const fp = initialFingerprint
-        let langs = ''
-        try {
-          const parsed = JSON.parse(fp.languages)
-          langs = Array.isArray(parsed) ? parsed.join(', ') : String(fp.languages ?? '')
-        } catch {
-          langs = fp.languages ?? ''
-        }
         reset({
           ...DEFAULT_VALUES,
           browser_type: initialBrowser ?? DEFAULT_VALUES.browser_type,
@@ -610,7 +640,7 @@ export function ProfileEditorPanel({
           webgl_vendor: fp.webgl_vendor ?? '',
           webgl_renderer: fp.webgl_renderer ?? '',
           webrtc_policy: fp.webrtc_policy ?? DEFAULT_VALUES.webrtc_policy,
-          languages: langs || DEFAULT_VALUES.languages,
+          languages: formatLanguagesForForm(fp.languages) || DEFAULT_VALUES.languages,
           color_depth: fp.color_depth ?? DEFAULT_VALUES.color_depth,
           pixel_ratio: fp.pixel_ratio ?? DEFAULT_VALUES.pixel_ratio,
           device_type: (fp.device_type as 'desktop' | 'mobile') || DEFAULT_VALUES.device_type
@@ -634,7 +664,7 @@ export function ProfileEditorPanel({
           notes: detail.profile.notes,
           proxy_id: detail.profile.proxy_id ?? '',
           start_url: detail.profile.start_url ?? '',
-          tags: detail.profile.tags || '',
+          tags: formatTagsForForm(detail.profile.tags),
           user_agent: detail.fingerprint.user_agent,
           platform: detail.fingerprint.platform,
           screen: toScreenValue(
@@ -649,13 +679,9 @@ export function ProfileEditorPanel({
           webrtc_policy: detail.fingerprint.webrtc_policy,
           color_depth: detail.fingerprint.color_depth ?? 24,
           pixel_ratio: detail.fingerprint.pixel_ratio ?? 1.0,
-          languages: (() => {
-            try {
-              return JSON.parse(detail.fingerprint.languages).join(', ')
-            } catch {
-              return detail.fingerprint.languages
-            }
-          })(),
+          languages:
+            formatLanguagesForForm(detail.fingerprint.languages) ||
+            DEFAULT_VALUES.languages,
           device_type:
             (detail.fingerprint.device_type as 'desktop' | 'mobile') || 'desktop'
         })
@@ -696,7 +722,9 @@ export function ProfileEditorPanel({
       setValue('webgl_vendor', fp.webgl_vendor, { shouldDirty: true })
       setValue('webgl_renderer', fp.webgl_renderer, { shouldDirty: true })
       setValue('webrtc_policy', fp.webrtc_policy, { shouldDirty: true })
-      setValue('languages', fp.languages, { shouldDirty: true })
+      setValue('languages', formatLanguagesForForm(fp.languages) || DEFAULT_VALUES.languages, {
+        shouldDirty: true
+      })
       setValue('color_depth', fp.color_depth ?? 24, { shouldDirty: true })
       setValue('pixel_ratio', fp.pixel_ratio ?? 1.0, { shouldDirty: true })
       setActiveTab(TAB_FINGERPRINT)
@@ -717,15 +745,7 @@ export function ProfileEditorPanel({
         const fp = await api.generateFingerprintFromPreset(preset.id)
         if (!isMountedRef.current || profileId !== initialProfileId) return
 
-        // languages arrives as a JSON-stringified array (matches Fingerprint
-        // storage). Mirror the parse used for initialFingerprint.
-        let langs: string
-        try {
-          const parsed = JSON.parse(fp.languages)
-          langs = Array.isArray(parsed) ? parsed.join(', ') : String(fp.languages ?? '')
-        } catch {
-          langs = fp.languages ?? ''
-        }
+        const langs = formatLanguagesForForm(fp.languages)
 
         // Overwrite only fingerprint-owned fields plus browser_type (a Firefox
         // preset must flip the form to firefox). Non-fingerprint fields —
@@ -824,10 +844,7 @@ export function ProfileEditorPanel({
       }
 
       // Compute the target languages list we would apply.
-      const existing = (getValues('languages') || '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
+      const existing = parseLanguageListFromForm(getValues('languages') || '')
       let targetLanguagesStr: string | null = null
       if (geo.locale) {
         const next = [geo.locale, 'en-US']
@@ -881,11 +898,13 @@ export function ProfileEditorPanel({
     try {
       const data = getValues()
       const { width, height } = parseScreen(data.screen)
+      const languagesArray = parseLanguagesFromForm(data.languages)
       await api.createTemplate({
         name: `${data.name} Template`,
         browser_type: data.browser_type,
         config: {
           group_name: data.group_name || null,
+          group_color: data.group_color || null,
           notes: data.notes,
           start_url: data.start_url,
           proxy_id: data.proxy_id || null,
@@ -899,7 +918,11 @@ export function ProfileEditorPanel({
             device_memory: data.device_memory,
             webgl_vendor: data.webgl_vendor,
             webgl_renderer: data.webgl_renderer,
-            webrtc_policy: data.webrtc_policy
+            webrtc_policy: data.webrtc_policy,
+            languages: languagesArray,
+            color_depth: data.color_depth,
+            pixel_ratio: data.pixel_ratio,
+            device_type: data.device_type
           }
         } as Record<string, unknown>
       })
@@ -919,32 +942,41 @@ export function ProfileEditorPanel({
           browser_type: string
         }
         const config = JSON.parse(tmpl.config) as Record<string, unknown>
-        if (config.group_name) setValue('group_name', config.group_name as string)
-        if (config.notes) setValue('notes', config.notes as string)
-        if (config.start_url) setValue('start_url', config.start_url as string)
-        setValue('browser_type', tmpl.browser_type as 'chromium' | 'firefox' | 'edge')
+        const markDirty = { shouldDirty: true }
+        if (config.group_name !== undefined) setValue('group_name', (config.group_name as string | null) ?? '', markDirty)
+        if (config.group_color !== undefined) setValue('group_color', (config.group_color as string | null) ?? '', markDirty)
+        if (config.notes !== undefined) setValue('notes', (config.notes as string | null) ?? '', markDirty)
+        if (config.start_url !== undefined) setValue('start_url', (config.start_url as string | null) ?? '', markDirty)
+        if (config.proxy_id !== undefined) setValue('proxy_id', (config.proxy_id as string | null) ?? '', markDirty)
+        setValue('browser_type', tmpl.browser_type as 'chromium' | 'firefox' | 'edge', markDirty)
         const fp = config.fingerprint as Record<string, unknown> | undefined
         if (fp) {
-          if (fp.user_agent) setValue('user_agent', fp.user_agent as string)
-          if (fp.platform) setValue('platform', fp.platform as string)
+          if (fp.user_agent) setValue('user_agent', fp.user_agent as string, markDirty)
+          if (fp.platform) setValue('platform', fp.platform as string, markDirty)
           if (fp.screen_width && fp.screen_height) {
             setValue(
               'screen',
-              toScreenValue(fp.screen_width as number, fp.screen_height as number)
+              toScreenValue(fp.screen_width as number, fp.screen_height as number),
+              markDirty
             )
           }
-          if (fp.timezone) setValue('timezone', fp.timezone as string)
-          if (fp.languages) setValue('languages', fp.languages as string)
-          if (fp.webrtc_policy) setValue('webrtc_policy', fp.webrtc_policy as string)
-          if (fp.webgl_vendor) setValue('webgl_vendor', fp.webgl_vendor as string)
-          if (fp.webgl_renderer) setValue('webgl_renderer', fp.webgl_renderer as string)
+          if (fp.timezone) setValue('timezone', fp.timezone as string, markDirty)
+          if (fp.languages)
+            setValue(
+              'languages',
+              formatLanguagesForForm(fp.languages) || DEFAULT_VALUES.languages,
+              markDirty
+            )
+          if (fp.webrtc_policy) setValue('webrtc_policy', fp.webrtc_policy as string, markDirty)
+          if (fp.webgl_vendor) setValue('webgl_vendor', fp.webgl_vendor as string, markDirty)
+          if (fp.webgl_renderer) setValue('webgl_renderer', fp.webgl_renderer as string, markDirty)
           if (fp.hardware_concurrency)
-            setValue('hardware_concurrency', fp.hardware_concurrency as number)
-          if (fp.device_memory) setValue('device_memory', fp.device_memory as number)
-          if (fp.color_depth) setValue('color_depth', fp.color_depth as number)
-          if (fp.pixel_ratio) setValue('pixel_ratio', fp.pixel_ratio as number)
+            setValue('hardware_concurrency', fp.hardware_concurrency as number, markDirty)
+          if (fp.device_memory) setValue('device_memory', fp.device_memory as number, markDirty)
+          if (fp.color_depth) setValue('color_depth', fp.color_depth as number, markDirty)
+          if (fp.pixel_ratio) setValue('pixel_ratio', fp.pixel_ratio as number, markDirty)
           if (fp.device_type)
-            setValue('device_type', fp.device_type as 'desktop' | 'mobile')
+            setValue('device_type', fp.device_type as 'desktop' | 'mobile', markDirty)
         }
       } catch {
         // Template lookups failing silently keeps the UX simple — the user can
@@ -959,14 +991,34 @@ export function ProfileEditorPanel({
       setSaving(true)
       setError(null)
       const { width, height } = parseScreen(data.screen)
-      const languagesArray = data.languages
-        ? data.languages
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : ['en-US', 'en']
+      const languagesArray = parseLanguagesFromForm(data.languages)
+      const tagsArray = parseTagsFromForm(data.tags)
 
       if (isEditMode && profileId) {
+        const preserveProxySyncedGeo =
+          Boolean(dirtyFields.proxy_id) &&
+          !dirtyFields.timezone &&
+          !dirtyFields.languages
+        const fingerprintInput: UpdateFingerprintInput = {
+          user_agent: data.user_agent,
+          platform: data.platform,
+          screen_width: width,
+          screen_height: height,
+          hardware_concurrency: data.hardware_concurrency,
+          device_memory: data.device_memory,
+          webgl_vendor: data.webgl_vendor,
+          webgl_renderer: data.webgl_renderer,
+          webrtc_policy: data.webrtc_policy,
+          color_depth: data.color_depth,
+          pixel_ratio: data.pixel_ratio,
+          device_type: data.device_type
+        }
+
+        if (!preserveProxySyncedGeo) {
+          fingerprintInput.timezone = data.timezone
+          fingerprintInput.languages = languagesArray
+        }
+
         await api.updateProfile(profileId, {
           name: data.name,
           browser_type: data.browser_type,
@@ -975,29 +1027,9 @@ export function ProfileEditorPanel({
           proxy_id: data.proxy_id || null,
           start_url: data.start_url,
           group_color: data.group_color || null,
-          tags: data.tags
-            ? data.tags
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean)
-            : []
+          tags: tagsArray
         })
-        await api.updateFingerprint(profileId, {
-          user_agent: data.user_agent,
-          platform: data.platform,
-          screen_width: width,
-          screen_height: height,
-          timezone: data.timezone,
-          hardware_concurrency: data.hardware_concurrency,
-          device_memory: data.device_memory,
-          webgl_vendor: data.webgl_vendor,
-          webgl_renderer: data.webgl_renderer,
-          webrtc_policy: data.webrtc_policy,
-          languages: languagesArray,
-          color_depth: data.color_depth,
-          pixel_ratio: data.pixel_ratio,
-          device_type: data.device_type
-        })
+        await api.updateFingerprint(profileId, fingerprintInput)
       } else {
         await api.createProfile({
           name: data.name,
@@ -1007,12 +1039,7 @@ export function ProfileEditorPanel({
           proxy_id: data.proxy_id || null,
           start_url: data.start_url,
           group_color: data.group_color || null,
-          tags: data.tags
-            ? data.tags
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean)
-            : [],
+          tags: tagsArray,
           fingerprint: {
             user_agent: data.user_agent,
             platform: data.platform,

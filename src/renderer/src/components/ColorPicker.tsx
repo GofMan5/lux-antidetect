@@ -23,7 +23,7 @@ function clamp(v: number, min: number, max: number): number {
 function useDrag(
   onMove: (x: number, y: number, rect: DOMRect) => void,
   onEnd?: () => void
-) {
+): readonly [React.RefObject<HTMLDivElement | null>, (e: React.MouseEvent) => void] {
   const ref = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
   const cleanupRef = useRef<(() => void) | null>(null)
@@ -48,8 +48,8 @@ function useDrag(
       e.preventDefault()
       dragging.current = true
       handle(e)
-      const move = (ev: MouseEvent) => { if (dragging.current) handle(ev) }
-      const up = () => {
+      const move = (ev: MouseEvent): void => { if (dragging.current) handle(ev) }
+      const up = (): void => {
         dragging.current = false
         cleanupRef.current = null
         onEnd?.()
@@ -66,8 +66,14 @@ function useDrag(
     [handle, onEnd]
   )
 
-  return { ref, onMouseDown }
+  return [ref, onMouseDown]
 }
+
+const SWATCHES = [
+  '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6',
+  '#3b82f6', '#8b5cf6', '#ec4899', '#f43f5e', '#6366f1',
+  '#09090b', '#1a1a22', '#71717a', '#ececef', '#ffffff'
+] as const
 
 export function ColorPicker({ value, onChange, label }: ColorPickerProps): React.JSX.Element {
   const rgba = parseColor(value)
@@ -78,12 +84,14 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
   // Sync external value changes
   const prevValue = useRef(value)
   useEffect(() => {
-    if (value !== prevValue.current) {
+    if (value === prevValue.current) return
+    const id = requestAnimationFrame(() => {
       prevValue.current = value
       const c = parseColor(value)
       setHsva(rgbaToHsva(c))
       setInputHex(rgbaToHex(c))
-    }
+    })
+    return () => cancelAnimationFrame(id)
   }, [value])
 
   const emitColor = useCallback(
@@ -106,22 +114,22 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
   }, [emitColor])
 
   // Saturation-Value palette
-  const palette = useDrag(
-    useCallback((x, y, rect) => {
+  const [paletteRef, handlePaletteMouseDown] = useDrag(
+    useCallback((x: number, y: number, rect: DOMRect): void => {
       updateHsva({ s: (x / rect.width) * 100, v: 100 - (y / rect.height) * 100 })
     }, [updateHsva])
   )
 
   // Hue slider
-  const hueSlider = useDrag(
-    useCallback((x, _y, rect) => {
+  const [hueSliderRef, handleHueSliderMouseDown] = useDrag(
+    useCallback((x: number, _y: number, rect: DOMRect): void => {
       updateHsva({ h: (x / rect.width) * 360 })
     }, [updateHsva])
   )
 
   // Alpha slider
-  const alphaSlider = useDrag(
-    useCallback((x, _y, rect) => {
+  const [alphaSliderRef, handleAlphaSliderMouseDown] = useDrag(
+    useCallback((x: number, _y: number, rect: DOMRect): void => {
       updateHsva({ a: Math.round((x / rect.width) * 100) / 100 })
     }, [updateHsva])
   )
@@ -130,7 +138,7 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
   const pureHueRgb = hsvaToRgba({ h: hsva.h, s: 100, v: 100, a: 1 })
   const pureHueStr = `rgb(${pureHueRgb.r}, ${pureHueRgb.g}, ${pureHueRgb.b})`
 
-  const handleHexInput = (v: string) => {
+  const handleHexInput = (v: string): void => {
     setInputHex(v)
     if (/^#([0-9a-f]{6}|[0-9a-f]{8})$/i.test(v)) {
       const c = parseColor(v)
@@ -141,7 +149,7 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
     }
   }
 
-  const handleRgbaInput = (key: keyof RGBA, val: string) => {
+  const handleRgbaInput = (key: keyof RGBA, val: string): void => {
     const n = parseFloat(val)
     if (isNaN(n)) return
     const clamped = key === 'a' ? clamp(n, 0, 1) : clamp(Math.round(n), 0, 255)
@@ -151,12 +159,6 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
     emitColor(h)
   }
 
-  const SWATCHES = [
-    '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6',
-    '#3b82f6', '#8b5cf6', '#ec4899', '#f43f5e', '#6366f1',
-    '#09090b', '#1a1a22', '#71717a', '#ececef', '#ffffff'
-  ]
-
   return (
     <div className="w-[272px] rounded-[--radius-lg] border border-edge bg-card shadow-2xl shadow-black/50 overflow-hidden">
       {label && (
@@ -165,8 +167,8 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
 
       {/* SV Palette */}
       <div
-        ref={palette.ref}
-        onMouseDown={palette.onMouseDown}
+        ref={paletteRef}
+        onMouseDown={handlePaletteMouseDown}
         className="relative h-[180px] mx-3 mt-2 rounded-[--radius-md] cursor-crosshair overflow-hidden select-none"
         style={{ backgroundColor: pureHueStr }}
       >
@@ -181,8 +183,8 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
       {/* Hue slider */}
       <div className="px-3 mt-3">
         <div
-          ref={hueSlider.ref}
-          onMouseDown={hueSlider.onMouseDown}
+          ref={hueSliderRef}
+          onMouseDown={handleHueSliderMouseDown}
           className="relative h-3 rounded-full cursor-pointer select-none"
           style={{ background: 'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)' }}
         >
@@ -196,8 +198,8 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps): React
       {/* Alpha slider */}
       <div className="px-3 mt-2">
         <div
-          ref={alphaSlider.ref}
-          onMouseDown={alphaSlider.onMouseDown}
+          ref={alphaSliderRef}
+          onMouseDown={handleAlphaSliderMouseDown}
           className="relative h-3 rounded-full cursor-pointer select-none"
           style={{
             background: `linear-gradient(to right, transparent, ${rgbaToString({ ...currentRgba, a: 1 })}),

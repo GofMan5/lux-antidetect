@@ -22,6 +22,7 @@ interface ConfirmState {
   close: (result: boolean) => void
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- Shared confirmation store intentionally lives with its dialog host.
 export const useConfirmStore = create<ConfirmState>((set, get) => ({
   open: false,
   title: 'Confirm',

@@ -169,6 +169,7 @@ const SheetDescription = forwardRef<
 ))
 SheetDescription.displayName = DialogPrimitive.Description.displayName
 
+// eslint-disable-next-line react-refresh/only-export-components -- shadcn-style sheet primitives and variants are intentionally re-exported together.
 export {
   Sheet,
   SheetPortal,
@@ -179,6 +180,8 @@ export {
   SheetHeader,
   SheetFooter,
   SheetTitle,
-  SheetDescription,
-  sheetVariants
+  SheetDescription
 }
+
+// eslint-disable-next-line react-refresh/only-export-components -- shadcn-style variant helper is intentionally exported with the component primitives.
+export { sheetVariants }

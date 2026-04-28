@@ -34,6 +34,7 @@ export const PRESET_GROUP_ORDER: ReadonlyArray<{
  * Maps a preset's browser field to the profile form's `browser_type`. Edge
  * presets don't exist today; extend this map if that changes.
  */
+// eslint-disable-next-line react-refresh/only-export-components -- Shared preset metadata is imported by multiple renderer screens.
 export const PRESET_BROWSER_MAP: Record<PresetBrowser, BrowserType> = {
   chrome: 'chromium',
   firefox: 'firefox'
@@ -48,6 +49,7 @@ export const PRESET_BROWSER_MAP: Record<PresetBrowser, BrowserType> = {
  *
  * Groups with zero matching presets are skipped entirely (no empty headings).
  */
+// eslint-disable-next-line react-refresh/only-export-components -- Shared menu builder is intentionally exported from this renderer helper.
 export function buildPresetMenuItems(
   presets: PresetDescriptor[] | null,
   onPick: (preset: PresetDescriptor) => void

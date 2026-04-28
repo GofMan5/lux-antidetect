@@ -123,45 +123,124 @@ function isBrowserProfileActive(profileDir: string, isFirefox: boolean): boolean
 
 /** Find PIDs of processes whose command line includes the given profile directory. (ASYNC) */
 async function findBrowserPidsByProfileDir(profileDir: string): Promise<number[]> {
+  if (!profileDir.trim()) return []
+
+  type ProcessLookupRow = {
+    processId: number
+    name?: string
+    executablePath?: string
+    commandLine?: string
+  }
+
+  const helperProcessNames = new Set([
+    'cmd.exe',
+    'conhost.exe',
+    'electron.exe',
+    'node.exe',
+    'powershell.exe',
+    'pwsh.exe',
+    'wmic.exe'
+  ])
+  const browserProcessNames = new Set(['chrome.exe', 'chromium.exe', 'msedge.exe', 'firefox.exe'])
+  const basename = (path: string): string => path.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+  const isLikelyBrowserProcess = (row: ProcessLookupRow): boolean => {
+    if (!Number.isInteger(row.processId) || row.processId <= 0 || row.processId === process.pid) {
+      return false
+    }
+    const processName = (row.name || basename(row.executablePath || '')).toLowerCase()
+    if (helperProcessNames.has(processName)) return false
+    if (!browserProcessNames.has(processName)) return false
+
+    const commandLine = row.commandLine ?? ''
+    const normalizedCommandLine = commandLine.toLowerCase()
+    const normalizedProfileDir = profileDir.toLowerCase()
+    if (!normalizedCommandLine.includes(normalizedProfileDir)) return false
+
+    return (
+      normalizedCommandLine.includes('--user-data-dir') ||
+      normalizedCommandLine.includes('-profile')
+    )
+  }
+  const uniqueBrowserPids = (rows: ProcessLookupRow[]): number[] => {
+    const pids = new Set<number>()
+    for (const row of rows) {
+      if (isLikelyBrowserProcess(row)) pids.add(row.processId)
+    }
+    return [...pids]
+  }
+
   // Try PowerShell first (reliable), fall back to WMIC
   try {
-    // Escape PowerShell special characters in the profile path to prevent injection.
-    // Backtick-escape: ` $ " ' and also replace single quotes for -like pattern safety.
-    const psEscapedDir = profileDir
-      .replace(/`/g, '``')
-      .replace(/\$/g, '`$')
-      .replace(/"/g, '`"')
-      .replace(/'/g, "''")
-    const psCmd = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${psEscapedDir}*' } | Select-Object -ExpandProperty ProcessId`
+    const psCmd = `$profileDir = $env:LUX_BROWSER_PROFILE_DIR
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($profileDir, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+  Select-Object ProcessId,Name,ExecutablePath,CommandLine |
+  ConvertTo-Json -Compress`
     const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-Command', psCmd], {
       timeout: 8000,
-      windowsHide: true
+      windowsHide: true,
+      env: { ...process.env, LUX_BROWSER_PROFILE_DIR: profileDir }
     })
-    const pids: number[] = []
-    for (const line of stdout.trim().split(/\r?\n/)) {
-      const pid = parseInt(line.trim(), 10)
-      if (pid > 0) pids.push(pid)
-    }
+    const parsed = stdout.trim() ? (JSON.parse(stdout) as unknown) : []
+    const processRows = (Array.isArray(parsed) ? parsed : [parsed]).map((row) => {
+      const processRow = row as {
+        ProcessId?: unknown
+        Name?: unknown
+        ExecutablePath?: unknown
+        CommandLine?: unknown
+      }
+      return {
+        processId: typeof processRow.ProcessId === 'number' ? processRow.ProcessId : 0,
+        name: typeof processRow.Name === 'string' ? processRow.Name : undefined,
+        executablePath:
+          typeof processRow.ExecutablePath === 'string' ? processRow.ExecutablePath : undefined,
+        commandLine: typeof processRow.CommandLine === 'string' ? processRow.CommandLine : undefined
+      }
+    })
+    const pids = uniqueBrowserPids(processRows)
     if (pids.length > 0) return pids
-  } catch { /* fall through to WMIC */ }
+  } catch {
+    /* fall through to WMIC */
+  }
 
   // Fallback: WMIC (deprecated but still works on most Windows)
   try {
-    const wmicDir = profileDir.replace(/\\/g, '\\\\')
+    const wmicDir = profileDir.replace(/\\/g, '\\\\').replace(/'/g, "''")
     const { stdout } = await execFileAsync(
       'wmic',
-      ['process', 'where', `CommandLine like '%${wmicDir}%'`, 'get', 'ProcessId', '/format:list'],
+      [
+        'process',
+        'where',
+        `CommandLine like '%${wmicDir}%'`,
+        'get',
+        'CommandLine,ExecutablePath,Name,ProcessId',
+        '/format:list'
+      ],
       { timeout: 5000, windowsHide: true }
     )
-    const pids: number[] = []
+    const rows: ProcessLookupRow[] = []
+    let current: Partial<ProcessLookupRow> = {}
     for (const line of stdout.split(/\r?\n/)) {
-      const match = line.match(/ProcessId=(\d+)/)
-      if (match) {
-        const pid = parseInt(match[1], 10)
-        if (pid > 0) pids.push(pid)
+      const trimmed = line.trim()
+      if (!trimmed) {
+        if (current.processId) rows.push(current as ProcessLookupRow)
+        current = {}
+        continue
+      }
+      const separator = trimmed.indexOf('=')
+      if (separator === -1) continue
+      const key = trimmed.slice(0, separator)
+      const value = trimmed.slice(separator + 1)
+      if (key === 'CommandLine') current.commandLine = value
+      else if (key === 'ExecutablePath') current.executablePath = value
+      else if (key === 'Name') current.name = value
+      else if (key === 'ProcessId') {
+        const pid = parseInt(value, 10)
+        if (pid > 0) current.processId = pid
       }
     }
-    return pids
+    if (current.processId) rows.push(current as ProcessLookupRow)
+    return uniqueBrowserPids(rows)
   } catch {
     return []
   }
@@ -182,6 +261,41 @@ async function killPid(pid: number, force = true): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function readSettingJson(db: Database.Database, key: string): unknown {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined
+  if (!row) return undefined
+  try {
+    return JSON.parse(row.value)
+  } catch {
+    return undefined
+  }
+}
+
+function readBooleanSetting(
+  db: Database.Database,
+  key: string,
+  fallback: boolean
+): boolean {
+  const value = readSettingJson(db, key)
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function readStringSetting(
+  db: Database.Database,
+  key: string,
+  fallback: string
+): string {
+  const value = readSettingJson(db, key)
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback
+}
+
+function readPositiveNumberSetting(db: Database.Database, key: string): number | null {
+  const value = readSettingJson(db, key)
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 }
 
 async function waitForBrowserExit(profileDir: string, timeoutMs: number): Promise<boolean> {
@@ -1354,18 +1468,15 @@ function startBrowserPolling(
 
       // Check session timeout
       try {
-        const timeoutRow = db.prepare("SELECT value FROM settings WHERE key = 'session_timeout_minutes'").get() as { value: string } | undefined
-        if (timeoutRow) {
-          const timeoutMinutes = JSON.parse(timeoutRow.value)
-          if (typeof timeoutMinutes === 'number' && timeoutMinutes > 0) {
-            const session = getSession(profileId)
-            if (session) {
-              const elapsed = (Date.now() - new Date(session.started_at).getTime()) / 60000
-              if (elapsed >= timeoutMinutes) {
-                await closeBrowserByProfileDir(profileDir, cdpPort)
-                markStopped()
-                return
-              }
+        const timeoutMinutes = readPositiveNumberSetting(db, 'session_timeout_minutes')
+        if (timeoutMinutes !== null) {
+          const session = getSession(profileId)
+          if (session) {
+            const elapsed = (Date.now() - new Date(session.started_at).getTime()) / 60000
+            if (elapsed >= timeoutMinutes) {
+              await closeBrowserByProfileDir(profileDir, cdpPort)
+              markStopped()
+              return
             }
           }
         }
@@ -1483,17 +1594,20 @@ export function parseNetscapeCookies(text: string): CdpCookie[] {
   const cookies: CdpCookie[] = []
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
+    const httpOnlyPrefix = '#HttpOnly_'
+    if (!trimmed || (trimmed.startsWith('#') && !trimmed.startsWith(httpOnlyPrefix))) continue
     const parts = trimmed.split('\t')
     if (parts.length < 7) continue
+    const httpOnly = parts[0].startsWith(httpOnlyPrefix)
+    const domain = httpOnly ? parts[0].slice(httpOnlyPrefix.length) : parts[0]
     cookies.push({
-      domain: parts[0],
+      domain,
       path: parts[2],
       secure: parts[3].toUpperCase() === 'TRUE',
       expires: parseInt(parts[4], 10) || 0,
       name: parts[5],
       value: parts[6],
-      httpOnly: parts[0].startsWith('#HttpOnly_'),
+      httpOnly,
       size: parts[5].length + parts[6].length,
       session: parseInt(parts[4], 10) === 0,
       sameSite: 'Lax'
@@ -1730,10 +1844,7 @@ async function launchBrowserInner(
 
   try {
     // Auto-regenerate fingerprint on each launch (unless disabled)
-    const autoRegenRow = db
-      .prepare("SELECT value FROM settings WHERE key = 'auto_regenerate_fingerprint'")
-      .get() as { value: string } | undefined
-    const shouldRegenerate = autoRegenRow ? JSON.parse(autoRegenRow.value) !== false : true
+    const shouldRegenerate = readBooleanSetting(db, 'auto_regenerate_fingerprint', true)
     const baseFp = shouldRegenerate
       ? regenerateFingerprint(db, profileId, profile.browser_type)
       : normalizeFingerprint(fingerprint)
@@ -1745,10 +1856,7 @@ async function launchBrowserInner(
     // Browser integrity surfaces used by Microsoft/Azure CAPTCHA (FedCM,
     // WebOTP, Storage Access, Private State Tokens) intentionally stay in
     // Chrome's native shape.
-    const lockdownRow = db
-      .prepare("SELECT value FROM settings WHERE key = 'hardware_identity_lockdown'")
-      .get() as { value: string } | undefined
-    const blockWebAuthn = lockdownRow ? JSON.parse(lockdownRow.value) !== false : true
+    const blockWebAuthn = readBooleanSetting(db, 'hardware_identity_lockdown', true)
 
     let proxy: Proxy | undefined
     if (profile.proxy_id) {
@@ -1813,19 +1921,8 @@ async function launchBrowserInner(
       // every Chromium profile they launch. Defaults: enabled=false (opt-in),
       // target='en'. Reads + applies before launch so Chrome reads the values
       // when it cold-starts the renderer process.
-      const translateEnabledRow = db
-        .prepare("SELECT value FROM settings WHERE key = 'translation_enabled'")
-        .get() as { value: string } | undefined
-      const translateEnabled = translateEnabledRow
-        ? JSON.parse(translateEnabledRow.value) === true
-        : false
-      const translateTargetRow = db
-        .prepare("SELECT value FROM settings WHERE key = 'translation_target_lang'")
-        .get() as { value: string } | undefined
-      const translateTarget =
-        translateTargetRow && typeof JSON.parse(translateTargetRow.value) === 'string'
-          ? (JSON.parse(translateTargetRow.value) as string)
-          : 'en'
+      const translateEnabled = readBooleanSetting(db, 'translation_enabled', false)
+      const translateTarget = readStringSetting(db, 'translation_target_lang', 'en')
       applyTranslatePreferences(profileDir, translateEnabled, translateTarget)
 
       args.push(`--user-data-dir=${profileDir}`)
@@ -1882,7 +1979,14 @@ async function launchBrowserInner(
       //     the proxy hostname too and every navigation aborts with
       //     ERR_PROXY_CONNECTION_FAILED.
       // Without proxy, leave DoH on automatic for ISP privacy.
-      const willUseSocksRelay = !!(proxy && isSocksProxy && proxy.username)
+      if (proxy?.protocol === 'socks5' && proxy.username && !proxy.password) {
+        throw new Error('SOCKS5 proxy password is required when username is set')
+      }
+      const willUseSocksRelay = !!(
+        proxy &&
+        ((proxy.protocol === 'socks4' && proxy.username) ||
+          (proxy.protocol === 'socks5' && proxy.username && proxy.password))
+      )
       if (proxy) {
         const excludeHosts = new Set<string>(['127.0.0.1'])
         if (!willUseSocksRelay) excludeHosts.add(proxy.host)

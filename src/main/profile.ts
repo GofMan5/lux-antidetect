@@ -17,8 +17,49 @@ import { applyProxyGeoToFingerprint, generateDefaultFingerprint, normalizeFinger
 import { isRunning } from './sessions'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const TAG_MAX_LENGTH = 40
+const TAG_MAX_COUNT = 20
+const TAG_NOISE_RE = /^[\s[\]/\\'",]+$/
 function assertUuid(id: string): void {
   if (!UUID_RE.test(id)) throw new Error('Invalid profile ID format')
+}
+
+function cleanTag(raw: string): string | null {
+  const tag = raw
+    .trim()
+    .replace(/^[\s[\]"']+/g, '')
+    .replace(/[\s[\]"']+$/g, '')
+    .trim()
+  if (!tag || TAG_NOISE_RE.test(tag)) return null
+  return tag.slice(0, TAG_MAX_LENGTH)
+}
+
+function normalizeTags(raw: unknown): string[] {
+  const tags: string[] = []
+  const collect = (value: unknown): void => {
+    if (tags.length >= TAG_MAX_COUNT || value === null || value === undefined) return
+    if (Array.isArray(value)) {
+      for (const item of value) collect(item)
+      return
+    }
+    if (typeof value !== 'string') return
+    const trimmed = value.trim()
+    if (!trimmed || TAG_NOISE_RE.test(trimmed)) return
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      if (Array.isArray(parsed)) {
+        collect(parsed)
+        return
+      }
+    } catch { /* plain comma-separated tags */ }
+    for (const part of trimmed.split(',')) {
+      const tag = cleanTag(part)
+      if (tag && !tags.includes(tag)) tags.push(tag)
+      if (tags.length >= TAG_MAX_COUNT) return
+    }
+  }
+  collect(raw)
+  return tags
 }
 
 export function listProfiles(db: Database.Database): Profile[] {
@@ -56,7 +97,7 @@ export async function createProfile(
   const profileId = uuidv4()
   const fingerprintId = uuidv4()
   const now = new Date().toISOString()
-  const tags = JSON.stringify(input.tags ?? [])
+  const tags = JSON.stringify(normalizeTags(input.tags ?? []))
   const fp = generateDefaultFingerprint(input.browser_type, input.fingerprint)
 
   const insertProfile = db.prepare(
@@ -66,8 +107,8 @@ export async function createProfile(
   const insertFingerprint = db.prepare(
     `INSERT INTO fingerprints (id, profile_id, user_agent, platform, hardware_concurrency, device_memory, languages,
      screen_width, screen_height, color_depth, pixel_ratio, timezone, canvas_noise_seed, webgl_vendor, webgl_renderer,
-     audio_context_noise, fonts_list, webrtc_policy, video_inputs, audio_inputs, audio_outputs)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     audio_context_noise, fonts_list, webrtc_policy, video_inputs, audio_inputs, audio_outputs, device_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
 
   const transaction = db.transaction(() => {
@@ -105,7 +146,8 @@ export async function createProfile(
       fp.webrtc_policy,
       fp.video_inputs,
       fp.audio_inputs,
-      fp.audio_outputs
+      fp.audio_outputs,
+      fp.device_type
     )
   })
   transaction()
@@ -135,7 +177,7 @@ export function updateProfile(
   const browserType = input.browser_type ?? existing.browser_type
   const groupName = input.group_name !== undefined ? input.group_name : existing.group_name
   const groupColor = input.group_color !== undefined ? input.group_color : existing.group_color
-  const tags = input.tags !== undefined ? JSON.stringify(input.tags) : existing.tags
+  const tags = input.tags !== undefined ? JSON.stringify(normalizeTags(input.tags)) : existing.tags
   const notes = input.notes ?? existing.notes
   const proxyId = input.proxy_id !== undefined ? input.proxy_id : existing.proxy_id
   const startUrl = input.start_url !== undefined ? input.start_url : existing.start_url
@@ -373,8 +415,8 @@ export async function duplicateProfile(
     db.prepare(
       `INSERT INTO fingerprints (id, profile_id, user_agent, platform, hardware_concurrency, device_memory, languages,
        screen_width, screen_height, color_depth, pixel_ratio, timezone, canvas_noise_seed, webgl_vendor, webgl_renderer,
-       audio_context_noise, fonts_list, webrtc_policy, video_inputs, audio_inputs, audio_outputs)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       audio_context_noise, fonts_list, webrtc_policy, video_inputs, audio_inputs, audio_outputs, device_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       fpId,
       newId,
@@ -396,7 +438,8 @@ export async function duplicateProfile(
       fp.webrtc_policy,
       fp.video_inputs,
       fp.audio_inputs,
-      fp.audio_outputs
+      fp.audio_outputs,
+      fp.device_type
     )
   })
   transaction()

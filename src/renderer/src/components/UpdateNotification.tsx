@@ -41,13 +41,6 @@ export function UpdateNotification(): React.JSX.Element | null {
     return () => unsubs.forEach((fn) => fn())
   }, [])
 
-  // Auto-dismiss error after 8s
-  useEffect(() => {
-    if (stage !== 'error') return
-    const t = setTimeout(() => dismiss(), 8000)
-    return () => clearTimeout(t)
-  }, [stage])
-
   const dismiss = useCallback(() => {
     setExiting(true)
     setTimeout(() => {
@@ -56,6 +49,13 @@ export function UpdateNotification(): React.JSX.Element | null {
       setMinimized(false)
     }, 250)
   }, [])
+
+  // Auto-dismiss error after 8s
+  useEffect(() => {
+    if (stage !== 'error') return
+    const t = setTimeout(() => dismiss(), 8000)
+    return () => clearTimeout(t)
+  }, [stage, dismiss])
 
   if (stage === 'idle') return null
 

@@ -36,7 +36,7 @@ const VALID_LANGS: ReadonlySet<TranslationTargetLang> = new Set([
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   activeThemeId: DEFAULT_THEME_ID,
   customThemes: [],
-  autoRegenFingerprint: true,
+  autoRegenFingerprint: false,
   blockWebAuthn: true,
   translationEnabled: false,
   translationTargetLang: 'en',
@@ -56,7 +56,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
       const customThemes = Array.isArray(customs) ? (customs as Theme[]) : []
       const activeThemeId = typeof themeId === 'string' ? themeId : DEFAULT_THEME_ID
-      const autoRegenFingerprint = autoRegen !== false
+      const autoRegenFingerprint = autoRegen === true
       const blockWebAuthn = blockWa !== false
       const translationEnabled = transOn === true
       const translationTargetLang: TranslationTargetLang =
@@ -66,9 +66,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
       const theme = findTheme(activeThemeId, customThemes) || getDefaultTheme()
       applyTheme(theme)
+      if (theme.id !== activeThemeId) {
+        await api.setSetting('active_theme_id', theme.id)
+      }
 
       set({
-        activeThemeId,
+        activeThemeId: theme.id,
         customThemes,
         autoRegenFingerprint,
         blockWebAuthn,

@@ -55,7 +55,7 @@ import type {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 function assertUuid(id: string): void {
-  if (!UUID_RE.test(id)) throw new Error('Invalid ID format')
+  if (typeof id !== 'string' || !UUID_RE.test(id)) throw new Error('Invalid ID format')
 }
 
 // Only http(s) URLs may cross the IPC boundary as a navigation target.
@@ -64,19 +64,19 @@ function assertUuid(id: string): void {
 // privileged or local scheme inside a profile.
 const ALLOWED_URL_PROTOCOLS = new Set(['http:', 'https:'])
 
-function validateHttpUrl(raw: unknown): string | undefined {
+function validateHttpUrl(raw: unknown, field = 'targetUrl'): string | undefined {
   if (raw === undefined || raw === null) return undefined
-  if (typeof raw !== 'string') throw new Error('targetUrl must be a string')
+  if (typeof raw !== 'string') throw new Error(`${field} must be a string`)
   const trimmed = raw.trim()
   if (trimmed.length === 0) return undefined
   let parsed: URL
   try {
     parsed = new URL(trimmed)
   } catch {
-    throw new Error('targetUrl must be a valid URL')
+    throw new Error(`${field} must be a valid URL`)
   }
   if (!ALLOWED_URL_PROTOCOLS.has(parsed.protocol)) {
-    throw new Error('targetUrl protocol must be http: or https:')
+    throw new Error(`${field} protocol must be http: or https:`)
   }
   return trimmed
 }
@@ -121,8 +121,39 @@ function readManifestNameSync(extDir: string): string | null {
 
 const BULK_TEST_CONCURRENCY = 25
 const BULK_TEST_MAX_IDS = 500
+const BULK_PROFILE_MAX_IDS = 500
 const PARSE_PROXY_MAX_BYTES = 1_000_000
 const PARSE_PROXY_MAX_LINES = 10_000
+const BROWSER_TYPES = new Set<BrowserType>(['chromium', 'firefox', 'edge'])
+const PROXY_PROTOCOLS = new Set(['http', 'https', 'socks4', 'socks5'])
+const TRANSLATION_TARGET_LANGS = new Set([
+  'en',
+  'ru',
+  'es',
+  'fr',
+  'de',
+  'it',
+  'pt',
+  'zh-CN',
+  'ja',
+  'ko',
+  'tr',
+  'uk',
+  'pl'
+])
+const SETTING_KEYS = new Set([
+  'active_theme_id',
+  'custom_themes',
+  'auto_regenerate_fingerprint',
+  'hardware_identity_lockdown',
+  'translation_enabled',
+  'translation_target_lang',
+  'auto_check_updates',
+  'minimize_to_tray',
+  'max_concurrent_sessions',
+  'auto_start_profiles',
+  'session_timeout_minutes'
+])
 
 // Whitelist of fields the renderer is allowed to pass through as preset
 // overrides. Identity fields (user_agent, platform, screen_*, hardware_*,
@@ -154,6 +185,154 @@ function sanitizeOverrides(raw: unknown): Partial<Fingerprint> | undefined {
   return hasKey ? result : undefined
 }
 
+function sanitizeProfileInput<T extends CreateProfileInput | UpdateProfileInput>(
+  raw: T,
+  requireName = false
+): T {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Profile input must be an object')
+  }
+
+  const source = raw as Record<string, unknown>
+  const next = { ...raw } as T
+
+  if (requireName || Object.prototype.hasOwnProperty.call(source, 'name')) {
+    if (typeof source.name !== 'string' || !source.name.trim()) {
+      throw new Error('Profile name is required')
+    }
+    ;(next as Record<string, unknown>).name = source.name.trim()
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'browser_type')) {
+    if (!BROWSER_TYPES.has(source.browser_type as BrowserType)) {
+      throw new Error('browser_type must be chromium, firefox, or edge')
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'proxy_id')) {
+    const proxyId = source.proxy_id
+    if (proxyId !== undefined && proxyId !== null && proxyId !== '') {
+      assertUuid(proxyId as string)
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'start_url')) {
+    ;(next as Record<string, unknown>).start_url =
+      validateHttpUrl(source.start_url, 'start_url') ?? ''
+  }
+
+  return next
+}
+
+function validateProfileIdList(raw: unknown, field: string): string[] {
+  if (!Array.isArray(raw)) throw new Error(`${field} must be an array`)
+  if (raw.length > BULK_PROFILE_MAX_IDS) {
+    throw new Error(`Too many profiles (max ${BULK_PROFILE_MAX_IDS})`)
+  }
+
+  for (const id of raw) assertUuid(id as string)
+  return raw as string[]
+}
+
+function readMaxConcurrentSessions(db: Database.Database): number | null {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('max_concurrent_sessions') as
+    | { value: string }
+    | undefined
+  if (!row) return null
+
+  try {
+    const parsed = JSON.parse(row.value) as unknown
+    const value =
+      typeof parsed === 'number'
+        ? parsed
+        : typeof parsed === 'string' && /^\d+$/.test(parsed.trim())
+          ? Number(parsed.trim())
+          : NaN
+    return Number.isInteger(value) && value > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+function getActiveProfileIdsForLimit(): Set<string> {
+  const active = new Set<string>(getActiveBrowserProfileIds())
+  for (const session of getAllSessions()) active.add(session.profile_id)
+  return active
+}
+
+function assertLaunchCapacity(db: Database.Database, profileId: string): void {
+  const maxConcurrent = readMaxConcurrentSessions(db)
+  if (maxConcurrent === null) return
+  const active = getActiveProfileIdsForLimit()
+  if (active.has(profileId)) return
+  if (active.size >= maxConcurrent) {
+    throw new Error(`Max concurrent sessions (${maxConcurrent}) reached`)
+  }
+}
+
+function reserveBulkLaunchSlot(
+  profileId: string,
+  initialActive: Set<string>,
+  budget: { remaining: number } | null
+): boolean {
+  if (!budget || initialActive.has(profileId)) return false
+  if (budget.remaining <= 0) {
+    throw new Error('Max concurrent sessions reached')
+  }
+  budget.remaining -= 1
+  initialActive.add(profileId)
+  return true
+}
+
+function validateSettingKey(key: unknown): string {
+  if (typeof key !== 'string' || !SETTING_KEYS.has(key)) {
+    throw new Error('Unsupported setting key')
+  }
+  return key
+}
+
+function normalizeSettingValue(key: string, value: unknown): unknown {
+  switch (key) {
+    case 'active_theme_id':
+      if (typeof value !== 'string' || !value.trim() || value.length > 120) {
+        throw new Error('active_theme_id must be a non-empty string')
+      }
+      return value.trim()
+    case 'custom_themes':
+      if (!Array.isArray(value)) throw new Error('custom_themes must be an array')
+      if (value.length > 50 || JSON.stringify(value).length > 200_000) {
+        throw new Error('custom_themes is too large')
+      }
+      return value
+    case 'auto_regenerate_fingerprint':
+    case 'hardware_identity_lockdown':
+    case 'translation_enabled':
+    case 'auto_check_updates':
+    case 'minimize_to_tray':
+      if (typeof value !== 'boolean') throw new Error(`${key} must be a boolean`)
+      return value
+    case 'translation_target_lang':
+      if (typeof value !== 'string' || !TRANSLATION_TARGET_LANGS.has(value)) {
+        throw new Error('translation_target_lang is invalid')
+      }
+      return value
+    case 'max_concurrent_sessions':
+      if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 500) {
+        throw new Error('max_concurrent_sessions must be an integer between 0 and 500')
+      }
+      return value
+    case 'session_timeout_minutes':
+      if (value !== null && (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 10080)) {
+        throw new Error('session_timeout_minutes must be null or an integer between 0 and 10080')
+      }
+      return value
+    case 'auto_start_profiles':
+      return validateProfileIdList(value, 'auto_start_profiles')
+    default:
+      throw new Error('Unsupported setting key')
+  }
+}
+
 export function registerIpcHandlers(
   db: Database.Database,
   profilesDir: string,
@@ -161,30 +340,38 @@ export function registerIpcHandlers(
 ): void {
   // Profiles
   ipcMain.handle('list-profiles', () => listProfiles(db))
-  ipcMain.handle('get-profile', (_, profileId: string) => getProfile(db, profileId))
+  ipcMain.handle('get-profile', (_, profileId: string) => {
+    assertUuid(profileId)
+    return getProfile(db, profileId)
+  })
   ipcMain.handle('create-profile', (_, input: CreateProfileInput) =>
-    createProfile(db, input, profilesDir)
+    createProfile(db, sanitizeProfileInput(input, true), profilesDir)
   )
-  ipcMain.handle('update-profile', (_, profileId: string, input: UpdateProfileInput) =>
-    updateProfile(db, profileId, input)
-  )
-  ipcMain.handle('update-fingerprint', (_, profileId: string, input: UpdateFingerprintInput) =>
-    updateFingerprint(db, profileId, input)
-  )
-  ipcMain.handle('delete-profile', (_, profileId: string) =>
-    deleteProfile(db, profileId, profilesDir)
-  )
-  ipcMain.handle('duplicate-profile', (_, profileId: string) =>
-    duplicateProfile(db, profileId, profilesDir)
-  )
+  ipcMain.handle('update-profile', (_, profileId: string, input: UpdateProfileInput) => {
+    assertUuid(profileId)
+    return updateProfile(db, profileId, sanitizeProfileInput(input))
+  })
+  ipcMain.handle('update-fingerprint', (_, profileId: string, input: UpdateFingerprintInput) => {
+    assertUuid(profileId)
+    return updateFingerprint(db, profileId, input)
+  })
+  ipcMain.handle('delete-profile', (_, profileId: string) => {
+    assertUuid(profileId)
+    return deleteProfile(db, profileId, profilesDir)
+  })
+  ipcMain.handle('duplicate-profile', (_, profileId: string) => {
+    assertUuid(profileId)
+    return duplicateProfile(db, profileId, profilesDir)
+  })
   // Wipe every Chromium-side trace (cookies, localStorage, IndexedDB, cache,
   // history, login data, sessions...) but keep the Lux config row. Profile
   // must be stopped — wipeProfileBrowserData throws otherwise. The Lux
   // identity (name, group, fingerprint, proxy) lives in SQLite so it
   // survives; on the next launch Chrome rebuilds a fresh user-data-dir.
-  ipcMain.handle('wipe-profile-data', (_, profileId: string) =>
-    wipeProfileBrowserData(db, profileId, profilesDir)
-  )
+  ipcMain.handle('wipe-profile-data', (_, profileId: string) => {
+    assertUuid(profileId)
+    return wipeProfileBrowserData(db, profileId, profilesDir)
+  })
 
   // Reveal a profile's on-disk data directory in the OS file manager.
   // Scoped under profilesDir so a compromised renderer can't reveal
@@ -209,17 +396,20 @@ export function registerIpcHandlers(
     // launchBrowser only guards against argv-injection (leading "-"); it does
     // not enforce a scheme allow-list, so we must reject non-http(s) here.
     const targetUrl = validateHttpUrl(opts?.targetUrl)
+    assertLaunchCapacity(db, profileId)
     return launchBrowser(db, profileId, profilesDir, getMainWindow(), { targetUrl })
   })
-  ipcMain.handle('stop-browser', async (_, profileId: string) =>
-    stopBrowser(db, profileId, getMainWindow())
-  )
+  ipcMain.handle('stop-browser', async (_, profileId: string) => {
+    assertUuid(profileId)
+    return stopBrowser(db, profileId, getMainWindow())
+  })
   // Open an arbitrary URL inside a profile's browser context. Uses CDP when
   // the profile is already running (Chromium/Edge) and cold-launches otherwise.
   ipcMain.handle('open-url-in-profile', async (_, profileId: string, targetUrl: string) => {
     assertUuid(profileId)
     const validated = validateHttpUrl(targetUrl)
     if (validated === undefined) throw new Error('targetUrl is required')
+    assertLaunchCapacity(db, profileId)
     return openUrlInProfile(db, profileId, validated, profilesDir, getMainWindow())
   })
   ipcMain.handle('get-running-sessions', () => getAllSessions())
@@ -337,16 +527,30 @@ export function registerIpcHandlers(
   // shape as lookup-proxy-geo or null on any failure.
   ipcMain.handle('dry-run-fraud-check', async (_, input: ProxyInput) => {
     if (!input || typeof input !== 'object') throw new Error('Invalid input')
-    if (typeof input.host !== 'string' || !input.host.trim()) throw new Error('Missing host')
-    if (typeof input.port !== 'number' || input.port < 1 || input.port > 65535) {
+    const source = input as unknown as Record<string, unknown>
+    if (!PROXY_PROTOCOLS.has(source.protocol as string)) throw new Error('Invalid protocol')
+    if (typeof source.host !== 'string' || !source.host.trim()) throw new Error('Missing host')
+    const port =
+      typeof source.port === 'number'
+        ? source.port
+        : typeof source.port === 'string' && /^\d+$/.test(source.port.trim())
+          ? Number(source.port.trim())
+          : NaN
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error('Invalid port')
     }
+    if (
+      (source.username !== undefined && source.username !== null && typeof source.username !== 'string') ||
+      (source.password !== undefined && source.password !== null && typeof source.password !== 'string')
+    ) {
+      throw new Error('Proxy credentials must be strings')
+    }
     return dryRunProxyMetadata({
-      protocol: input.protocol,
-      host: input.host,
-      port: input.port,
-      username: input.username ?? null,
-      password: input.password ?? null
+      protocol: source.protocol as ProxyInput['protocol'],
+      host: source.host.trim(),
+      port,
+      username: (source.username as string | null | undefined) ?? null,
+      password: (source.password as string | null | undefined) ?? null
     })
   })
 
@@ -407,7 +611,8 @@ export function registerIpcHandlers(
   )
 
   // Settings
-  ipcMain.handle('get-setting', (_, key: string) => {
+  ipcMain.handle('get-setting', (_, rawKey: string) => {
+    const key = validateSettingKey(rawKey)
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
       | { value: string }
       | undefined
@@ -418,10 +623,12 @@ export function registerIpcHandlers(
       return row.value
     }
   })
-  ipcMain.handle('set-setting', (_, key: string, value: unknown) => {
+  ipcMain.handle('set-setting', (_, rawKey: string, value: unknown) => {
+    const key = validateSettingKey(rawKey)
+    const normalized = normalizeSettingValue(key, value)
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
       key,
-      JSON.stringify(value)
+      JSON.stringify(normalized)
     )
   })
 
@@ -429,7 +636,7 @@ export function registerIpcHandlers(
   ipcMain.handle('ai-get-settings', () => getAiSettings(db))
   ipcMain.handle(
     'ai-set-settings',
-    (_, input: { apiKey?: string; model?: string; clearApiKey?: boolean }) =>
+    (_, input: { apiKey?: string; model?: string; proxyId?: string | null; clearApiKey?: boolean }) =>
       setAiSettings(db, input)
   )
   ipcMain.handle('ai-list-chats', () => listAiChats(db))
@@ -522,9 +729,11 @@ export function registerIpcHandlers(
 
   ipcMain.handle('add-bookmark', (_, profileId: string, title: string, url: string) => {
     assertUuid(profileId)
-    if (!url.trim()) throw new Error('URL is required')
+    const validatedUrl = validateHttpUrl(url, 'url')
+    if (validatedUrl === undefined) throw new Error('URL is required')
     const id = uuidv4()
-    db.prepare('INSERT INTO profile_bookmarks (id, profile_id, title, url) VALUES (?, ?, ?, ?)').run(id, profileId, title.trim() || url.trim(), url.trim())
+    const bookmarkTitle = typeof title === 'string' && title.trim() ? title.trim() : validatedUrl
+    db.prepare('INSERT INTO profile_bookmarks (id, profile_id, title, url) VALUES (?, ?, ?, ?)').run(id, profileId, bookmarkTitle, validatedUrl)
     return db.prepare('SELECT * FROM profile_bookmarks WHERE id = ?').get(id)
   })
 
@@ -573,44 +782,58 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('delete-template', (_, id: string) => {
+    assertUuid(id)
     db.prepare('DELETE FROM templates WHERE id = ?').run(id)
   })
 
   ipcMain.handle('create-profile-from-template', (_, templateId: string, name: string) => {
+    assertUuid(templateId)
+    if (typeof name !== 'string' || !name.trim()) throw new Error('Profile name is required')
     const tmpl = db.prepare('SELECT * FROM templates WHERE id = ?').get(templateId) as Record<string, unknown> | undefined
     if (!tmpl) throw new Error(`Template not found: ${templateId}`)
     const config = JSON.parse(tmpl.config as string) as Record<string, unknown>
     const input: CreateProfileInput = {
-      name,
+      name: name.trim(),
       browser_type: tmpl.browser_type as BrowserType,
       group_name: config.group_name as string | undefined,
+      group_color: config.group_color as string | undefined,
       notes: config.notes as string | undefined,
       proxy_id: config.proxy_id as string | undefined,
       start_url: config.start_url as string | undefined,
       fingerprint: config.fingerprint as Partial<Record<string, unknown>> | undefined
     }
-    return createProfile(db, input, profilesDir)
+    return createProfile(db, sanitizeProfileInput(input, true), profilesDir)
   })
 
   // Session History
-  ipcMain.handle('get-session-history', (_, profileId?: string) =>
-    getSessionHistory(profileId)
-  )
+  ipcMain.handle('get-session-history', (_, profileId?: string) => {
+    if (profileId !== undefined) assertUuid(profileId)
+    return getSessionHistory(profileId)
+  })
 
   // Bulk operations (async — each op yields the main thread between iterations)
-  ipcMain.handle('bulk-launch', async (_, profileIds: string[]) => {
+  ipcMain.handle('bulk-launch', async (_, rawProfileIds: unknown) => {
+    const profileIds = validateProfileIdList(rawProfileIds, 'profileIds')
     const results: { id: string; ok: boolean; error?: string }[] = []
     const concurrency = 3
+    const maxConcurrent = readMaxConcurrentSessions(db)
+    const initialActive = getActiveProfileIdsForLimit()
+    const budget = maxConcurrent === null
+      ? null
+      : { remaining: Math.max(0, maxConcurrent - initialActive.size) }
     let idx = 0
 
     async function runNext(): Promise<void> {
       while (idx < profileIds.length) {
         const i = idx++
         const id = profileIds[i]
+        let reservedSlot = false
         try {
+          reservedSlot = reserveBulkLaunchSlot(id, initialActive, budget)
           await launchBrowser(db, id, profilesDir, getMainWindow())
           results.push({ id, ok: true })
         } catch (err) {
+          if (reservedSlot && budget) budget.remaining += 1
           results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
         }
       }
@@ -621,7 +844,8 @@ export function registerIpcHandlers(
     return results
   })
 
-  ipcMain.handle('bulk-stop', async (_, profileIds: string[]) => {
+  ipcMain.handle('bulk-stop', async (_, rawProfileIds: unknown) => {
+    const profileIds = validateProfileIdList(rawProfileIds, 'profileIds')
     const results: { id: string; ok: boolean; error?: string }[] = []
     for (const id of profileIds) {
       try {
@@ -634,7 +858,8 @@ export function registerIpcHandlers(
     return results
   })
 
-  ipcMain.handle('bulk-delete', async (_, profileIds: string[]) => {
+  ipcMain.handle('bulk-delete', async (_, rawProfileIds: unknown) => {
+    const profileIds = validateProfileIdList(rawProfileIds, 'profileIds')
     const results: { id: string; ok: boolean; error?: string }[] = []
     for (const id of profileIds) {
       try {

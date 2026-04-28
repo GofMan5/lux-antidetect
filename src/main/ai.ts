@@ -27,6 +27,7 @@ const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models'
 const GROQ_API_KEY_SETTING = 'groq_api_key'
 const GROQ_MODEL_SETTING = 'groq_model'
+const GROQ_PROXY_ID_SETTING = 'groq_proxy_id'
 const DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
 const FALLBACK_GROQ_MODELS = [
   DEFAULT_GROQ_MODEL,
@@ -128,16 +129,18 @@ function getGroqModel(db: Database.Database): string {
 }
 
 export function getAiSettings(db: Database.Database): AiSettings {
+  const storedProxyId = getSetting(db, GROQ_PROXY_ID_SETTING)
   return {
     hasApiKey: Boolean(getGroqApiKey(db)),
     model: getGroqModel(db),
+    proxyId: typeof storedProxyId === 'string' && UUID_RE.test(storedProxyId) ? storedProxyId : null,
     maxContextMessages: AI_CONTEXT_MESSAGE_LIMIT
   }
 }
 
 export function setAiSettings(
   db: Database.Database,
-  input: { apiKey?: string; model?: string; clearApiKey?: boolean }
+  input: { apiKey?: string; model?: string; proxyId?: string | null; clearApiKey?: boolean }
 ): AiSettings {
   if (input.clearApiKey) {
     deleteSetting(db, GROQ_API_KEY_SETTING)
@@ -147,6 +150,12 @@ export function setAiSettings(
 
   if (typeof input.model === 'string' && input.model.trim()) {
     setSetting(db, GROQ_MODEL_SETTING, input.model.trim())
+  }
+
+  if (input.proxyId === null) {
+    deleteSetting(db, GROQ_PROXY_ID_SETTING)
+  } else if (typeof input.proxyId === 'string' && UUID_RE.test(input.proxyId)) {
+    setSetting(db, GROQ_PROXY_ID_SETTING, input.proxyId)
   }
 
   return getAiSettings(db)
@@ -330,7 +339,7 @@ function buildLuxContext(db: Database.Database, focusedProfileId: string | null)
   const details = profiles.map((profile) => profileSummary(db, profile, focusedProfileId))
   const proxyRows = proxies.map(proxySummary)
   const settings = {
-    auto_regenerate_fingerprint: getSetting(db, 'auto_regenerate_fingerprint') !== false,
+    auto_regenerate_fingerprint: getSetting(db, 'auto_regenerate_fingerprint') === true,
     hardware_identity_lockdown: getSetting(db, 'hardware_identity_lockdown') !== false,
     translation_enabled: getSetting(db, 'translation_enabled') === true,
     translation_target_lang: getSetting(db, 'translation_target_lang') ?? 'en'

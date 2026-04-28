@@ -12,6 +12,7 @@ interface KeyboardShortcutsStore {
 
 /** Tiny store so the sidebar hint button and the `?` key can share state
  *  without synthetic keyboard events. */
+// eslint-disable-next-line react-refresh/only-export-components -- Shared shortcut-dialog store is used outside this component.
 export const useKeyboardShortcutsStore = create<KeyboardShortcutsStore>((set) => ({
   open: false,
   show: () => set({ open: true }),

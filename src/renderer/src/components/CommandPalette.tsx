@@ -17,6 +17,7 @@ interface CommandPaletteStore {
   toggle: () => void
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- Zustand hook is shared by app chrome and this component.
 export const useCommandPaletteStore = create<CommandPaletteStore>((set) => ({
   open: false,
   show: () => set({ open: true }),
@@ -120,13 +121,15 @@ export function CommandPalette(): React.JSX.Element | null {
   // Reset state every time we open — fresh query, top item selected, fresh
   // recents snapshot so any commands run in between are reflected.
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    const id = requestAnimationFrame(() => {
       setQuery('')
       setSelected(0)
       setRecentIds(readRecents())
       // Autofocus the input on next tick so the animation doesn't eat it.
       requestAnimationFrame(() => inputRef.current?.focus())
-    }
+    })
+    return () => cancelAnimationFrame(id)
   }, [open])
 
   // Assemble commands for the current app state.
@@ -266,17 +269,14 @@ export function CommandPalette(): React.JSX.Element | null {
     return scored.map(({ c }) => c)
   }, [commands, query, recentIds])
 
-  // Clamp selected index whenever results change.
-  useEffect(() => {
-    if (selected >= results.length) setSelected(Math.max(0, results.length - 1))
-  }, [results, selected])
+  const clampedSelected = Math.min(selected, Math.max(0, results.length - 1))
 
   // Scroll selected item into view.
   useEffect(() => {
     if (!listRef.current) return
-    const el = listRef.current.querySelector<HTMLElement>(`[data-cmd-idx="${selected}"]`)
+    const el = listRef.current.querySelector<HTMLElement>(`[data-cmd-idx="${clampedSelected}"]`)
     el?.scrollIntoView({ block: 'nearest' })
-  }, [selected])
+  }, [clampedSelected])
 
   function runCommand(cmd: Command): void {
     pushRecent(cmd.id)
@@ -295,7 +295,7 @@ export function CommandPalette(): React.JSX.Element | null {
       setSelected((i) => (results.length === 0 ? 0 : (i - 1 + results.length) % results.length))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const cmd = results[selected]
+      const cmd = results[clampedSelected]
       if (cmd) runCommand(cmd)
     }
   }
@@ -379,7 +379,7 @@ export function CommandPalette(): React.JSX.Element | null {
                     onClick={() => runCommand(cmd)}
                     className={[
                       'w-full flex items-center gap-3 px-4 py-2 text-left transition-colors',
-                      idx === selected
+                      idx === clampedSelected
                         ? 'bg-accent/12 text-content'
                         : 'text-content hover:bg-elevated'
                     ].join(' ')}
@@ -387,7 +387,7 @@ export function CommandPalette(): React.JSX.Element | null {
                     <span
                       className={[
                         'h-7 w-7 shrink-0 rounded-[--radius-md] flex items-center justify-center',
-                        idx === selected ? 'bg-accent/15 text-accent' : 'bg-elevated text-muted'
+                        idx === clampedSelected ? 'bg-accent/15 text-accent' : 'bg-elevated text-muted'
                       ].join(' ')}
                     >
                       {cmd.icon}
@@ -398,7 +398,7 @@ export function CommandPalette(): React.JSX.Element | null {
                         <span className="block text-[11px] text-muted truncate">{cmd.hint}</span>
                       )}
                     </span>
-                    {idx === selected && (
+                    {idx === clampedSelected && (
                       <kbd className="shrink-0 px-1.5 py-0.5 rounded-[--radius-sm] border border-edge bg-surface text-[10px] font-mono text-muted">
                         ↵
                       </kbd>

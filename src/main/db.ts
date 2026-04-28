@@ -77,6 +77,13 @@ export function initDatabase(userDataPath: string): Database.Database {
   const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='profiles'").get() as { sql: string } | undefined
   const needsStatusMigration = tableInfo?.sql && !tableInfo.sql.includes('starting')
   if (needsStatusMigration) {
+    const existingColumns = new Set(
+      (db.prepare('PRAGMA table_info(profiles)').all() as { name: string }[]).map((column) => column.name)
+    )
+    const startUrlExpr = existingColumns.has('start_url') ? 'start_url' : "''"
+    const groupColorExpr = existingColumns.has('group_color') ? 'group_color' : 'NULL'
+    const rotationGroupExpr = existingColumns.has('rotation_group') ? 'rotation_group' : 'NULL'
+
     // CHECK constraint rejects 'starting' → need migration
     db.pragma('foreign_keys = OFF')
     db.exec(`
@@ -94,10 +101,17 @@ export function initDatabase(userDataPath: string): Database.Database {
           updated_at TEXT NOT NULL DEFAULT (datetime('now')),
           last_used TEXT,
           start_url TEXT DEFAULT '',
-          group_color TEXT
+          group_color TEXT,
+          rotation_group TEXT
       );
-      INSERT INTO profiles_new (id, name, browser_type, group_name, tags, notes, status, proxy_id, created_at, updated_at, last_used)
-        SELECT id, name, browser_type, group_name, tags, notes, status, proxy_id, created_at, updated_at, last_used FROM profiles;
+      INSERT INTO profiles_new (
+        id, name, browser_type, group_name, tags, notes, status, proxy_id,
+        created_at, updated_at, last_used, start_url, group_color, rotation_group
+      )
+        SELECT
+          id, name, browser_type, group_name, tags, notes, status, proxy_id,
+          created_at, updated_at, last_used, ${startUrlExpr}, ${groupColorExpr}, ${rotationGroupExpr}
+        FROM profiles;
       DROP TABLE profiles;
       ALTER TABLE profiles_new RENAME TO profiles;
       CREATE INDEX IF NOT EXISTS idx_profiles_group ON profiles(group_name);

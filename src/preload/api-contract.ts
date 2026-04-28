@@ -118,7 +118,12 @@ export interface LuxAPI {
   setSetting(key: string, value: unknown): Promise<void>
 
   aiGetSettings(): Promise<AiSettings>
-  aiSetSettings(input: { apiKey?: string; model?: string; clearApiKey?: boolean }): Promise<AiSettings>
+  aiSetSettings(input: {
+    apiKey?: string
+    model?: string
+    proxyId?: string | null
+    clearApiKey?: boolean
+  }): Promise<AiSettings>
   aiListChats(): Promise<AiChat[]>
   aiListModels(): Promise<AiModel[]>
   aiCreateChat(title?: string): Promise<AiChat>

@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, Tray, Menu, nativeImage, dialog } from 'electron'
-import { join, dirname } from 'path'
-import { existsSync, mkdirSync, copyFileSync, openSync, readSync, closeSync } from 'fs'
+import { join, dirname, normalize } from 'path'
+import { fileURLToPath } from 'url'
+import { existsSync, mkdirSync, copyFileSync, openSync, readSync, closeSync, rmSync } from 'fs'
 import { initDatabase } from './db'
 import { registerIpcHandlers } from './ipc'
 import { killAllSessions, initSessionsDb } from './sessions'
@@ -28,11 +29,95 @@ function getSetting(db: Database.Database, key: string): unknown {
   try { return JSON.parse(row.value) } catch { return row.value }
 }
 
+const PENDING_IMPORT_DB = 'lux.db.pending-import'
+const REQUIRED_DB_TABLES = ['profiles', 'fingerprints', 'proxies', 'settings']
+
+async function validateDatabaseBackup(filePath: string): Promise<string | null> {
+  let fd: number | undefined
+  try {
+    fd = openSync(filePath, 'r')
+    const headerBuf = Buffer.alloc(16)
+    readSync(fd, headerBuf, 0, 16, 0)
+    closeSync(fd)
+    fd = undefined
+    if (!headerBuf.toString().startsWith('SQLite format 3')) {
+      return 'Not a valid SQLite database'
+    }
+  } catch (err) {
+    if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ }
+    return `Failed to read file: ${err instanceof Error ? err.message : 'Unknown error'}`
+  }
+
+  const { default: DatabaseCtor } = await import('better-sqlite3')
+  let candidate: Database.Database | null = null
+  try {
+    candidate = new DatabaseCtor(filePath, { readonly: true, fileMustExist: true })
+    const integrity = candidate.pragma('integrity_check', { simple: true })
+    if (integrity !== 'ok') return 'SQLite integrity check failed'
+
+    const placeholders = REQUIRED_DB_TABLES.map(() => '?').join(',')
+    const rows = candidate
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
+      .all(...REQUIRED_DB_TABLES) as { name: string }[]
+    const present = new Set(rows.map((row) => row.name))
+    const missing = REQUIRED_DB_TABLES.filter((name) => !present.has(name))
+    if (missing.length > 0) {
+      return `Database backup is missing required table(s): ${missing.join(', ')}`
+    }
+
+    return null
+  } catch (err) {
+    return `Failed to validate database: ${err instanceof Error ? err.message : 'Unknown error'}`
+  } finally {
+    try { candidate?.close() } catch { /* ignore */ }
+  }
+}
+
+async function applyPendingDatabaseImport(userDataPath: string): Promise<void> {
+  const pendingPath = join(userDataPath, PENDING_IMPORT_DB)
+  if (!existsSync(pendingPath)) return
+
+  const error = await validateDatabaseBackup(pendingPath)
+  if (error) {
+    logger.error(`pending database import rejected: ${error}`)
+    rmSync(pendingPath, { force: true })
+    return
+  }
+
+  const dbPath = join(userDataPath, 'lux.db')
+  const backupPath = `${dbPath}.bak`
+  if (existsSync(dbPath)) {
+    copyFileSync(dbPath, backupPath)
+  }
+  rmSync(`${dbPath}-wal`, { force: true })
+  rmSync(`${dbPath}-shm`, { force: true })
+  copyFileSync(pendingPath, dbPath)
+  rmSync(pendingPath, { force: true })
+  logger.info(`pending database import applied; previous DB backup: ${backupPath}`)
+}
+
 let tray: Tray | null = null
 let isQuitting = false
 let minimizeToTray = false
 
 function createWindow(): BrowserWindow {
+  const devRendererUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined
+  const devRendererOrigin = devRendererUrl ? new URL(devRendererUrl).origin : null
+  const packagedRendererPath = join(__dirname, '../renderer/index.html')
+
+  function isAllowedMainNavigation(rawUrl: string): boolean {
+    try {
+      const url = new URL(rawUrl)
+      if (devRendererOrigin && url.origin === devRendererOrigin) return true
+      if (!devRendererOrigin && url.protocol === 'file:') {
+        return normalize(fileURLToPath(url)) === normalize(packagedRendererPath)
+      }
+      return false
+    } catch {
+      return false
+    }
+  }
+
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -71,10 +156,21 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedMainNavigation(url)) return
+    event.preventDefault()
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        shell.openExternal(url)
+      }
+    } catch { /* invalid URL, ignore */ }
+  })
+
+  if (devRendererUrl) {
+    mainWindow.loadURL(devRendererUrl)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(packagedRendererPath)
   }
 
   return mainWindow
@@ -102,7 +198,7 @@ function setupTray(mainWindow: BrowserWindow): void {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Show', click: () => { mainWindow.show(); mainWindow.focus() } },
     { type: 'separator' },
-    { label: 'Quit', click: () => { isQuitting = true; app.quit() } }
+    { label: 'Quit', click: () => { app.quit() } }
   ]))
 }
 
@@ -126,9 +222,20 @@ app.whenReady().then(async () => {
   if (!existsSync(profilesDir)) {
     mkdirSync(profilesDir, { recursive: true })
   }
+  await applyPendingDatabaseImport(userDataPath)
 
   const db = initDatabase(userDataPath)
   initSessionsDb(db)
+
+  // Crash recovery: close session_history rows left open by a previous process.
+  const crashStoppedAt = new Date().toISOString()
+  db.prepare(
+    `UPDATE session_history
+     SET stopped_at = ?,
+         duration_seconds = max(0, CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER)),
+         exit_code = COALESCE(exit_code, -1)
+     WHERE stopped_at IS NULL`
+  ).run(crashStoppedAt, crashStoppedAt)
 
   // Crash recovery: reset profiles stuck in non-ready states from a previous crash
   db.prepare("UPDATE profiles SET status = 'ready' WHERE status IN ('running', 'starting', 'stopping', 'error')").run()
@@ -200,27 +307,11 @@ app.whenReady().then(async () => {
       properties: ['openFile']
     })
     if (result.canceled || result.filePaths.length === 0) return { ok: false }
-    // Validate it's a SQLite DB by reading just the header (16 bytes)
-    let fd: number | undefined
-    try {
-      fd = openSync(result.filePaths[0], 'r')
-      const headerBuf = Buffer.alloc(16)
-      readSync(fd, headerBuf, 0, 16, 0)
-      closeSync(fd)
-      fd = undefined
-      if (!headerBuf.toString().startsWith('SQLite format 3')) {
-        return { ok: false, error: 'Not a valid SQLite database' }
-      }
-    } catch (err) {
-      if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ }
-      return { ok: false, error: `Failed to read file: ${err instanceof Error ? err.message : 'Unknown error'}` }
-    }
-    const dbPath = join(userDataPath, 'lux.db')
-    // Checkpoint WAL before overwriting to avoid stale WAL replay
-    try { db.pragma('wal_checkpoint(TRUNCATE)') } catch { /* best effort */ }
-    // Create backup of current DB first
-    copyFileSync(dbPath, dbPath + '.bak')
-    copyFileSync(result.filePaths[0], dbPath)
+    const validationError = await validateDatabaseBackup(result.filePaths[0])
+    if (validationError) return { ok: false, error: validationError }
+
+    const pendingPath = join(userDataPath, PENDING_IMPORT_DB)
+    copyFileSync(result.filePaths[0], pendingPath)
     return { ok: true, requiresRestart: true }
   })
 

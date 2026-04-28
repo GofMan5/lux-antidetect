@@ -41,6 +41,7 @@ let nextId = 0
 const MAX_VISIBLE = 3
 const TOAST_DURATION_DEFAULT = 3500
 
+// eslint-disable-next-line react-refresh/only-export-components -- Toast store is consumed throughout the renderer.
 export const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
 

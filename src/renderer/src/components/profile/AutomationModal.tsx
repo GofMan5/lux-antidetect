@@ -58,7 +58,7 @@ function isStoppedLikeError(message: string): boolean {
   )
 }
 
-export function AutomationModal({ open, onClose, profileId }: AutomationModalProps) {
+export function AutomationModal({ open, onClose, profileId }: AutomationModalProps): React.JSX.Element {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
   const reqSeq = useRef(0)
 
@@ -92,8 +92,9 @@ export function AutomationModal({ open, onClose, profileId }: AutomationModalPro
 
   useEffect(() => {
     if (!open) return
-    void load()
+    const id = requestAnimationFrame(() => void load())
     return () => {
+      cancelAnimationFrame(id)
       reqSeq.current++
     }
   }, [open, load])
@@ -104,13 +105,17 @@ export function AutomationModal({ open, onClose, profileId }: AutomationModalPro
     prevStatusRef.current = profileStatus
     if (!open) return
     if (prev === 'running' && profileStatus && profileStatus !== 'running') {
-      reqSeq.current++
-      setState({
-        kind: 'error',
-        headline: 'Profile stopped — endpoint no longer valid.',
-        detail: 'Relaunch the profile to obtain a new CDP endpoint.'
+      const id = requestAnimationFrame(() => {
+        reqSeq.current++
+        setState({
+          kind: 'error',
+          headline: 'Profile stopped — endpoint no longer valid.',
+          detail: 'Relaunch the profile to obtain a new CDP endpoint.'
+        })
       })
+      return () => cancelAnimationFrame(id)
     }
+    return undefined
   }, [open, profileStatus])
 
   return (
@@ -149,7 +154,7 @@ export function AutomationModal({ open, onClose, profileId }: AutomationModalPro
   )
 }
 
-function ReadyView({ info }: { info: CdpInfo }) {
+function ReadyView({ info }: { info: CdpInfo }): React.JSX.Element {
   const puppeteerSnippet = buildPuppeteerSnippet(info.wsEndpoint)
   const playwrightSnippet = buildPlaywrightSnippet(info.httpEndpoint)
 
@@ -202,7 +207,7 @@ function EndpointRow({
   label: string
   value: string
   copyLabel: string
-}) {
+}): React.JSX.Element {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
       <span className="text-xs font-medium text-muted w-full sm:w-40 shrink-0">{label}</span>
@@ -233,7 +238,7 @@ function SnippetSection({
   snippet: string
   ariaLabel: string
   copyLabel: string
-}) {
+}): React.JSX.Element {
   return (
     <section className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
@@ -270,7 +275,7 @@ function CopyButton({
   text: string
   ariaLabel: string
   withLabel?: boolean
-}) {
+}): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const addToast = useToastStore((s) => s.addToast)
