@@ -60,6 +60,8 @@ const api: LuxAPI = {
   getApiServerStatus: () => ipcRenderer.invoke('api-server-status'),
   configureApiServer: (input) => ipcRenderer.invoke('api-server-configure', input),
   regenerateApiServerToken: () => ipcRenderer.invoke('api-server-regenerate-token'),
+  getMcpServerInfo: () => ipcRenderer.invoke('mcp-server-info'),
+  revealMcpServer: () => ipcRenderer.invoke('mcp-server-reveal'),
 
   // AI assistant
   aiGetSettings: () => ipcRenderer.invoke('ai-get-settings'),

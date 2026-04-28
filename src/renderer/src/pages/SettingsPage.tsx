@@ -22,6 +22,7 @@ import {
 } from 'react'
 import {
   CheckCircle2,
+  Copy,
   Plus,
   Trash2,
   Check,
@@ -43,7 +44,11 @@ import {
   ShieldCheck,
   Languages,
   KeyRound,
-  Server
+  Server,
+  Cable,
+  Terminal,
+  FolderOpen,
+  Power
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settings'
@@ -51,6 +56,7 @@ import { useProfilesStore } from '../stores/profiles'
 import { THEME_PRESETS } from '../lib/themes'
 import type { Theme, ThemeColors } from '../lib/themes'
 import type { ManagedBrowserResponse, AvailableBrowser, Profile } from '../lib/types'
+import type { McpServerInfo } from '../../../preload/api-contract'
 import { useToastStore } from '../components/Toast'
 import { useConfirmStore } from '../components/ConfirmDialog'
 // ThemeEditor pulls in the color picker + portal setup — only needed when
@@ -91,7 +97,15 @@ import {
 // Constants
 // ────────────────────────────────────────────────────────────────────────────
 
-type SettingsTab = 'appearance' | 'browsers' | 'general' | 'fingerprint' | 'data' | 'about' | 'debug'
+type SettingsTab =
+  | 'appearance'
+  | 'browsers'
+  | 'mcp'
+  | 'general'
+  | 'fingerprint'
+  | 'data'
+  | 'about'
+  | 'debug'
 
 interface TabSpec {
   id: SettingsTab
@@ -111,6 +125,7 @@ interface LocalApiServerStatus {
 const TAB_ITEMS: TabSpec[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'browsers', label: 'Browsers', icon: HardDrive },
+  { id: 'mcp', label: 'MCP', icon: Cable },
   { id: 'general', label: 'General', icon: Settings2 },
   { id: 'fingerprint', label: 'Fingerprint', icon: Fingerprint },
   { id: 'data', label: 'Data', icon: Database },
@@ -165,7 +180,10 @@ export function SettingsPage(): React.JSX.Element {
 
   const [managedBrowsers, setManagedBrowsers] = useState<ManagedBrowserResponse[]>([])
   const [availableBrowsers, setAvailableBrowsers] = useState<AvailableBrowser[]>([])
+  const [availableBrowsersLoading, setAvailableBrowsersLoading] = useState(true)
+  const [availableBrowsersError, setAvailableBrowsersError] = useState<string | null>(null)
   const [downloading, setDownloading] = useState<Record<string, number>>({})
+  const [removingBrowsers, setRemovingBrowsers] = useState<Set<string>>(new Set())
   const addToast = useToastStore((s) => s.addToast)
   const confirm = useConfirmStore((s) => s.show)
 
@@ -196,6 +214,7 @@ export function SettingsPage(): React.JSX.Element {
   const [autoStartProfileIds, setAutoStartProfileIds] = useState<string[]>([])
   const [apiServer, setApiServer] = useState<LocalApiServerStatus | null>(null)
   const [apiServerBusy, setApiServerBusy] = useState(false)
+  const [mcpServerInfo, setMcpServerInfo] = useState<McpServerInfo | null>(null)
 
   useEffect(() => {
     api.getAutostart().then(setAutostart).catch(() => {})
@@ -218,6 +237,7 @@ export function SettingsPage(): React.JSX.Element {
       })
       .catch(() => {})
     api.getApiServerStatus().then(setApiServer).catch(() => {})
+    api.getMcpServerInfo().then(setMcpServerInfo).catch(() => {})
   }, [])
 
   const [sessionHistory, setSessionHistory] = useState<SessionHistoryEntry[]>([])
@@ -280,7 +300,19 @@ export function SettingsPage(): React.JSX.Element {
 
   useEffect(() => {
     refreshManagedBrowsers()
-    api.getAvailableBrowsers().then(setAvailableBrowsers).catch(() => {})
+    setAvailableBrowsersLoading(true)
+    api
+      .getAvailableBrowsers()
+      .then((items) => {
+        setAvailableBrowsers(items)
+        setAvailableBrowsersError(null)
+      })
+      .catch((err: unknown) => {
+        setAvailableBrowsersError(
+          err instanceof Error ? err.message : 'Failed to resolve available downloads'
+        )
+      })
+      .finally(() => setAvailableBrowsersLoading(false))
 
     const offProgress = api.onBrowserDownloadProgress((data) => {
       setDownloading((prev) => ({ ...prev, [`${data.browser}-${data.buildId}`]: data.percent }))
@@ -331,7 +363,11 @@ export function SettingsPage(): React.JSX.Element {
       })
       addToast(`${browser} ${buildId} downloaded`, 'success')
     } catch {
-      /* Error events handled by listener */
+      setDownloading((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
     }
   }
 
@@ -343,6 +379,8 @@ export function SettingsPage(): React.JSX.Element {
       danger: true
     })
     if (!ok) return
+    const key = `${browser}-${buildId}`
+    setRemovingBrowsers((prev) => new Set(prev).add(key))
     try {
       await api.removeManagedBrowser(browser, buildId)
       setManagedBrowsers((prev) => prev.filter((b) => !(b.browser === browser && b.buildId === buildId)))
@@ -353,6 +391,12 @@ export function SettingsPage(): React.JSX.Element {
         `Failed to remove: ${err instanceof Error ? err.message : 'Unknown error'}`,
         'error'
       )
+    } finally {
+      setRemovingBrowsers((prev) => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
     }
   }
 
@@ -422,11 +466,26 @@ export function SettingsPage(): React.JSX.Element {
             <BrowsersTab
               managedBrowsers={managedBrowsers}
               availableBrowsers={availableBrowsers}
+              availableBrowsersLoading={availableBrowsersLoading}
+              availableBrowsersError={availableBrowsersError}
               downloading={downloading}
+              removingBrowsers={removingBrowsers}
               browserEntries={browserEntries}
               browsersLoading={browsersLoading}
               onDownload={handleDownloadBrowser}
               onRemove={handleRemoveBrowser}
+            />
+          </TabsContent>
+
+          <TabsContent value="mcp" className={tabContentClass('max-w-3xl')}>
+            <McpTab
+              apiServer={apiServer}
+              setApiServer={setApiServer}
+              apiServerBusy={apiServerBusy}
+              setApiServerBusy={setApiServerBusy}
+              mcpServerInfo={mcpServerInfo}
+              setMcpServerInfo={setMcpServerInfo}
+              addToast={addToast}
             />
           </TabsContent>
 
@@ -737,7 +796,10 @@ function ThemeTile({
 interface BrowsersTabProps {
   managedBrowsers: ManagedBrowserResponse[]
   availableBrowsers: AvailableBrowser[]
+  availableBrowsersLoading: boolean
+  availableBrowsersError: string | null
   downloading: Record<string, number>
+  removingBrowsers: Set<string>
   browserEntries: [string, string][]
   browsersLoading: boolean
   onDownload: (browserType: string, channel: string, browser: string, buildId: string) => Promise<void>
@@ -747,7 +809,10 @@ interface BrowsersTabProps {
 function BrowsersTab({
   managedBrowsers,
   availableBrowsers,
+  availableBrowsersLoading,
+  availableBrowsersError,
   downloading,
+  removingBrowsers,
   browserEntries,
   browsersLoading,
   onDownload,
@@ -775,6 +840,7 @@ function BrowsersTab({
                 <ManagedBrowserRow
                   key={`${b.browser}-${b.buildId}`}
                   browser={b}
+                  isRemoving={removingBrowsers.has(`${b.browser}-${b.buildId}`)}
                   onRemove={() => onRemove(b.browser, b.buildId)}
                 />
               ))}
@@ -786,17 +852,40 @@ function BrowsersTab({
       {/* Available downloads */}
       <CardRoot>
         <CardHeader>
-          <CardTitle>Download Browsers</CardTitle>
-          <CardDescription>Add additional browser engines.</CardDescription>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle>Browser Downloads</CardTitle>
+              <CardDescription>
+                Install clean managed builds for profile launches. Chromium is the recommended default.
+              </CardDescription>
+            </div>
+            <Badge variant="accent" className="shrink-0">
+              {availableBrowsers.length} builds
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent>
-          {availableBrowsers.length === 0 ? (
+          {availableBrowsersLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Checking available downloads…
             </div>
+          ) : availableBrowsersError ? (
+            <EmptyState
+              size="sm"
+              icon={<Download />}
+              title="Downloads unavailable"
+              description={availableBrowsersError}
+            />
+          ) : availableBrowsers.length === 0 ? (
+            <EmptyState
+              size="sm"
+              icon={<Download />}
+              title="No managed builds available"
+              description="Lux could not resolve downloadable browser builds for this platform."
+            />
           ) : (
-            <div className="space-y-2">
+            <div className="grid gap-2">
               {availableBrowsers.map((ab) => {
                 const dlKey = `${ab.browser}-${ab.buildId}`
                 const isDownloading = downloading[dlKey] !== undefined
@@ -858,10 +947,15 @@ function BrowsersTab({
 
 interface ManagedBrowserRowProps {
   browser: ManagedBrowserResponse
+  isRemoving: boolean
   onRemove: () => void
 }
 
-function ManagedBrowserRow({ browser, onRemove }: ManagedBrowserRowProps): React.JSX.Element {
+function ManagedBrowserRow({
+  browser,
+  isRemoving,
+  onRemove
+}: ManagedBrowserRowProps): React.JSX.Element {
   return (
     <div
       className={cn(
@@ -870,7 +964,7 @@ function ManagedBrowserRow({ browser, onRemove }: ManagedBrowserRowProps): React
         'hover:border-edge'
       )}
     >
-      <CheckCircle2 className="h-4 w-4 shrink-0 text-ok" />
+      <BrowserBuildIcon browser={browser.browser} installed />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-foreground capitalize">{browser.browser}</p>
         <p className="text-xs text-muted-foreground truncate font-mono">
@@ -882,6 +976,8 @@ function ManagedBrowserRow({ browser, onRemove }: ManagedBrowserRowProps): React
         size="sm"
         icon={<Trash2 className="h-3.5 w-3.5" />}
         onClick={onRemove}
+        loading={isRemoving}
+        disabled={isRemoving}
         aria-label={`Remove ${browser.browser} ${browser.buildId}`}
       />
     </div>
@@ -908,31 +1004,41 @@ function AvailableBrowserRow({
       className={cn(
         'flex items-center gap-3 rounded-[--radius-md] bg-input border border-border px-4 py-3',
         'transition-colors duration-150 ease-[var(--ease-osmosis)]',
-        'hover:border-edge'
+        isDownloading ? 'border-primary/35 bg-primary/[0.04]' : 'hover:border-edge'
       )}
     >
-      <Download className="h-4 w-4 shrink-0 text-primary" />
+      <BrowserBuildIcon browser={available.browser} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-sm font-medium text-foreground">{available.label}</p>
           <Badge variant="accent">{available.channel}</Badge>
+          {available.browser === 'chromium' && (
+            <Badge variant="success" dot>
+              Recommended
+            </Badge>
+          )}
         </div>
         <p className="text-xs text-muted-foreground font-mono truncate">
-          build {available.buildId}
+          {available.browser} · build {available.buildId}
         </p>
         {isDownloading && (
-          <div
-            className="mt-2 w-full bg-elevated/70 rounded-full h-1.5 overflow-hidden"
-            role="progressbar"
-            aria-valuenow={percent}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label={`Downloading ${available.label}`}
-          >
+          <div className="mt-2 flex items-center gap-2">
             <div
-              className="bg-primary h-1.5 rounded-full transition-[width] duration-300 ease-[var(--ease-osmosis)]"
-              style={{ width: `${percent}%` }}
-            />
+              className="h-2 flex-1 overflow-hidden rounded-full bg-elevated/70"
+              role="progressbar"
+              aria-valuenow={percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`Downloading ${available.label}`}
+            >
+              <div
+                className="h-2 rounded-full bg-primary transition-[width] duration-300 ease-[var(--ease-osmosis)]"
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+            <span className="w-10 text-right text-[11px] font-medium tabular-nums text-primary">
+              {percent}%
+            </span>
           </div>
         )}
       </div>
@@ -941,14 +1047,40 @@ function AvailableBrowserRow({
           Installed
         </Badge>
       ) : isDownloading ? (
-        <span className="flex items-center gap-1.5 text-xs text-primary font-medium tabular-nums">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          {percent}%
-        </span>
-      ) : (
-        <Button size="sm" onClick={onDownload}>
-          Download
+        <Button variant="secondary" size="sm" loading disabled>
+          Installing
         </Button>
+      ) : (
+        <Button size="sm" onClick={onDownload} icon={<Download className="h-3.5 w-3.5" />}>
+          Install
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function BrowserBuildIcon({
+  browser,
+  installed = false
+}: {
+  browser: string
+  installed?: boolean
+}): React.JSX.Element {
+  const label = browser === 'firefox' ? 'FX' : browser === 'chrome' ? 'CF' : 'CH'
+  return (
+    <div
+      className={cn(
+        'relative flex h-10 w-10 shrink-0 items-center justify-center rounded-[--radius-md]',
+        'border border-border bg-elevated/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
+      )}
+      aria-hidden
+    >
+      <div className="absolute inset-1.5 rounded-[--radius-sm] border border-primary/20 bg-primary/10" />
+      <span className="relative text-[10px] font-bold tracking-[0.08em] text-primary">{label}</span>
+      {installed && (
+        <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-ok text-background ring-2 ring-background">
+          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+        </span>
       )}
     </div>
   )
@@ -957,6 +1089,243 @@ function AvailableBrowserRow({
 // ────────────────────────────────────────────────────────────────────────────
 // General Tab
 // ────────────────────────────────────────────────────────────────────────────
+
+interface McpTabProps {
+  apiServer: LocalApiServerStatus | null
+  setApiServer: Dispatch<SetStateAction<LocalApiServerStatus | null>>
+  apiServerBusy: boolean
+  setApiServerBusy: Dispatch<SetStateAction<boolean>>
+  mcpServerInfo: McpServerInfo | null
+  setMcpServerInfo: Dispatch<SetStateAction<McpServerInfo | null>>
+  addToast: AddToast
+}
+
+function buildMcpConfig(info: McpServerInfo | null, apiServer: LocalApiServerStatus | null): string {
+  const baseUrl = apiServer?.baseUrl || `http://127.0.0.1:${apiServer?.port ?? 17888}/api/v1`
+  return JSON.stringify(
+    {
+      mcpServers: {
+        'lux-antidetect': {
+          command: info?.command ?? 'node',
+          args: info?.args ?? ['<Lux Antidetect>/mcp-server/dist/index.js'],
+          env: {
+            LUX_API_TOKEN: apiServer?.token || '<copy-token-from-lux>',
+            LUX_API_BASE_URL: baseUrl
+          }
+        }
+      }
+    },
+    null,
+    2
+  )
+}
+
+function copyText(value: string, label: string, addToast: AddToast): void {
+  if (!navigator.clipboard) {
+    addToast('Clipboard is not available', 'error')
+    return
+  }
+  navigator.clipboard
+    .writeText(value)
+    .then(() => addToast(`${label} copied`, 'success'))
+    .catch(() => addToast(`Failed to copy ${label.toLowerCase()}`, 'error'))
+}
+
+function McpStatusRow({
+  label,
+  value,
+  ok
+}: {
+  label: string
+  value: string
+  ok: boolean
+}): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-[--radius-md] border border-border bg-input px-3 py-2">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-foreground">{label}</p>
+        <p className="truncate text-[11px] text-muted-foreground">{value}</p>
+      </div>
+      <Badge variant={ok ? 'success' : 'muted'} dot>
+        {ok ? 'Ready' : 'Missing'}
+      </Badge>
+    </div>
+  )
+}
+
+function McpTab({
+  apiServer,
+  setApiServer,
+  apiServerBusy,
+  setApiServerBusy,
+  mcpServerInfo,
+  setMcpServerInfo,
+  addToast
+}: McpTabProps): React.JSX.Element {
+  const config = useMemo(() => buildMcpConfig(mcpServerInfo, apiServer), [mcpServerInfo, apiServer])
+  const apiReady = Boolean(apiServer?.enabled && apiServer.running)
+  const tokenReady = Boolean(apiServer?.token)
+  const mcpReady = Boolean(mcpServerInfo?.available)
+  const ready = apiReady && tokenReady && mcpReady
+
+  const refreshMcpInfo = (): void => {
+    api
+      .getMcpServerInfo()
+      .then(setMcpServerInfo)
+      .catch(() => addToast('Failed to refresh MCP bridge info', 'error'))
+  }
+
+  const enableApi = (): void => {
+    setApiServerBusy(true)
+    api
+      .configureApiServer({ enabled: true })
+      .then(setApiServer)
+      .catch((err: unknown) =>
+        addToast(err instanceof Error ? err.message : 'Failed to enable Local API', 'error')
+      )
+      .finally(() => setApiServerBusy(false))
+  }
+
+  const rotateToken = (): void => {
+    setApiServerBusy(true)
+    api
+      .regenerateApiServerToken()
+      .then(setApiServer)
+      .then(() => addToast('API token regenerated', 'success'))
+      .catch(() => addToast('Failed to regenerate API token', 'error'))
+      .finally(() => setApiServerBusy(false))
+  }
+
+  return (
+    <>
+      <CardRoot>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle>MCP Bridge</CardTitle>
+              <CardDescription>
+                Local stdio bridge for Claude Desktop, Cursor, and other MCP clients.
+              </CardDescription>
+            </div>
+            <Badge variant={ready ? 'success' : 'muted'} dot className="shrink-0">
+              {ready ? 'Ready' : 'Setup needed'}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-3 gap-2">
+            <McpStatusRow
+              label="Local API"
+              value={apiServer?.baseUrl ?? 'Not configured'}
+              ok={apiReady}
+            />
+            <McpStatusRow label="Token" value={tokenReady ? 'Generated' : 'Missing'} ok={tokenReady} />
+            <McpStatusRow
+              label="MCP binary"
+              value={mcpServerInfo?.serverPath ?? 'Resolving...'}
+              ok={mcpReady}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant={apiReady ? 'secondary' : 'default'}
+              icon={<Power className="h-3.5 w-3.5" />}
+              loading={apiServerBusy}
+              disabled={apiServerBusy || apiReady}
+              onClick={enableApi}
+            >
+              {apiReady ? 'Local API online' : 'Enable Local API'}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
+              disabled={apiServerBusy}
+              onClick={rotateToken}
+            >
+              Rotate token
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<FolderOpen className="h-3.5 w-3.5" />}
+              onClick={() => api.revealMcpServer().catch(() => addToast('Failed to reveal MCP bridge', 'error'))}
+            >
+              Reveal bridge
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
+              onClick={refreshMcpInfo}
+            >
+              Refresh
+            </Button>
+          </div>
+
+          {!mcpReady && (
+            <div className="rounded-[--radius-md] border border-warn/25 bg-warn/8 px-3 py-2 text-xs text-warn">
+              {mcpServerInfo?.installHint ?? 'MCP bridge build is missing. Run npm run build.'}
+            </div>
+          )}
+        </CardContent>
+      </CardRoot>
+
+      <CardRoot>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <CardTitle>Client Config</CardTitle>
+              <CardDescription>Paste this block into the MCP client config.</CardDescription>
+            </div>
+            <Button
+              size="sm"
+              icon={<Copy className="h-3.5 w-3.5" />}
+              onClick={() => copyText(config, 'MCP config', addToast)}
+            >
+              Copy config
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <pre className="max-h-[360px] overflow-auto rounded-[--radius-md] border border-border bg-background/80 p-3 text-[11px] leading-relaxed text-muted-foreground">
+            <code>{config}</code>
+          </pre>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => copyText(mcpServerInfo?.serverPath ?? '', 'MCP path', addToast)}
+              disabled={!mcpServerInfo?.serverPath}
+              className={cn(
+                'flex items-center gap-2 rounded-[--radius-md] border border-border bg-input px-3 py-2 text-left',
+                'text-xs text-muted-foreground transition-colors hover:border-edge hover:text-foreground',
+                'disabled:pointer-events-none disabled:opacity-50'
+              )}
+            >
+              <Terminal className="h-3.5 w-3.5 shrink-0 text-primary" />
+              <span className="truncate">{mcpServerInfo?.serverPath ?? 'MCP path unavailable'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => copyText(apiServer?.token ?? '', 'API token', addToast)}
+              disabled={!apiServer?.token}
+              className={cn(
+                'flex items-center gap-2 rounded-[--radius-md] border border-border bg-input px-3 py-2 text-left',
+                'text-xs text-muted-foreground transition-colors hover:border-edge hover:text-foreground',
+                'disabled:pointer-events-none disabled:opacity-50'
+              )}
+            >
+              <KeyRound className="h-3.5 w-3.5 shrink-0 text-primary" />
+              <span className="truncate">{apiServer?.token ?? 'Token unavailable'}</span>
+            </button>
+          </div>
+        </CardContent>
+      </CardRoot>
+    </>
+  )
+}
 
 interface GeneralTabProps {
   autostart: boolean

@@ -48,6 +48,16 @@ export interface LocalApiServerStatus {
   token: string
 }
 
+export interface McpServerInfo {
+  available: boolean
+  command: string
+  args: string[]
+  serverPath: string
+  packagePath: string
+  readmePath: string
+  installHint: string
+}
+
 // Reuse the canonical session payload to keep preload and main in lockstep.
 export type SessionStartedEvent = SessionInfo
 
@@ -132,6 +142,8 @@ export interface LuxAPI {
     port?: number | string
   }): Promise<LocalApiServerStatus>
   regenerateApiServerToken(): Promise<LocalApiServerStatus>
+  getMcpServerInfo(): Promise<McpServerInfo>
+  revealMcpServer(): Promise<void>
 
   aiGetSettings(): Promise<AiSettings>
   aiSetSettings(input: {

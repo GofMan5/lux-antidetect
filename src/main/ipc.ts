@@ -29,6 +29,7 @@ import {
   getAvailableBrowsers,
   cancelDownload
 } from './browser-manager'
+import { getMcpServerInfo, revealMcpServer } from './mcp-server'
 import {
   applyAiActions,
   createAiChat,
@@ -989,4 +990,7 @@ export function registerIpcHandlers(
   ipcMain.handle('cancel-browser-download', (_, browser: string, buildId: string) =>
     cancelDownload(browser, buildId)
   )
+
+  ipcMain.handle('mcp-server-info', () => getMcpServerInfo())
+  ipcMain.handle('mcp-server-reveal', () => revealMcpServer())
 }

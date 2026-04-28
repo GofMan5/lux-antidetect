@@ -1,6 +1,6 @@
 {
   "name": "lux-antidetect",
-  "version": "1.0.76",
+  "version": "1.0.77",
   "description": "Lux Antidetect Browser",
   "main": "./out/main/index.js",
   "author": "example.com",
@@ -13,7 +13,8 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
+    "build:mcp": "npm --prefix mcp-server ci && npm --prefix mcp-server run build",
+    "build": "npm run typecheck && npm run build:mcp && electron-vite build",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win --x64 --arm64",

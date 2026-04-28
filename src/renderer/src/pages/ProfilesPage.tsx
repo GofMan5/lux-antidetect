@@ -175,10 +175,10 @@ const BROWSER_LABEL: Record<BrowserType, string> = {
   edge: 'Edge'
 }
 
-const BROWSER_ICONS: Record<BrowserType, typeof Globe> = {
-  chromium: Globe,
-  firefox: Flame,
-  edge: Globe2
+const BROWSER_MARK: Record<BrowserType, string> = {
+  chromium: 'CH',
+  firefox: 'FX',
+  edge: 'ED'
 }
 
 // Bucket → dot tone for the proxy chip's reputation indicator.
@@ -515,6 +515,32 @@ function RunningTimer({ startedAt }: { startedAt: string }): React.JSX.Element {
   return <span className="text-[10px] text-primary font-mono tabular-nums">{elapsed}</span>
 }
 
+function BrowserIdentityIcon({
+  browserType,
+  active = false
+}: {
+  browserType: BrowserType
+  active?: boolean
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[--radius-sm]',
+        'border text-[8px] font-bold leading-none tracking-[0.04em]',
+        active
+          ? 'border-ok/35 bg-ok/10 text-ok shadow-[0_0_10px_rgba(52,211,153,0.18)]'
+          : 'border-border bg-elevated/55 text-muted-foreground'
+      )}
+      aria-hidden
+    >
+      {BROWSER_MARK[browserType]}
+      {active && (
+        <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-ok ring-2 ring-background" />
+      )}
+    </span>
+  )
+}
+
 interface ProxyChipProps {
   proxy: ProxyResponse
 }
@@ -678,9 +704,9 @@ function ProfileRowComponent({
 }: ProfileRowProps): React.JSX.Element {
   const status = STATUS_BADGE[profile.status]
   const isTransitioning = profile.status === 'starting' || profile.status === 'stopping'
+  const isActiveBrowser = profile.status === 'running' || profile.status === 'starting'
   const isComfortable = density === 'comfortable'
   const tags = parseTags(profile.tags)
-  const BrowserIcon = BROWSER_ICONS[profile.browser_type]
 
   // Lazy: only built when the dropdown / context menu actually opens.
   const rowActions = useMemo(
@@ -847,7 +873,7 @@ function ProfileRowComponent({
         </span>
         {isComfortable && (
           <span className="text-[11px] text-muted-foreground flex items-center gap-1.5 truncate">
-            <BrowserIcon className="h-3 w-3" />
+            <BrowserIdentityIcon browserType={profile.browser_type} active={isActiveBrowser} />
             <span>{BROWSER_LABEL[profile.browser_type]}</span>
             {profile.group_name && (
               <>
@@ -868,8 +894,14 @@ function ProfileRowComponent({
       {/* Compact-density meta inline (browser + group on a single line, hidden in comfortable) */}
       {!isComfortable && (
         <span className="hidden md:flex items-center gap-1.5 text-[11px] text-muted-foreground/80 shrink-0 w-[150px] truncate">
-          <BrowserIcon className="h-3 w-3" />
+          <BrowserIdentityIcon browserType={profile.browser_type} active={isActiveBrowser} />
           <span>{BROWSER_LABEL[profile.browser_type]}</span>
+          {profile.status === 'running' && session && (
+            <>
+              <span className="text-muted-foreground/40">·</span>
+              <RunningTimer startedAt={session.started_at} />
+            </>
+          )}
           {profile.group_name && (
             <>
               <span className="text-muted-foreground/40">·</span>

@@ -71,3 +71,9 @@ publish:
 extraResources:
   - from: resources/
     to: resources/
+  - from: mcp-server/
+    to: mcp-server/
+    filter:
+      - package.json
+      - README.md
+      - dist/**
