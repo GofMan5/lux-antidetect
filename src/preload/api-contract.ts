@@ -31,8 +31,10 @@ import type {
 } from '../main/models'
 import type { ProxyGeoBundle, IpFraudReport } from '../main/geoip'
 import type { PresetDescriptor } from '../main/fingerprint-presets'
+import type { UpdateState } from '../main/updater'
 
 export type { PresetDescriptor } from '../main/fingerprint-presets'
+export type { UpdateState } from '../main/updater'
 
 // Canonical IPC shape for profile extensions. Stored as integer in SQLite, so `enabled` is `0 | 1`.
 export interface ProfileExtension {
@@ -245,6 +247,7 @@ export interface LuxAPI {
 
   // Auto-updates
   checkForUpdates(): Promise<unknown>
+  getUpdateState(): Promise<UpdateState>
   installUpdate(): Promise<void>
   onUpdateAvailable(callback: (data: { version: string }) => void): () => void
   onUpdateDownloaded(callback: (data: { version: string }) => void): () => void

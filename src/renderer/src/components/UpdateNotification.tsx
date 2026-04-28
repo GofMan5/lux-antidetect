@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Download, Sparkles, X, RefreshCw, AlertCircle } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { Button } from '@renderer/components/ui'
+import type { UpdateState } from '../../../preload/api-contract'
 
 type Stage = 'idle' | 'downloading' | 'ready' | 'error'
 
@@ -14,7 +15,36 @@ export function UpdateNotification(): React.JSX.Element | null {
   const [errorMsg, setErrorMsg] = useState('')
   const [exiting, setExiting] = useState(false)
 
+  const applyUpdateState = useCallback((data: UpdateState) => {
+    setExiting(false)
+
+    switch (data.stage) {
+      case 'idle':
+        setStage('idle')
+        setPercent(0)
+        setErrorMsg('')
+        break
+      case 'downloading':
+        setVersion(data.version)
+        setPercent(data.percent)
+        setStage('downloading')
+        setMinimized(false)
+        break
+      case 'ready':
+        setVersion(data.version)
+        setStage('ready')
+        setMinimized(false)
+        break
+      case 'error':
+        setErrorMsg(data.message)
+        setStage('error')
+        setMinimized(false)
+        break
+    }
+  }, [])
+
   useEffect(() => {
+    let cancelled = false
     const unsubs = [
       window.api.onUpdateAvailable((data) => {
         setVersion(data.version)
@@ -35,11 +65,22 @@ export function UpdateNotification(): React.JSX.Element | null {
       window.api.onUpdateError((data) => {
         setErrorMsg(data.message)
         setStage('error')
+        setMinimized(false)
         setExiting(false)
       })
     ]
-    return () => unsubs.forEach((fn) => fn())
-  }, [])
+
+    window.api.getUpdateState()
+      .then((state) => {
+        if (!cancelled) applyUpdateState(state)
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+      unsubs.forEach((fn) => fn())
+    }
+  }, [applyUpdateState])
 
   const dismiss = useCallback(() => {
     setExiting(true)
@@ -61,7 +102,9 @@ export function UpdateNotification(): React.JSX.Element | null {
 
   // Minimized pill
   if (minimized) {
-    const pillText = stage === 'downloading' ? `↓ ${Math.round(percent)}%` : 'Update ready ✓'
+    let pillText = 'Update failed'
+    if (stage === 'downloading') pillText = `Downloading ${Math.round(percent)}%`
+    else if (stage === 'ready') pillText = 'Update ready'
 
     return createPortal(
       <button

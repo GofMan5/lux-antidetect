@@ -145,6 +145,7 @@ const api: LuxAPI = {
 
   // Auto-updates
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  getUpdateState: () => ipcRenderer.invoke('get-update-state'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   onUpdateAvailable: (callback: (data: { version: string }) => void) => {
     const handler = (_: unknown, data: { version: string }): void => callback(data)
