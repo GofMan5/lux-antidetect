@@ -39,7 +39,7 @@ import type {
   Profile
 } from '../lib/types'
 
-const DEFAULT_MODEL = 'llama-3.3-70b-versatile'
+const DEFAULT_MODEL = 'llama-3.1-8b-instant'
 
 function formatChatTime(value: string): string {
   try {

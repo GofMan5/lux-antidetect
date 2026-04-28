@@ -23,9 +23,17 @@ import type {
 } from './models'
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models'
 const GROQ_API_KEY_SETTING = 'groq_api_key'
 const GROQ_MODEL_SETTING = 'groq_model'
-const DEFAULT_GROQ_MODEL = 'llama-3.3-70b-versatile'
+const DEFAULT_GROQ_MODEL = 'llama-3.1-8b-instant'
+const FALLBACK_GROQ_MODELS = [
+  DEFAULT_GROQ_MODEL,
+  'qwen/qwen3-32b',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'llama-3.3-70b-versatile'
+] as const
 const AI_CONTEXT_MESSAGE_LIMIT = 60
 const MAX_USER_MESSAGE_CHARS = 8_000
 const MAX_ACTIONS = 8
@@ -48,6 +56,19 @@ interface StoredMessageRow {
   content: string
   actions: string | null
   created_at: string
+}
+
+class GroqApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly detail: string,
+    readonly code: string | null,
+    readonly type: string | null,
+    readonly model: string
+  ) {
+    super(detail || `Groq request failed (${status})`)
+    this.name = 'GroqApiError'
+  }
 }
 
 function assertUuid(id: string, label = 'ID'): void {
@@ -245,7 +266,15 @@ export async function sendAiMessage(
 
   const contextMessages = getContextMessages(db, chat.id)
   const modelMessages = buildModelMessages(db, contextMessages, input.profileId ?? null)
-  const rawReply = await callGroq(apiKey, getGroqModel(db), modelMessages)
+  const requestedModel = getGroqModel(db)
+  const { content: rawReply, model: usedModel } = await callGroqWithFallback(
+    apiKey,
+    requestedModel,
+    modelMessages
+  )
+  if (usedModel !== requestedModel) {
+    setSetting(db, GROQ_MODEL_SETTING, usedModel)
+  }
   const extracted = extractActions(rawReply)
   const safeActions = sanitizeActions(db, extracted.actions)
   const assistant = insertMessage(db, chat.id, 'assistant', extracted.content, safeActions)
@@ -416,7 +445,89 @@ function parseJsonArray(raw: string): string[] {
   }
 }
 
-async function callGroq(apiKey: string, model: string, messages: GroqMessage[]): Promise<string> {
+async function callGroqWithFallback(
+  apiKey: string,
+  requestedModel: string,
+  messages: GroqMessage[]
+): Promise<{ content: string; model: string }> {
+  const activeModelIds = await listGroqModelIds(apiKey)
+  const candidates = buildGroqModelCandidates(requestedModel, activeModelIds)
+  const failures: GroqApiError[] = []
+
+  for (const model of candidates) {
+    try {
+      return { content: await requestGroqCompletion(apiKey, model, messages), model }
+    } catch (err) {
+      if (!(err instanceof GroqApiError)) throw err
+      failures.push(err)
+      if (!shouldTryNextModel(err)) break
+    }
+  }
+
+  throw new Error(formatGroqFailure(failures, candidates))
+}
+
+function buildGroqModelCandidates(requestedModel: string, activeModelIds: string[] | null): string[] {
+  const preferred = [requestedModel, ...FALLBACK_GROQ_MODELS]
+  const deduped = preferred.filter((model, index) => model && preferred.indexOf(model) === index)
+  if (!activeModelIds || activeModelIds.length === 0) return deduped
+  const active = new Set(activeModelIds)
+  const filtered = deduped.filter((model) => active.has(model))
+  return filtered.length > 0 ? filtered : deduped
+}
+
+async function listGroqModelIds(apiKey: string): Promise<string[] | null> {
+  try {
+    const response = await fetch(GROQ_MODELS_URL, {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    })
+    if (!response.ok) return null
+    const parsed = await response.json() as { data?: Array<{ id?: unknown }> }
+    return parsed.data
+      ?.map((model) => model.id)
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0) ?? null
+  } catch {
+    return null
+  }
+}
+
+function shouldTryNextModel(err: GroqApiError): boolean {
+  if (err.status === 400 || err.status === 404) return true
+  if (err.status !== 403) return false
+  const haystack = `${err.detail} ${err.code ?? ''} ${err.type ?? ''}`.toLowerCase()
+  return (
+    haystack.includes('forbidden') ||
+    haystack.includes('model') ||
+    haystack.includes('permission') ||
+    haystack.includes('project')
+  )
+}
+
+function formatGroqFailure(failures: GroqApiError[], candidates: string[]): string {
+  const last = failures[failures.length - 1]
+  const tried = candidates.join(', ')
+  if (!last) return 'Groq request failed'
+
+  if (last.status === 401) {
+    return 'Groq rejected the API key (401). Paste a fresh key in AI settings.'
+  }
+
+  if (last.status === 403) {
+    return (
+      'Groq refused the request (403). This is usually a key/project permission, ' +
+      `model access, or regional access restriction. Tried models: ${tried}. ` +
+      'Create or paste a fresh Groq key and make sure the selected project can use one of these models.'
+    )
+  }
+
+  if (last.status === 429) {
+    return `Groq rate limit hit (429): ${last.detail || 'try again later'}`
+  }
+
+  return `Groq request failed (${last.status}): ${last.detail || 'Unknown error'}`
+}
+
+async function requestGroqCompletion(apiKey: string, model: string, messages: GroqMessage[]): Promise<string> {
   const response = await fetch(GROQ_API_URL, {
     method: 'POST',
     headers: {
@@ -433,14 +544,20 @@ async function callGroq(apiKey: string, model: string, messages: GroqMessage[]):
   })
 
   if (!response.ok) {
-    let detail = ''
+    let detail = response.statusText
+    let code: string | null = null
+    let type: string | null = null
     try {
-      const parsed = await response.json() as { error?: { message?: string } }
-      detail = parsed.error?.message ? `: ${parsed.error.message}` : ''
+      const parsed = await response.json() as {
+        error?: { message?: string; code?: string; type?: string }
+      }
+      detail = parsed.error?.message ?? detail
+      code = parsed.error?.code ?? null
+      type = parsed.error?.type ?? null
     } catch {
-      detail = ''
+      detail = response.statusText
     }
-    throw new Error(`Groq request failed (${response.status})${detail}`)
+    throw new GroqApiError(response.status, detail, code, type, model)
   }
 
   const parsed = await response.json() as {
