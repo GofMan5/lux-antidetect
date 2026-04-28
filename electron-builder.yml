@@ -15,15 +15,14 @@ asarUnpack:
 win:
   executableName: lux-antidetect
   icon: build/icon.ico
+  artifactName: ${name}-${version}-${arch}.${ext}
   target:
-    - target: nsis
-      arch:
-        - x64
+    - nsis
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   perMachine: true
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: ${name}-${version}-${arch}-setup.${ext}
   shortcutName: Lux Antidetect
   uninstallDisplayName: Lux Antidetect
   createDesktopShortcut: always
@@ -31,24 +30,38 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
 mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  artifactName: ${name}-${version}-${arch}.${ext}
   entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - dmg
+    - zip
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    NSCameraUsageDescription: Application requests access to the device's camera.
+    NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+    NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 linux:
+  executableName: lux-antidetect
+  icon: build/icon.png
+  artifactName: ${name}-${version}-${arch}.${ext}
   target:
     - AppImage
-    - snap
     - deb
-  maintainer: electronjs.org
+    - rpm
+    - tar.gz
+  maintainer: GofMan5
   category: Utility
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
+deb:
+  artifactName: ${name}-${version}-${arch}.${ext}
+rpm:
+  artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: true
 publish:
   provider: github

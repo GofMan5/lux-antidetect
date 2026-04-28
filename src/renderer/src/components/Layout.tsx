@@ -26,6 +26,7 @@ import { UpdateNotification } from './UpdateNotification'
 import { useKeyboardShortcutsStore } from './KeyboardShortcutsHelp'
 import { useCommandPaletteStore } from './CommandPalette'
 import { useProfilesStore } from '../stores/profiles'
+import { FEATURE_AI_ENABLED, FEATURE_TEMPLATES_ENABLED } from '../lib/features'
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -64,8 +65,10 @@ interface RailItem {
 const RAIL_ITEMS: RailItem[] = [
   { to: '/profiles', label: 'Profiles', icon: LayoutGrid, shortcut: 'G P' },
   { to: '/proxies', label: 'Proxies', icon: Globe, shortcut: 'G X' },
-  { to: '/ai', label: 'AI', icon: Bot, shortcut: 'G A' },
-  { to: '/templates', label: 'Templates', icon: FileText, shortcut: '', comingSoon: true },
+  ...(FEATURE_AI_ENABLED ? [{ to: '/ai', label: 'AI', icon: Bot, shortcut: 'G A' }] : []),
+  ...(FEATURE_TEMPLATES_ENABLED
+    ? [{ to: '/templates', label: 'Templates', icon: FileText, shortcut: '', comingSoon: true }]
+    : []),
   { to: '/settings', label: 'Settings', icon: Settings, shortcut: 'G S' }
 ]
 

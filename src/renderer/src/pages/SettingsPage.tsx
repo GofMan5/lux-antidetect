@@ -60,6 +60,7 @@ import { useLogStore } from '../stores/debug'
 import { useReducedMotion } from '../hooks/useReducedMotion'
 import type { LogEntry, LogLevel } from '../stores/debug'
 import { cn } from '../lib/utils'
+import { FEATURE_TEMPLATES_ENABLED } from '../lib/features'
 import {
   Badge,
   Button,
@@ -247,12 +248,14 @@ export function SettingsPage(): React.JSX.Element {
       })
       .catch(() => setHistoryLoading(false))
 
-    api
-      .listTemplates()
-      .then((t: unknown) => {
-        setTemplates(t as TemplateEntry[])
-      })
-      .catch(() => {})
+    if (FEATURE_TEMPLATES_ENABLED) {
+      api
+        .listTemplates()
+        .then((t: unknown) => {
+          setTemplates(t as TemplateEntry[])
+        })
+        .catch(() => {})
+    }
   }, [])
 
   const refreshManagedBrowsers = useCallback(() => {
@@ -1375,9 +1378,9 @@ function DataTab({
           <CardDescription>Overview of your data.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-3 gap-3">
+          <div className={cn('grid gap-3', FEATURE_TEMPLATES_ENABLED ? 'grid-cols-3' : 'grid-cols-2')}>
             <StatTile value={profiles.length} label="Profiles" />
-            <StatTile value={templates.length} label="Templates" />
+            {FEATURE_TEMPLATES_ENABLED && <StatTile value={templates.length} label="Templates" />}
             <StatTile value={sessionHistory.length} label="Sessions" />
           </div>
         </CardContent>
@@ -1460,6 +1463,7 @@ function DataTab({
         </CardContent>
       </CardRoot>
 
+      {FEATURE_TEMPLATES_ENABLED && (
       <CardRoot>
         <CardHeader>
           <CardTitle className="inline-flex items-center gap-2">
@@ -1505,6 +1509,7 @@ function DataTab({
           )}
         </CardContent>
       </CardRoot>
+      )}
     </>
   )
 }

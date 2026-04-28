@@ -1,0 +1,161 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint -- --quiet
+
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          expected_tag="v${package_version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${package_version}."
+            echo "Expected tag: ${expected_tag}"
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            builder_args: --win --x64
+            artifact: windows-x64
+          - name: Windows arm64
+            os: windows-latest
+            builder_args: --win --arm64
+            artifact: windows-arm64
+          - name: Linux x64
+            os: ubuntu-latest
+            builder_args: --linux --x64
+            artifact: linux-x64
+          - name: Linux arm64
+            os: ubuntu-24.04-arm
+            builder_args: --linux --arm64
+            artifact: linux-arm64
+          - name: macOS x64
+            os: macos-13
+            builder_args: --mac --x64
+            artifact: macos-x64
+          - name: macOS arm64
+            os: macos-14
+            builder_args: --mac --arm64
+            artifact: macos-arm64
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer and main bundles
+        run: npm run build
+
+      - name: Package ${{ matrix.name }}
+        run: npx electron-builder ${{ matrix.builder_args }} --publish never
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lux-antidetect-${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          declare -A seen
+          upload_files=()
+          while IFS= read -r -d '' file; do
+            base="$(basename "$file")"
+            if [[ -n "${seen[$base]:-}" ]]; then
+              echo "Skipping duplicate release asset basename: $base"
+              continue
+            fi
+            seen[$base]=1
+            upload_files+=("$file")
+          done < <(find release-artifacts -type f -print0 | sort -z)
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "${upload_files[@]}" --clobber
+          else
+            gh release create "$TAG_NAME" "${upload_files[@]}" \
+              --title "Lux Antidetect $TAG_NAME" \
+              --generate-notes \
+              --latest
+          fi

@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
   <img src="https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white" alt="Tailwind CSS" />
-  <img src="https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white" alt="Windows" />
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D6?logo=electron&logoColor=white" alt="Platforms" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
@@ -182,14 +182,29 @@ npm run dev
 ### Build
 
 ```bash
-# Windows installer (NSIS)
+# Windows installer (NSIS, x64/arm64 in CI)
 npm run build:win
 
-# macOS
+# macOS (DMG + ZIP, x64/arm64 in CI)
 npm run build:mac
 
-# Linux (AppImage, Snap, Deb)
+# Linux (AppImage, Deb, RPM, tar.gz; x64/arm64 in CI)
 npm run build:linux
+```
+
+### Release Builds
+
+GitHub Actions builds release artifacts for:
+
+- Windows x64 / arm64: NSIS installer
+- macOS x64 / arm64: DMG + ZIP
+- Linux x64 / arm64: AppImage, Deb, RPM, tar.gz
+
+Push a tag like `v1.0.71` to run the full matrix and publish assets to the GitHub release:
+
+```bash
+git tag -a v1.0.71 -m "Lux Antidetect v1.0.71"
+git push origin v1.0.71
 ```
 
 ### Type Check

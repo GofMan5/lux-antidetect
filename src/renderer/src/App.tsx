@@ -9,6 +9,7 @@ import { KeyboardShortcutsHelp } from './components/KeyboardShortcutsHelp'
 import { CommandPalette } from './components/CommandPalette'
 import { RunningSessionsDock } from './components/RunningSessionsDock'
 import { initDebugCapture } from './stores/debug'
+import { FEATURE_AI_ENABLED } from './lib/features'
 
 // Pages are route-split so the first paint only loads the shell + the
 // initial route (Profiles). Settings pulls in heavy dependencies (color
@@ -23,9 +24,9 @@ const ProxiesPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 )
-const AiPage = lazy(() =>
-  import('./pages/AiPage').then((m) => ({ default: m.AiPage }))
-)
+const AiPage = FEATURE_AI_ENABLED
+  ? lazy(() => import('./pages/AiPage').then((m) => ({ default: m.AiPage })))
+  : null
 
 // Init debug capture once
 initDebugCapture()
@@ -107,7 +108,16 @@ export default function App(): React.JSX.Element {
           <Route path="/" element={<Navigate to="/profiles" replace />} />
           <Route path="/profiles" element={<LazyRoute><ProfilesPage /></LazyRoute>} />
           <Route path="/proxies" element={<LazyRoute><ProxiesPage /></LazyRoute>} />
-          <Route path="/ai" element={<LazyRoute><AiPage /></LazyRoute>} />
+          <Route
+            path="/ai"
+            element={
+              FEATURE_AI_ENABLED && AiPage ? (
+                <LazyRoute><AiPage /></LazyRoute>
+              ) : (
+                <Navigate to="/profiles" replace />
+              )
+            }
+          />
           <Route path="/settings" element={<LazyRoute><SettingsPage /></LazyRoute>} />
           <Route path="*" element={<Navigate to="/profiles" replace />} />
         </Route>

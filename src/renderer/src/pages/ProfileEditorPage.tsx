@@ -70,6 +70,7 @@ import { validateProfileFingerprint } from '../lib/fingerprint-validator'
 import type { ValidationWarning } from '../lib/fingerprint-validator'
 import { PRESET_BROWSER_MAP, buildPresetMenuItems } from '../lib/preset-menu'
 import { formatTagsForForm, parseTagsFromForm } from '../lib/tags'
+import { FEATURE_TEMPLATES_ENABLED } from '../lib/features'
 import { CookiesTab } from '../components/profile/CookiesTab'
 import { ExtensionsTab } from '../components/profile/ExtensionsTab'
 import type { Fingerprint, UpdateFingerprintInput } from '../lib/types'
@@ -601,6 +602,7 @@ export function ProfileEditorPanel({
   }, [fetchProxies])
 
   useEffect(() => {
+    if (!FEATURE_TEMPLATES_ENABLED) return
     api
       .listTemplates()
       .then((t: unknown[]) => {
@@ -895,6 +897,7 @@ export function ProfileEditorPanel({
   }
 
   const handleSaveAsTemplate = async (): Promise<void> => {
+    if (!FEATURE_TEMPLATES_ENABLED) return
     try {
       const data = getValues()
       const { width, height } = parseScreen(data.screen)
@@ -935,6 +938,7 @@ export function ProfileEditorPanel({
 
   const handleApplyTemplate = useCallback(
     async (templateId: string): Promise<void> => {
+      if (!FEATURE_TEMPLATES_ENABLED) return
       if (!templateId) return
       try {
         const tmpl = (await api.getTemplate(templateId)) as {
@@ -1125,7 +1129,7 @@ export function ProfileEditorPanel({
             Unsaved
           </Badge>
         )}
-        {isEditMode && (
+        {FEATURE_TEMPLATES_ENABLED && isEditMode && (
           <Tooltip content={templateSaved ? 'Saved!' : 'Save as Template'}>
             <Button
               variant="ghost"
@@ -1259,7 +1263,7 @@ export function ProfileEditorPanel({
           {/* ═══ General ═══ */}
           <TabsContent value={TAB_GENERAL} className="px-5 py-4 m-0 space-y-5">
             {/* Template selector (create-mode only) */}
-            {!isEditMode && templates.length > 0 && (
+            {FEATURE_TEMPLATES_ENABLED && !isEditMode && templates.length > 0 && (
               <section className="space-y-1.5">
                 <Label htmlFor="profile-template">Start from template</Label>
                 <SelectRoot
