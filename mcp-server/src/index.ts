@@ -162,6 +162,25 @@ function optionalBoolean(args: Record<string, unknown>, key: string, fallback = 
   return value
 }
 
+function requireApiMethod(args: Record<string, unknown>): LuxApiMethod {
+  const method = requireString(args, 'method').toUpperCase()
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    throw new McpError(ErrorCode.InvalidParams, 'method must be GET, POST, PUT, PATCH, or DELETE')
+  }
+  return method as LuxApiMethod
+}
+
+function requireApiPath(args: Record<string, unknown>): string {
+  const path = requireString(args, 'path')
+  if (!path.startsWith('/')) {
+    throw new McpError(ErrorCode.InvalidParams, 'path must start with /')
+  }
+  if (path.startsWith('/api/')) {
+    throw new McpError(ErrorCode.InvalidParams, 'path must be relative to /api/v1, for example /profiles')
+  }
+  return path
+}
+
 function normalizeBaseUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '')
   if (!/^https?:\/\//i.test(trimmed)) {
@@ -252,8 +271,10 @@ async function discoverBaseUrl(): Promise<string> {
 
 // Единая тонкая обертка над REST API Lux: авторизация, base URL discovery,
 // timeout, unwrap стандартного { ok, data, error } envelope и понятные ошибки.
+type LuxApiMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
 class LuxApiClient {
-  async request<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  async request<T>(method: LuxApiMethod, path: string, body?: unknown): Promise<T> {
     const baseUrl = await discoverBaseUrl()
     const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`
     const headers: Record<string, string> = {}
@@ -594,6 +615,39 @@ const automationStepSchema: JsonSchema = {
 
 const tools: ToolDefinition[] = [
   {
+    name: 'list_lux_api_capabilities',
+    description: 'Return the Lux Local API capability map from /openapi. Use this first when you need an endpoint that has no dedicated MCP wrapper.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
+  {
+    name: 'call_lux_api',
+    description: 'Call any Lux Local API endpoint. Path is relative to /api/v1, for example /profiles, /proxies, /settings/auto_start_profiles, or /managed-browsers. Requires the same local API token as all other tools.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+        path: {
+          type: 'string',
+          minLength: 1,
+          description: 'API path relative to /api/v1. Must start with /. Query strings are allowed.'
+        },
+        body: {
+          description: 'JSON request body for POST, PUT, or PATCH.',
+          anyOf: [
+            { type: 'object', additionalProperties: true },
+            { type: 'array', items: {} },
+            { type: 'string' },
+            { type: 'number' },
+            { type: 'boolean' },
+            { type: 'null' }
+          ]
+        }
+      },
+      required: ['method', 'path']
+    }
+  },
+  {
     name: 'list_profiles',
     description: 'Получить список всех Lux профилей. Можно запросить полную детализацию каждого профиля.',
     inputSchema: {
@@ -922,6 +976,17 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
   log('info', 'tool call', { name })
 
   switch (name) {
+    case 'list_lux_api_capabilities': {
+      return textResult({ ok: true, data: await lux.request('GET', '/openapi') })
+    }
+
+    case 'call_lux_api': {
+      const method = requireApiMethod(args)
+      const path = requireApiPath(args)
+      const body = method === 'GET' || method === 'DELETE' ? undefined : args.body
+      return textResult({ ok: true, data: await lux.request(method, path, body) })
+    }
+
     case 'list_profiles': {
       const profiles = await lux.request<LuxProfile[]>('GET', '/profiles')
       if (!optionalBoolean(args, 'includeDetails', false)) return textResult({ ok: true, data: profiles })
@@ -1187,7 +1252,7 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
 const server = new Server(
   {
     name: 'lux-antidetect-mcp',
-    version: '1.0.81'
+    version: '1.0.83'
   },
   {
     capabilities: {

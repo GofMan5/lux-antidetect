@@ -124,7 +124,7 @@ Lux includes an optional local REST API for scripts and automation tools.
 
 The repository includes a dedicated Model Context Protocol server in `mcp-server/`. It bridges Claude Desktop, Cursor, and other MCP clients to the Lux Local API.
 
-It exposes tools for profile CRUD, profile launch/stop, running browser inventory, browser status, screenshots, active tab listing, and JavaScript execution in live Chromium/Edge sessions through CDP.
+It exposes dedicated tools for profile CRUD, profile launch/stop, running browser inventory, browser status, screenshots, active tab listing, JavaScript execution in live Chromium/Edge sessions through CDP, automation scripts, and profile health. Its generic `call_lux_api` tool can call the full Local API surface.
 
 ```bash
 cd mcp-server
@@ -149,7 +149,7 @@ Claude Desktop example:
 }
 ```
 
-The MCP server can also auto-detect the API port when `LUX_API_BASE_URL` is omitted. See `mcp-server/README.md` for the full environment reference and tool list.
+The MCP server can also auto-detect the API port when `LUX_API_BASE_URL` is omitted. It includes a generic `call_lux_api` tool plus `list_lux_api_capabilities`, so MCP clients can reach every Local API endpoint exposed by the app. See `mcp-server/README.md` for the full environment reference and tool list.
 
 ## Screens
 
@@ -368,6 +368,7 @@ Core endpoints:
 | `POST` | `/profiles` | Create profile. |
 | `GET` | `/profiles/:id` | Get profile, fingerprint, and proxy detail. |
 | `GET` | `/profiles/:id/status` | Read lifecycle status, session, and CDP support. |
+| `POST` | `/profiles/:id/wipe-data` | Wipe stopped profile browser data while keeping Lux metadata. |
 | `PATCH` | `/profiles/:id` | Update profile metadata. |
 | `PATCH` | `/profiles/:id/fingerprint` | Update fingerprint fields. |
 | `POST` | `/profiles/:id/proxy` | Bind or clear proxy with `proxyId`. |
@@ -379,19 +380,71 @@ Core endpoints:
 | `GET` | `/profiles/:id/cookies?format=json|netscape` | Export cookies from a running profile. |
 | `POST` | `/profiles/:id/cookies/import` | Import JSON or Netscape cookies into a running profile. |
 | `GET` | `/profiles/:id/screenshot` | Capture a screenshot from a running Chromium-based profile. |
+| `GET` | `/profiles/:id/bookmarks` | List profile bookmarks. |
+| `POST` | `/profiles/:id/bookmarks` | Add a profile bookmark. |
+| `DELETE` | `/profiles/:id/bookmarks/:bookmarkId` | Remove a profile bookmark. |
+| `GET` | `/profiles/:id/extensions` | List profile extension registrations. |
+| `POST` | `/profiles/:id/extensions` | Register an unpacked extension already inside the profile directory. |
+| `POST` | `/profiles/:id/extensions/install-crx` | Install a CRX file into the profile. |
+| `PATCH` | `/profiles/:id/extensions/:extensionId` | Enable or disable a profile extension. |
+| `DELETE` | `/profiles/:id/extensions/:extensionId` | Remove a profile extension registration. |
 | `DELETE` | `/profiles/:id` | Delete a stopped profile. |
+| `POST` | `/fingerprints/generate` | Generate a default fingerprint draft. |
+| `GET` | `/fingerprints/presets` | List fingerprint presets. |
+| `POST` | `/fingerprints/presets/:id/generate` | Generate a fingerprint draft from a preset. |
 | `GET` | `/proxies` | List proxies without exposing passwords. |
 | `POST` | `/proxies` | Create proxy and start async geo/reputation lookup. |
+| `GET` | `/proxies/groups` | List proxy group tags. |
+| `GET` | `/proxies/:id/connection-string` | Return a proxy connection string, including credentials. |
 | `POST` | `/proxies/bulk-import` | Parse and import up to 10,000 proxy lines. |
+| `POST` | `/proxies/bulk-test` | Test many proxies concurrently. |
+| `POST` | `/proxies/dry-run-fraud-check` | Check geo/reputation for an unpersisted proxy. |
+| `POST` | `/proxies/lookup-fraud-by-ip` | Check reputation for an arbitrary IP. |
 | `PATCH` | `/proxies/:id` | Update proxy. |
 | `DELETE` | `/proxies/:id` | Delete proxy. |
 | `POST` | `/proxies/:id/test` | Test proxy connectivity. |
 | `POST` | `/proxies/:id/lookup-geo` | Refresh proxy geo and sync dependent fingerprints. |
+| `GET` | `/settings` | List supported settings and values. |
+| `GET` | `/settings/:key` | Read a supported setting. |
+| `PUT/PATCH` | `/settings/:key` | Update a supported setting. |
+| `GET` | `/templates` | List templates. |
+| `POST` | `/templates` | Create a template. |
+| `GET/PATCH/DELETE` | `/templates/:id` | Read, update, or delete a template. |
+| `POST` | `/templates/:id/create-profile` | Create a profile from a template. |
+| `GET` | `/ai/settings` | Read local AI assistant settings. |
+| `PATCH` | `/ai/settings` | Update local AI assistant settings. |
+| `GET` | `/ai/models` | List AI models. |
+| `GET/POST` | `/ai/chats` | List or create AI chats. |
+| `DELETE` | `/ai/chats/:id` | Delete an AI chat. |
+| `GET` | `/ai/chats/:id/messages` | List AI chat messages. |
+| `POST` | `/ai/messages` | Send an AI assistant message. |
+| `POST` | `/ai/actions/apply` | Apply AI-proposed profile actions. |
 | `GET` | `/sessions` | List running sessions. |
 | `GET` | `/session-history?profileId=:id` | Read session history. |
 | `POST` | `/bulk/launch` | Launch multiple profiles with `profileIds`. |
 | `POST` | `/bulk/stop` | Stop multiple profiles with `profileIds`. |
+| `POST` | `/bulk/delete` | Delete multiple stopped profiles with `profileIds`. |
 | `POST` | `/automation/profile-session` | Create/update profile, optionally create/attach proxy, launch, and return CDP info. |
+| `GET` | `/automation/scripts` | List saved automation scripts. |
+| `POST` | `/automation/scripts` | Create an automation script. |
+| `GET/PATCH/DELETE` | `/automation/scripts/:id` | Read, update, or delete an automation script. |
+| `POST` | `/automation/scripts/:id/run` | Run a saved automation script. |
+| `GET` | `/automation/runs` | List automation run history. |
+| `POST` | `/automation/run` | Run ad-hoc automation steps. |
+| `GET` | `/managed-browsers` | List installed managed browsers. |
+| `GET` | `/managed-browsers/available` | List downloadable managed browser builds. |
+| `POST` | `/managed-browsers/download` | Download a managed browser. |
+| `POST` | `/managed-browsers/cancel` | Cancel an active managed browser download. |
+| `DELETE` | `/managed-browsers/:browser/:buildId` | Remove an installed managed browser. |
+| `GET` | `/updates/state` | Read update state. |
+| `POST` | `/updates/check` | Check for updates. |
+| `POST/DELETE` | `/updates/clear-error` | Clear update error state. |
+| `POST` | `/updates/install` | Install a downloaded update and restart. |
+| `POST` | `/database/export` | Export a SQLite backup into `Documents/Lux Antidetect` by safe filename. |
+| `POST` | `/database/import` | Stage a validated SQLite backup import for next restart. |
+| `GET/PUT` | `/system/autostart` | Read or set OS autostart. |
+| `PUT` | `/system/minimize-to-tray` | Persist minimize-to-tray setting. |
+| `GET` | `/system/api` | Read Local API status. |
 | `GET` | `/webhooks` | List webhook registrations. |
 | `POST` | `/webhooks` | Register webhook target. |
 | `PATCH` | `/webhooks/:id` | Update webhook target, filters, enabled state, or rotate secret. |
@@ -406,6 +459,8 @@ Security notes:
 - Proxy bulk import is capped at 10,000 lines and 1 MB.
 - `file:`, `javascript:`, `data:`, `chrome:`, and `about:` URLs are rejected.
 - Proxy list responses preserve the existing `has_password` model and do not return stored proxy passwords.
+- Credential-bearing proxy connection strings, database export/import staging, update install, and browser download controls require the bearer token and remain localhost-only.
+- Database export accepts only a safe backup filename under `Documents/Lux Antidetect`; it will not overwrite an existing backup unless `overwrite=true` is supplied.
 - Webhook URLs must be `http:` or `https:` and are signed with per-webhook secrets.
 
 ## Local Packaging

@@ -3,6 +3,7 @@
 MCP-server for controlling Lux Antidetect from Claude Desktop, Cursor, and other Model Context Protocol clients.
 
 The server talks to the Lux local REST API and uses Chromium DevTools Protocol for live browser operations such as tab listing, JavaScript execution, and targeted screenshots.
+Every Local API endpoint is available through the generic `call_lux_api` MCP tool. Use `list_lux_api_capabilities` to read the live `/openapi` map, then call any path relative to `/api/v1`.
 
 ## Install
 
@@ -45,6 +46,8 @@ Enable the Lux Local API in `Settings -> General -> Local API`, then copy the to
 
 ## Tools
 
+- `list_lux_api_capabilities`
+- `call_lux_api`
 - `list_profiles`
 - `get_profile`
 - `create_profile`
@@ -58,6 +61,19 @@ Enable the Lux Local API in `Settings -> General -> Local API`, then copy the to
 - `execute_js`
 - `take_screenshot`
 - `get_active_tabs`
+- `list_profile_health`
+- `get_profile_health`
+- `autofix_profile_health`
+- `list_automation_scripts`
+- `get_automation_script`
+- `create_automation_script`
+- `update_automation_script`
+- `delete_automation_script`
+- `run_automation_script`
+- `list_automation_runs`
+- `run_adhoc_automation`
+
+`call_lux_api` covers the full API surface, including proxies, fingerprint presets, settings, templates, bookmarks, extensions, AI assistant state, managed browser downloads, updates, database backup/import staging, webhooks, and emergency controls.
 
 ## Security
 

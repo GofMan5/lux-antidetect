@@ -1,10 +1,24 @@
 import { app, type BrowserWindow, ipcMain } from 'electron'
 import type Database from 'better-sqlite3'
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync
+} from 'fs'
+import { promises as fsp } from 'fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { URL } from 'node:url'
+import { v4 as uuidv4 } from 'uuid'
+import { installCrxIntoProfile } from './crx'
 import {
   createProfile,
   deleteProfile,
@@ -13,17 +27,19 @@ import {
   listProfiles,
   syncFingerprintsForProxy,
   updateFingerprint,
-  updateProfile
+  updateProfile,
+  wipeProfileBrowserData
 } from './profile'
 import {
   createProxy,
   deleteProxy,
+  getProxyGroups,
   listProxies,
   parseProxyLine,
   testProxy,
   updateProxy
 } from './proxy'
-import { lookupProxyGeo } from './geoip'
+import { dryRunProxyMetadata, lookupFraudByIp, lookupProxyGeo } from './geoip'
 import {
   detectBrowsers,
   exportCookiesCDP,
@@ -41,6 +57,15 @@ import {
   openUrlInProfile,
   stopBrowser
 } from './browser'
+import {
+  cancelDownload,
+  downloadBrowser,
+  getAvailableBrowsers,
+  listManagedBrowsers,
+  removeManagedBrowser
+} from './browser-manager'
+import { generateDefaultFingerprint } from './fingerprint'
+import { generateFingerprintFromPreset, listFingerprintPresets } from './fingerprint-presets'
 import { getAllSessions, getSession, getSessionHistory, onSessionEvent } from './sessions'
 import {
   createAutomationScript,
@@ -53,14 +78,30 @@ import {
   updateAutomationScript
 } from './automation'
 import { autofixProfileHealth, getProfileHealth, listProfileHealth } from './profile-health'
+import { checkForUpdates, clearUpdateErrorState, getUpdateState, installUpdate } from './updater'
+import {
+  applyAiActions,
+  createAiChat,
+  deleteAiChat,
+  getAiSettings,
+  listAiChats,
+  listAiMessages,
+  listAiModels,
+  sendAiMessage,
+  setAiSettings
+} from './ai'
 import type {
+  AiProfileAction,
+  AiSendMessageInput,
   AutomationScriptInput,
   AutomationStep,
   BrowserType,
   CreateProfileInput,
+  Fingerprint,
   Profile,
   ProxyInput,
   ProxyResponse,
+  TemplateInput,
   UpdateFingerprintInput,
   UpdateProfileInput
 } from './models'
@@ -71,9 +112,45 @@ const DEFAULT_API_PORT = 17888
 const MAX_BODY_BYTES = 1_000_000
 const BULK_PROXY_MAX_BYTES = 1_000_000
 const BULK_PROXY_MAX_LINES = 10_000
+const BULK_TEST_CONCURRENCY = 25
+const BULK_TEST_MAX_IDS = 500
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const ALLOWED_URL_PROTOCOLS = new Set(['http:', 'https:'])
 const BROWSER_TYPES = new Set<BrowserType>(['chromium', 'firefox', 'edge'])
+const TRANSLATION_TARGET_LANGS = new Set([
+  'en',
+  'ru',
+  'es',
+  'fr',
+  'de',
+  'it',
+  'pt',
+  'zh-CN',
+  'ja',
+  'ko',
+  'tr',
+  'uk',
+  'pl'
+])
+const SETTING_KEYS = new Set([
+  'active_theme_id',
+  'custom_themes',
+  'auto_regenerate_fingerprint',
+  'hardware_identity_lockdown',
+  'translation_enabled',
+  'translation_target_lang',
+  'auto_check_updates',
+  'minimize_to_tray',
+  'max_concurrent_sessions',
+  'auto_start_profiles',
+  'session_timeout_minutes'
+])
+const PENDING_IMPORT_DB = 'lux.db.pending-import'
+const REQUIRED_DB_TABLES = ['profiles', 'fingerprints', 'proxies', 'settings']
+const DATABASE_BACKUP_DIR_NAME = 'Lux Antidetect'
+const SAFE_BACKUP_FILENAME_RE = /^[A-Za-z0-9._ -]+\.db$/i
+const MANAGED_BROWSER_OVERRIDES = new Set(['chrome', 'chromium', 'firefox'])
+const MANAGED_BROWSER_BUILD_ID_RE = /^[A-Za-z0-9._+-]+$/
 
 interface ApiServerConfig {
   enabled: boolean
@@ -540,6 +617,224 @@ function getBodyObject(body: unknown): Record<string, unknown> {
   return body
 }
 
+function validateSettingKey(key: unknown): string {
+  if (typeof key !== 'string' || !SETTING_KEYS.has(key)) {
+    throw new Error('Unsupported setting key')
+  }
+  return key
+}
+
+function validateProfileIdList(raw: unknown, field: string): string[] {
+  if (!Array.isArray(raw)) throw new Error(`${field} must be an array`)
+  if (raw.length > 500) throw new Error('Too many profiles (max 500)')
+  for (const id of raw) assertUuid(String(id))
+  return raw.map(String)
+}
+
+function normalizeSettingValue(key: string, value: unknown): unknown {
+  switch (key) {
+    case 'active_theme_id':
+      if (typeof value !== 'string' || !value.trim() || value.length > 120) {
+        throw new Error('active_theme_id must be a non-empty string')
+      }
+      return value.trim()
+    case 'custom_themes':
+      if (!Array.isArray(value)) throw new Error('custom_themes must be an array')
+      if (value.length > 50 || JSON.stringify(value).length > 200_000) {
+        throw new Error('custom_themes is too large')
+      }
+      return value
+    case 'auto_regenerate_fingerprint':
+    case 'hardware_identity_lockdown':
+    case 'translation_enabled':
+    case 'auto_check_updates':
+    case 'minimize_to_tray':
+      if (typeof value !== 'boolean') throw new Error(`${key} must be a boolean`)
+      return value
+    case 'translation_target_lang':
+      if (typeof value !== 'string' || !TRANSLATION_TARGET_LANGS.has(value)) {
+        throw new Error('translation_target_lang is invalid')
+      }
+      return value
+    case 'max_concurrent_sessions':
+      if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 500) {
+        throw new Error('max_concurrent_sessions must be an integer between 0 and 500')
+      }
+      return value
+    case 'session_timeout_minutes':
+      if (value !== null && (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 10080)) {
+        throw new Error('session_timeout_minutes must be null or an integer between 0 and 10080')
+      }
+      return value
+    case 'auto_start_profiles':
+      return validateProfileIdList(value, 'auto_start_profiles')
+    default:
+      throw new Error('Unsupported setting key')
+  }
+}
+
+const ALLOWED_OVERRIDE_KEYS = [
+  'timezone',
+  'languages',
+  'webrtc_policy',
+  'fonts_list',
+  'canvas_noise_seed',
+  'audio_context_noise'
+] as const satisfies readonly (keyof Fingerprint)[]
+
+function sanitizeOverrides(raw: unknown): Partial<Fingerprint> | undefined {
+  if (raw === null || raw === undefined) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined
+
+  const source = raw as Record<string, unknown>
+  const result: Partial<Fingerprint> = Object.create(null)
+  let hasKey = false
+  for (const key of ALLOWED_OVERRIDE_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue
+    const value = source[key]
+    if (value === undefined) continue
+    ;(result as Record<string, unknown>)[key] = value
+    hasKey = true
+  }
+  return hasKey ? result : undefined
+}
+
+function assertLocalExtDir(p: unknown, profilesDir: string, profileId: string): string {
+  if (typeof p !== 'string' || p.trim().length === 0) {
+    throw new Error('Extension path is required')
+  }
+  const abs = resolve(p)
+  const allowedRoot = resolve(join(profilesDir, profileId))
+  if (!(abs + '\\').startsWith(allowedRoot + '\\') && !(abs + '/').startsWith(allowedRoot + '/')) {
+    throw new Error('Extension path is outside the profile directory')
+  }
+  let st
+  try {
+    st = statSync(abs)
+  } catch {
+    throw new Error('Extension path does not exist')
+  }
+  if (!st.isDirectory()) throw new Error('Extension path must be a directory')
+  if (!existsSync(join(abs, 'manifest.json'))) {
+    throw new Error('Extension directory is missing manifest.json')
+  }
+  return abs
+}
+
+function readManifestNameSync(extDir: string): string | null {
+  try {
+    const raw = readFileSync(join(extDir, 'manifest.json'), 'utf8')
+    const parsed = JSON.parse(raw) as { name?: unknown }
+    if (typeof parsed.name === 'string') {
+      const name = parsed.name.trim()
+      if (name.length > 0 && !name.startsWith('__MSG_')) return name
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+function getDbPath(db: Database.Database): string {
+  const dbPath = (db as Database.Database & { name?: string }).name
+  if (!dbPath || dbPath === ':memory:') throw new Error('Database file path is not available')
+  return dbPath
+}
+
+function validateManagedBrowserOverride(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined
+  if (typeof raw !== 'string' || !MANAGED_BROWSER_OVERRIDES.has(raw)) {
+    throw new Error('browser must be chrome, chromium, or firefox')
+  }
+  return raw
+}
+
+function validateManagedBrowserBuildId(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined
+  if (
+    typeof raw !== 'string' ||
+    raw === '.' ||
+    raw === '..' ||
+    raw.includes('/') ||
+    raw.includes('\\') ||
+    !MANAGED_BROWSER_BUILD_ID_RE.test(raw)
+  ) {
+    throw new Error('Invalid browser buildId')
+  }
+  return raw
+}
+
+function defaultBackupFileName(): string {
+  return `lux-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.db`
+}
+
+function resolveDatabaseExportPath(rawPath: unknown, overwrite: boolean): string {
+  const backupDir = join(app.getPath('documents'), DATABASE_BACKUP_DIR_NAME)
+  const rawName = typeof rawPath === 'string' && rawPath.trim() ? rawPath.trim() : defaultBackupFileName()
+  if (isAbsolute(rawName) || rawName.includes('/') || rawName.includes('\\')) {
+    throw new Error(`Database export path must be a filename inside ${backupDir}`)
+  }
+  const fileName = rawName.toLowerCase().endsWith('.db') ? rawName : `${rawName}.db`
+  if (!SAFE_BACKUP_FILENAME_RE.test(fileName)) {
+    throw new Error('Database export filename may only contain letters, numbers, spaces, dot, underscore, and dash')
+  }
+  const targetPath = join(backupDir, fileName)
+  if (existsSync(targetPath) && !overwrite) {
+    throw new Error('Database export target already exists; pass overwrite=true to replace it')
+  }
+  return targetPath
+}
+
+async function validateDatabaseBackup(filePath: string): Promise<string | null> {
+  let fd: number | undefined
+  try {
+    fd = openSync(filePath, 'r')
+    const headerBuf = Buffer.alloc(16)
+    readSync(fd, headerBuf, 0, 16, 0)
+    closeSync(fd)
+    fd = undefined
+    if (!headerBuf.toString().startsWith('SQLite format 3')) {
+      return 'Not a valid SQLite database'
+    }
+  } catch (err) {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        /* ignore */
+      }
+    }
+    return `Failed to read file: ${err instanceof Error ? err.message : 'Unknown error'}`
+  }
+
+  const { default: DatabaseCtor } = await import('better-sqlite3')
+  let candidate: Database.Database | null = null
+  try {
+    candidate = new DatabaseCtor(filePath, { readonly: true, fileMustExist: true })
+    const integrity = candidate.pragma('integrity_check', { simple: true })
+    if (integrity !== 'ok') return 'SQLite integrity check failed'
+
+    const placeholders = REQUIRED_DB_TABLES.map(() => '?').join(',')
+    const rows = candidate
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`)
+      .all(...REQUIRED_DB_TABLES) as { name: string }[]
+    const present = new Set(rows.map((row) => row.name))
+    const missing = REQUIRED_DB_TABLES.filter((name) => !present.has(name))
+    if (missing.length > 0) {
+      return `Database backup is missing required table(s): ${missing.join(', ')}`
+    }
+    return null
+  } catch (err) {
+    return `Failed to validate database: ${err instanceof Error ? err.message : 'Unknown error'}`
+  } finally {
+    try {
+      candidate?.close()
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function getProfileStatus(db: Database.Database, profileId: string): Record<string, unknown> {
   const detail = getProfile(db, profileId)
   const session = getSession(profileId)
@@ -607,7 +902,7 @@ async function handleApiRequest(
     sendJson(res, 204, null, {
       'access-control-allow-origin': 'http://127.0.0.1',
       'access-control-allow-headers': 'authorization,content-type,x-lux-token',
-      'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS'
+      'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS'
     })
     return
   }
@@ -668,6 +963,26 @@ async function handleApiRequest(
     return
   }
 
+  if (parts[0] === 'fingerprints') {
+    await handleFingerprints(req, res, parts.slice(1), body)
+    return
+  }
+
+  if (parts[0] === 'settings') {
+    await handleSettings(req, res, parts.slice(1), body, context)
+    return
+  }
+
+  if (parts[0] === 'templates') {
+    await handleTemplates(req, res, parts.slice(1), body, context)
+    return
+  }
+
+  if (parts[0] === 'ai') {
+    await handleAi(req, res, parts.slice(1), body, context)
+    return
+  }
+
   if (parts[0] === 'bulk') {
     await handleBulk(req, res, parts.slice(1), body, context)
     return
@@ -680,6 +995,26 @@ async function handleApiRequest(
 
   if (parts[0] === 'webhooks') {
     await handleWebhooks(req, res, parts.slice(1), body, context)
+    return
+  }
+
+  if (parts[0] === 'managed-browsers') {
+    await handleManagedBrowsers(req, res, parts.slice(1), body)
+    return
+  }
+
+  if (parts[0] === 'updates') {
+    await handleUpdates(req, res, parts.slice(1))
+    return
+  }
+
+  if (parts[0] === 'database') {
+    await handleDatabase(req, res, parts.slice(1), body, context)
+    return
+  }
+
+  if (parts[0] === 'system') {
+    await handleSystem(req, res, parts.slice(1), body, context)
     return
   }
 
@@ -867,6 +1202,145 @@ async function handleProfiles(
     sendOk(res, result)
     return
   }
+  if (req.method === 'POST' && action === 'wipe-data') {
+    await wipeProfileBrowserData(db, profileId, profilesDir)
+    publishEvent('profile.data.wiped', { profile_id: profileId })
+    sendOk(res)
+    return
+  }
+  if (action === 'bookmarks') {
+    await handleProfileBookmarks(req, res, profileId, parts.slice(2), body, context)
+    return
+  }
+  if (action === 'extensions') {
+    await handleProfileExtensions(req, res, profileId, parts.slice(2), body, context)
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleProfileBookmarks(
+  req: IncomingMessage,
+  res: ServerResponse,
+  profileId: string,
+  parts: string[],
+  body: unknown,
+  context: NonNullable<typeof activeContext>
+): Promise<void> {
+  const { db } = context
+  const bookmarkId = parts[0]
+
+  if (!bookmarkId) {
+    if (req.method === 'GET') {
+      sendOk(
+        res,
+        db.prepare('SELECT * FROM profile_bookmarks WHERE profile_id = ? ORDER BY created_at DESC').all(profileId)
+      )
+      return
+    }
+    if (req.method === 'POST') {
+      const payload = getBodyObject(body)
+      const validatedUrl = validateHttpUrl(payload.url, 'url')
+      if (validatedUrl === undefined) throw new Error('url is required')
+      const id = uuidv4()
+      const title = typeof payload.title === 'string' && payload.title.trim()
+        ? payload.title.trim()
+        : validatedUrl
+      db.prepare('INSERT INTO profile_bookmarks (id, profile_id, title, url) VALUES (?, ?, ?, ?)')
+        .run(id, profileId, title, validatedUrl)
+      publishEvent('profile.bookmark.created', { profile_id: profileId, bookmark_id: id })
+      sendOk(res, db.prepare('SELECT * FROM profile_bookmarks WHERE id = ?').get(id))
+      return
+    }
+    sendError(res, 404, 'Not found')
+    return
+  }
+
+  assertUuid(bookmarkId)
+  if (req.method === 'DELETE') {
+    db.prepare('DELETE FROM profile_bookmarks WHERE id = ? AND profile_id = ?').run(bookmarkId, profileId)
+    publishEvent('profile.bookmark.deleted', { profile_id: profileId, bookmark_id: bookmarkId })
+    sendOk(res)
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleProfileExtensions(
+  req: IncomingMessage,
+  res: ServerResponse,
+  profileId: string,
+  parts: string[],
+  body: unknown,
+  context: NonNullable<typeof activeContext>
+): Promise<void> {
+  const { db, profilesDir } = context
+  const extId = parts[0]
+
+  if (!extId) {
+    if (req.method === 'GET') {
+      sendOk(
+        res,
+        db.prepare('SELECT * FROM profile_extensions WHERE profile_id = ? ORDER BY created_at DESC').all(profileId)
+      )
+      return
+    }
+    if (req.method === 'POST') {
+      const payload = getBodyObject(body)
+      const normalizedPath = assertLocalExtDir(payload.path ?? payload.extPath, profilesDir, profileId)
+      const name = readManifestNameSync(normalizedPath) ?? normalizedPath.split(/[\\/]/).pop() ?? 'Extension'
+      const id = uuidv4()
+      db.prepare(
+        'INSERT INTO profile_extensions (id, profile_id, name, path, enabled) VALUES (?, ?, ?, ?, 1)'
+      ).run(id, profileId, name, normalizedPath)
+      publishEvent('profile.extension.added', { profile_id: profileId, extension_id: id })
+      sendOk(res, db.prepare('SELECT * FROM profile_extensions WHERE id = ?').get(id))
+      return
+    }
+    sendError(res, 404, 'Not found')
+    return
+  }
+
+  if (extId === 'install-crx' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const crxPath = typeof payload.crxPath === 'string' ? payload.crxPath.trim() : ''
+    if (!crxPath) throw new Error('crxPath is required')
+    if (!crxPath.toLowerCase().endsWith('.crx')) throw new Error('File must have .crx extension')
+    const profileRow = db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profileRow) throw new Error('Profile not found')
+    const installed = await installCrxIntoProfile(crxPath, profileId, profilesDir)
+    const id = uuidv4()
+    try {
+      db.prepare(
+        'INSERT INTO profile_extensions (id, profile_id, name, path, enabled) VALUES (?, ?, ?, ?, 1)'
+      ).run(id, profileId, installed.extensionName, installed.extensionDir)
+    } catch (err) {
+      await fsp.rm(installed.extensionDir, { recursive: true, force: true }).catch(() => {})
+      throw err
+    }
+    publishEvent('profile.extension.installed', { profile_id: profileId, extension_id: id })
+    sendOk(res, db.prepare('SELECT * FROM profile_extensions WHERE id = ?').get(id))
+    return
+  }
+
+  assertUuid(extId)
+  if (req.method === 'PATCH') {
+    const payload = getBodyObject(body)
+    const enabled = payload.enabled === true
+    db.prepare('UPDATE profile_extensions SET enabled = ? WHERE id = ? AND profile_id = ?')
+      .run(enabled ? 1 : 0, extId, profileId)
+    publishEvent('profile.extension.updated', { profile_id: profileId, extension_id: extId, enabled })
+    sendOk(res, { ok: true })
+    return
+  }
+  if (req.method === 'DELETE') {
+    db.prepare('DELETE FROM profile_extensions WHERE id = ? AND profile_id = ?').run(extId, profileId)
+    publishEvent('profile.extension.removed', { profile_id: profileId, extension_id: extId })
+    sendOk(res)
+    return
+  }
 
   sendError(res, 404, 'Not found')
 }
@@ -966,8 +1440,55 @@ async function handleProxies(
     return
   }
 
+  if (proxyId === 'groups' && req.method === 'GET') {
+    sendOk(res, getProxyGroups(db))
+    return
+  }
+
   if (proxyId === 'bulk-import' && req.method === 'POST') {
     sendOk(res, await bulkImportProxies(db, getBodyObject(body)))
+    return
+  }
+
+  if (proxyId === 'bulk-test' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    if (!Array.isArray(payload.proxyIds)) throw new Error('proxyIds must be an array')
+    const proxyIds = payload.proxyIds.map((id) => String(id))
+    if (proxyIds.length > BULK_TEST_MAX_IDS) {
+      throw new Error(`Too many proxies (max ${BULK_TEST_MAX_IDS})`)
+    }
+    const results: { id: string; ok: boolean }[] = new Array(proxyIds.length)
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const index = next++
+        if (index >= proxyIds.length) return
+        const id = proxyIds[index]
+        try {
+          assertUuid(id)
+          results[index] = { id, ok: await testProxy(db, id) }
+        } catch {
+          results[index] = { id, ok: false }
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(BULK_TEST_CONCURRENCY, proxyIds.length) }, () => worker())
+    )
+    sendOk(res, results)
+    return
+  }
+
+  if (proxyId === 'dry-run-fraud-check' && req.method === 'POST') {
+    sendOk(res, await dryRunProxyMetadata(getBodyObject(body) as unknown as ProxyInput))
+    return
+  }
+
+  if (proxyId === 'lookup-fraud-by-ip' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    if (typeof payload.ip !== 'string') throw new Error('ip is required')
+    if (payload.ip.length > 64) throw new Error('IP string too long')
+    sendOk(res, await lookupFraudByIp(payload.ip))
     return
   }
 
@@ -996,6 +1517,417 @@ async function handleProxies(
     if (bundle) syncFingerprintsForProxy(db, proxyId)
     publishEvent('proxy.geo.updated', { proxy_id: proxyId, geo: bundle })
     sendOk(res, bundle)
+    return
+  }
+  if (req.method === 'GET' && parts[1] === 'connection-string') {
+    const row = db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as
+      | { protocol: string; host: string; port: number; username: string | null; password: string | null }
+      | undefined
+    if (!row) throw new Error('Proxy not found')
+    const auth =
+      row.username || row.password
+        ? `${encodeURIComponent(row.username ?? '')}:${encodeURIComponent(row.password ?? '')}@`
+        : ''
+    sendOk(res, `${row.protocol}://${auth}${row.host}:${row.port}`)
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleFingerprints(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  body: unknown
+): Promise<void> {
+  if (parts[0] === 'presets') {
+    if (parts.length === 1 && req.method === 'GET') {
+      sendOk(res, listFingerprintPresets())
+      return
+    }
+    if (parts[1] && parts[2] === 'generate' && req.method === 'POST') {
+      sendOk(res, generateFingerprintFromPreset(parts[1], sanitizeOverrides(getBodyObject(body).overrides)))
+      return
+    }
+  }
+
+  if (parts[0] === 'generate' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const browserType = payload.browserType ?? payload.browser_type
+    if (!BROWSER_TYPES.has(browserType as BrowserType)) {
+      throw new Error('browser_type must be chromium, firefox, or edge')
+    }
+    sendOk(res, generateDefaultFingerprint(browserType as BrowserType))
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleSettings(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  body: unknown,
+  context: NonNullable<typeof activeContext>
+): Promise<void> {
+  const key = parts[0]
+  if (!key) {
+    if (req.method === 'GET') {
+      sendOk(
+        res,
+        Object.fromEntries([...SETTING_KEYS].map((settingKey) => [settingKey, getSetting(context.db, settingKey)]))
+      )
+      return
+    }
+    sendError(res, 404, 'Not found')
+    return
+  }
+
+  const validatedKey = validateSettingKey(key)
+  if (req.method === 'GET') {
+    sendOk(res, getSetting(context.db, validatedKey))
+    return
+  }
+  if (req.method === 'PUT' || req.method === 'PATCH' || req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const normalized = normalizeSettingValue(validatedKey, payload.value)
+    setSetting(context.db, validatedKey, normalized)
+    publishEvent('setting.updated', { key: validatedKey })
+    sendOk(res, { key: validatedKey, value: normalized })
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleTemplates(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  body: unknown,
+  context: NonNullable<typeof activeContext>
+): Promise<void> {
+  const { db, profilesDir } = context
+  const templateId = parts[0]
+
+  if (!templateId) {
+    if (req.method === 'GET') {
+      sendOk(res, db.prepare('SELECT * FROM templates ORDER BY updated_at DESC').all())
+      return
+    }
+    if (req.method === 'POST') {
+      const input = getBodyObject(body) as unknown as TemplateInput
+      if (!input.name || typeof input.name !== 'string') throw new Error('Template name is required')
+      if (!BROWSER_TYPES.has(input.browser_type)) {
+        throw new Error('browser_type must be chromium, firefox, or edge')
+      }
+      const id = uuidv4()
+      const now = new Date().toISOString()
+      db.prepare(
+        `INSERT INTO templates (id, name, description, browser_type, config, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(id, input.name, input.description ?? '', input.browser_type, JSON.stringify(input.config ?? {}), now, now)
+      publishEvent('template.created', { template_id: id })
+      sendOk(res, db.prepare('SELECT * FROM templates WHERE id = ?').get(id))
+      return
+    }
+    sendError(res, 404, 'Not found')
+    return
+  }
+
+  assertUuid(templateId)
+  const existing = db.prepare('SELECT * FROM templates WHERE id = ?').get(templateId) as
+    | Record<string, unknown>
+    | undefined
+  if (!existing) throw new Error(`Template not found: ${templateId}`)
+
+  if (req.method === 'GET' && parts.length === 1) {
+    sendOk(res, existing)
+    return
+  }
+  if (req.method === 'PATCH' && parts.length === 1) {
+    const input = getBodyObject(body) as Partial<TemplateInput>
+    if (input.browser_type !== undefined && !BROWSER_TYPES.has(input.browser_type)) {
+      throw new Error('browser_type must be chromium, firefox, or edge')
+    }
+    const now = new Date().toISOString()
+    db.prepare(
+      `UPDATE templates SET name = ?, description = ?, browser_type = ?, config = ?, updated_at = ? WHERE id = ?`
+    ).run(
+      input.name ?? existing.name,
+      input.description ?? existing.description,
+      input.browser_type ?? existing.browser_type,
+      input.config ? JSON.stringify(input.config) : existing.config,
+      now,
+      templateId
+    )
+    publishEvent('template.updated', { template_id: templateId })
+    sendOk(res, db.prepare('SELECT * FROM templates WHERE id = ?').get(templateId))
+    return
+  }
+  if (req.method === 'DELETE' && parts.length === 1) {
+    db.prepare('DELETE FROM templates WHERE id = ?').run(templateId)
+    publishEvent('template.deleted', { template_id: templateId })
+    sendOk(res)
+    return
+  }
+  if (req.method === 'POST' && parts[1] === 'create-profile') {
+    const payload = getBodyObject(body)
+    if (typeof payload.name !== 'string' || !payload.name.trim()) {
+      throw new Error('Profile name is required')
+    }
+    const config = JSON.parse(String(existing.config ?? '{}')) as Record<string, unknown>
+    const input: CreateProfileInput = {
+      name: payload.name.trim(),
+      browser_type: existing.browser_type as BrowserType,
+      group_name: config.group_name as string | undefined,
+      group_color: config.group_color as string | undefined,
+      notes: config.notes as string | undefined,
+      proxy_id: config.proxy_id as string | undefined,
+      start_url: config.start_url as string | undefined,
+      fingerprint: config.fingerprint as Partial<Record<string, unknown>> | undefined
+    }
+    const profile = await createProfile(db, sanitizeProfileInput(input, true), profilesDir)
+    publishEvent('profile.created', { profile_id: profile.id, template_id: templateId, profile })
+    sendOk(res, profile)
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleAi(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  body: unknown,
+  context: NonNullable<typeof activeContext>
+): Promise<void> {
+  const { db } = context
+  if (parts[0] === 'settings') {
+    if (req.method === 'GET') {
+      sendOk(res, getAiSettings(db))
+      return
+    }
+    if (req.method === 'PATCH' || req.method === 'POST') {
+      sendOk(
+        res,
+        setAiSettings(
+          db,
+          getBodyObject(body) as {
+            apiKey?: string
+            model?: string
+            proxyId?: string | null
+            clearApiKey?: boolean
+          }
+        )
+      )
+      return
+    }
+  }
+
+  if (parts[0] === 'models' && req.method === 'GET') {
+    sendOk(res, await listAiModels(db))
+    return
+  }
+
+  if (parts[0] === 'chats') {
+    const chatId = parts[1]
+    if (!chatId) {
+      if (req.method === 'GET') {
+        sendOk(res, listAiChats(db))
+        return
+      }
+      if (req.method === 'POST') {
+        const payload = getBodyObject(body)
+        sendOk(res, createAiChat(db, typeof payload.title === 'string' ? payload.title : undefined))
+        return
+      }
+      sendError(res, 404, 'Not found')
+      return
+    }
+    assertUuid(chatId)
+    if (req.method === 'DELETE' && parts.length === 2) {
+      deleteAiChat(db, chatId)
+      sendOk(res)
+      return
+    }
+    if (req.method === 'GET' && parts[2] === 'messages') {
+      sendOk(res, listAiMessages(db, chatId))
+      return
+    }
+  }
+
+  if (parts[0] === 'messages' && req.method === 'POST') {
+    sendOk(res, await sendAiMessage(db, getBodyObject(body) as unknown as AiSendMessageInput))
+    return
+  }
+
+  if (parts[0] === 'actions' && parts[1] === 'apply' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const actions = Array.isArray(payload.actions) ? payload.actions : payload
+    sendOk(res, applyAiActions(db, actions as AiProfileAction[]))
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleManagedBrowsers(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  body: unknown
+): Promise<void> {
+  if (!parts[0] && req.method === 'GET') {
+    sendOk(res, await listManagedBrowsers())
+    return
+  }
+  if (parts[0] === 'available' && req.method === 'GET') {
+    sendOk(res, await getAvailableBrowsers())
+    return
+  }
+  if (parts[0] === 'download' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const browserType = payload.browserType ?? payload.browser_type
+    if (!BROWSER_TYPES.has(browserType as BrowserType)) {
+      throw new Error('browser_type must be chromium, firefox, or edge')
+    }
+    sendOk(
+      res,
+      await downloadBrowser(
+        browserType as BrowserType,
+        typeof payload.channel === 'string' ? payload.channel : 'stable',
+        validateManagedBrowserOverride(payload.browser),
+        validateManagedBrowserBuildId(payload.buildId)
+      )
+    )
+    return
+  }
+  if (parts[0] === 'cancel' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const browser = validateManagedBrowserOverride(payload.browser)
+    const buildId = validateManagedBrowserBuildId(payload.buildId)
+    if (!browser || !buildId) {
+      throw new Error('browser and buildId are required')
+    }
+    sendOk(res, cancelDownload(browser, buildId))
+    return
+  }
+  if (parts[0] && parts[1] && req.method === 'DELETE') {
+    await removeManagedBrowser(decodeURIComponent(parts[0]), decodeURIComponent(parts[1]))
+    sendOk(res)
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleUpdates(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[]
+): Promise<void> {
+  if (parts[0] === 'state' && req.method === 'GET') {
+    sendOk(res, getUpdateState())
+    return
+  }
+  if (parts[0] === 'check' && req.method === 'POST') {
+    try {
+      await checkForUpdates()
+      sendOk(res, { success: true })
+    } catch (err) {
+      sendOk(res, { success: false, error: err instanceof Error ? err.message : 'Update check failed' })
+    }
+    return
+  }
+  if (parts[0] === 'clear-error' && (req.method === 'POST' || req.method === 'DELETE')) {
+    sendOk(res, clearUpdateErrorState())
+    return
+  }
+  if (parts[0] === 'install' && req.method === 'POST') {
+    installUpdate()
+    sendOk(res)
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleDatabase(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  body: unknown,
+  context: NonNullable<typeof activeContext>
+): Promise<void> {
+  const { db } = context
+  if (parts[0] === 'export' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const targetPath = resolveDatabaseExportPath(payload.path ?? payload.fileName, payload.overwrite === true)
+    mkdirSync(dirname(targetPath), { recursive: true })
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)')
+    } catch {
+      /* best effort */
+    }
+    copyFileSync(getDbPath(db), targetPath)
+    sendOk(res, { path: targetPath })
+    return
+  }
+
+  if (parts[0] === 'import' && req.method === 'POST') {
+    const payload = getBodyObject(body)
+    const sourcePath = typeof payload.path === 'string' ? payload.path.trim() : ''
+    if (!sourcePath) throw new Error('path is required')
+    const absoluteSource = isAbsolute(sourcePath) ? sourcePath : resolve(app.getPath('documents'), sourcePath)
+    const validationError = await validateDatabaseBackup(absoluteSource)
+    if (validationError) {
+      sendError(res, 400, validationError)
+      return
+    }
+    const pendingPath = join(dirname(getDbPath(db)), PENDING_IMPORT_DB)
+    copyFileSync(absoluteSource, pendingPath)
+    publishEvent('database.import.pending', { path: pendingPath })
+    sendOk(res, { requiresRestart: true, path: pendingPath })
+    return
+  }
+
+  sendError(res, 404, 'Not found')
+}
+
+async function handleSystem(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parts: string[],
+  body: unknown,
+  context: NonNullable<typeof activeContext>
+): Promise<void> {
+  if (parts[0] === 'autostart') {
+    if (req.method === 'GET') {
+      sendOk(res, app.getLoginItemSettings().openAtLogin)
+      return
+    }
+    if (req.method === 'PUT' || req.method === 'PATCH' || req.method === 'POST') {
+      const enabled = getBodyObject(body).enabled === true
+      app.setLoginItemSettings({ openAtLogin: enabled })
+      sendOk(res, app.getLoginItemSettings().openAtLogin)
+      return
+    }
+  }
+
+  if (parts[0] === 'minimize-to-tray' && (req.method === 'PUT' || req.method === 'PATCH' || req.method === 'POST')) {
+    const enabled = getBodyObject(body).enabled === true
+    setSetting(context.db, 'minimize_to_tray', enabled)
+    publishEvent('setting.updated', { key: 'minimize_to_tray' })
+    sendOk(res, enabled)
+    return
+  }
+
+  if (parts[0] === 'api' && req.method === 'GET') {
+    sendOk(res, getLocalApiStatus(context.db))
     return
   }
 
@@ -1037,6 +1969,19 @@ async function handleBulk(
     for (const id of profileIds as string[]) {
       try {
         await stopBrowser(context.db, id, context.getMainWindow())
+        results.push({ id, ok: true })
+      } catch (err) {
+        results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
+      }
+    }
+    sendOk(res, results)
+    return
+  }
+  if (parts[0] === 'delete') {
+    for (const id of profileIds as string[]) {
+      try {
+        await deleteProfile(context.db, id, context.profilesDir)
+        publishEvent('profile.deleted', { profile_id: id })
         results.push({ id, ok: true })
       } catch (err) {
         results.push({ id, ok: false, error: err instanceof Error ? err.message : 'Failed' })
@@ -1379,6 +2324,7 @@ function buildOpenApi(config: ApiServerConfig): Record<string, unknown> {
       '/profiles/{id}/status': { get: { summary: 'Get profile lifecycle status' } },
       '/profiles/{id}/health': { get: { summary: 'Get profile coherence and health score' } },
       '/profiles/{id}/health/autofix': { post: { summary: 'Auto-fix safe profile coherence issues' } },
+      '/profiles/{id}/wipe-data': { post: { summary: 'Wipe stopped profile browser data' } },
       '/profiles/{id}/proxy': { post: { summary: 'Bind or clear profile proxy' } },
       '/profiles/{id}/duplicate': { post: { summary: 'Duplicate profile' } },
       '/profiles/{id}/launch': { post: { summary: 'Launch profile browser' } },
@@ -1389,20 +2335,57 @@ function buildOpenApi(config: ApiServerConfig): Record<string, unknown> {
       '/profiles/{id}/execute-js': { post: { summary: 'Execute JavaScript in a profile tab' } },
       '/profiles/{id}/cookies': { get: { summary: 'Export cookies from a running profile' } },
       '/profiles/{id}/cookies/import': { post: { summary: 'Import cookies into a running profile' } },
+      '/profiles/{id}/bookmarks': { get: { summary: 'List profile bookmarks' }, post: { summary: 'Add profile bookmark' } },
+      '/profiles/{id}/bookmarks/{bookmarkId}': { delete: { summary: 'Remove profile bookmark' } },
+      '/profiles/{id}/extensions': { get: { summary: 'List profile extensions' }, post: { summary: 'Register unpacked profile extension' } },
+      '/profiles/{id}/extensions/install-crx': { post: { summary: 'Install CRX into profile' } },
+      '/profiles/{id}/extensions/{extensionId}': {
+        patch: { summary: 'Toggle profile extension' },
+        delete: { summary: 'Remove profile extension registration' }
+      },
       '/profiles/{id}/screenshot': {
         get: { summary: 'Capture profile screenshot' },
         post: { summary: 'Capture selected tab screenshot' }
       },
+      '/fingerprints/generate': { post: { summary: 'Generate a default fingerprint draft' } },
+      '/fingerprints/presets': { get: { summary: 'List fingerprint presets' } },
+      '/fingerprints/presets/{id}/generate': { post: { summary: 'Generate a fingerprint from a preset' } },
       '/proxies': { get: { summary: 'List proxies' }, post: { summary: 'Create proxy' } },
+      '/proxies/groups': { get: { summary: 'List proxy group tags' } },
       '/proxies/parse': { post: { summary: 'Parse a single proxy line' } },
       '/proxies/bulk-import': { post: { summary: 'Parse and import proxy lines' } },
+      '/proxies/bulk-test': { post: { summary: 'Test many proxies concurrently' } },
+      '/proxies/dry-run-fraud-check': { post: { summary: 'Check unpersisted proxy geo and fraud metadata' } },
+      '/proxies/lookup-fraud-by-ip': { post: { summary: 'Check fraud metadata for an arbitrary IP' } },
       '/proxies/{id}': { patch: { summary: 'Update proxy' }, delete: { summary: 'Delete proxy' } },
+      '/proxies/{id}/connection-string': { get: { summary: 'Return proxy connection string including credentials' } },
       '/proxies/{id}/test': { post: { summary: 'Test proxy connectivity' } },
       '/proxies/{id}/lookup-geo': { post: { summary: 'Refresh proxy geo metadata' } },
+      '/settings': { get: { summary: 'List supported settings and current values' } },
+      '/settings/{key}': {
+        get: { summary: 'Read a supported setting' },
+        put: { summary: 'Update a supported setting' },
+        patch: { summary: 'Update a supported setting' }
+      },
+      '/templates': { get: { summary: 'List templates' }, post: { summary: 'Create template' } },
+      '/templates/{id}': {
+        get: { summary: 'Get template' },
+        patch: { summary: 'Update template' },
+        delete: { summary: 'Delete template' }
+      },
+      '/templates/{id}/create-profile': { post: { summary: 'Create profile from template' } },
+      '/ai/settings': { get: { summary: 'Read AI settings' }, patch: { summary: 'Update AI settings' } },
+      '/ai/models': { get: { summary: 'List AI models' } },
+      '/ai/chats': { get: { summary: 'List AI chats' }, post: { summary: 'Create AI chat' } },
+      '/ai/chats/{id}': { delete: { summary: 'Delete AI chat' } },
+      '/ai/chats/{id}/messages': { get: { summary: 'List AI chat messages' } },
+      '/ai/messages': { post: { summary: 'Send AI message' } },
+      '/ai/actions/apply': { post: { summary: 'Apply AI-proposed profile actions' } },
       '/sessions': { get: { summary: 'List running sessions' } },
       '/session-history': { get: { summary: 'Read session history, optionally filtered by profileId' } },
       '/bulk/launch': { post: { summary: 'Launch profiles' } },
       '/bulk/stop': { post: { summary: 'Stop profiles' } },
+      '/bulk/delete': { post: { summary: 'Delete stopped profiles' } },
       '/automation/scripts': { get: { summary: 'List automation scripts' }, post: { summary: 'Create automation script' } },
       '/automation/scripts/{id}': {
         get: { summary: 'Get automation script' },
@@ -1416,6 +2399,20 @@ function buildOpenApi(config: ApiServerConfig): Record<string, unknown> {
         post: { summary: 'Create/update profile, optionally create proxy, launch, and return CDP info' }
       },
       '/browsers/detect': { get: { summary: 'Detect installed browsers' } },
+      '/managed-browsers': { get: { summary: 'List installed managed browsers' } },
+      '/managed-browsers/available': { get: { summary: 'List downloadable managed browser builds' } },
+      '/managed-browsers/download': { post: { summary: 'Download a managed browser build' } },
+      '/managed-browsers/cancel': { post: { summary: 'Cancel an active managed browser download' } },
+      '/managed-browsers/{browser}/{buildId}': { delete: { summary: 'Remove a managed browser build' } },
+      '/updates/state': { get: { summary: 'Get update state' } },
+      '/updates/check': { post: { summary: 'Check for updates' } },
+      '/updates/clear-error': { post: { summary: 'Clear update error state' }, delete: { summary: 'Clear update error state' } },
+      '/updates/install': { post: { summary: 'Install downloaded update and restart' } },
+      '/database/export': { post: { summary: 'Export SQLite database backup into the Lux backups folder' } },
+      '/database/import': { post: { summary: 'Stage SQLite database backup import for next restart' } },
+      '/system/autostart': { get: { summary: 'Read OS autostart state' }, put: { summary: 'Set OS autostart state' } },
+      '/system/minimize-to-tray': { put: { summary: 'Persist minimize-to-tray setting' } },
+      '/system/api': { get: { summary: 'Read Local API status' } },
       '/webhooks': { get: { summary: 'List webhooks' }, post: { summary: 'Create webhook' } },
       '/webhooks/{id}': { patch: { summary: 'Update webhook' }, delete: { summary: 'Delete webhook' } },
       '/webhooks/deliveries': { get: { summary: 'Recent webhook delivery attempts' } }
