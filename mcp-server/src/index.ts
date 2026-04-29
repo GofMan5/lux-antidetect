@@ -565,12 +565,30 @@ const automationStepSchema: JsonSchema = {
       enum: ['launch', 'open_url', 'wait', 'wait_selector', 'click', 'type', 'evaluate', 'screenshot', 'stop']
     },
     label: { type: 'string' },
+    enabled: {
+      type: 'boolean',
+      description: 'Set false to keep the step in the flow but skip it during execution.'
+    },
     url: { type: 'string', description: 'http/https URL for open_url or launch.' },
     selector: { type: 'string', description: 'CSS selector for wait_selector, click, or type.' },
     text: { type: 'string', description: 'Text for type.' },
     script: { type: 'string', description: 'JavaScript expression for evaluate.' },
-    duration_ms: { type: 'integer', minimum: 1, maximum: 300000 },
-    timeout_ms: { type: 'integer', minimum: 1, maximum: 300000 }
+    duration_ms: { type: 'integer', minimum: 0, maximum: 300000 },
+    timeout_ms: { type: 'integer', minimum: 1, maximum: 300000 },
+    tabId: {
+      type: 'string',
+      description: 'Optional CDP page target id. Prefer urlContains or tabIndex unless an exact target id is known.'
+    },
+    tabIndex: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 100,
+      description: 'Optional zero-based page target index for multi-tab automation.'
+    },
+    urlContains: {
+      type: 'string',
+      description: 'Optional substring used to select the browser tab whose URL contains this value.'
+    }
   }
 }
 
@@ -593,6 +611,31 @@ const tools: ToolDefinition[] = [
   {
     name: 'get_profile',
     description: 'Получить полную информацию о профиле по ID: metadata, fingerprint, proxy.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { profileId: idSchema },
+      required: ['profileId']
+    }
+  },
+  {
+    name: 'list_profile_health',
+    description: 'List Lux profile coherence scores for all profiles. Returns score, status, issues, and fixable count.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
+  {
+    name: 'get_profile_health',
+    description: 'Get one Lux profile coherence score with detailed issues across identity, proxy, geo, network, hardware, and browser signals.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { profileId: idSchema },
+      required: ['profileId']
+    }
+  },
+  {
+    name: 'autofix_profile_health',
+    description: 'Apply safe Lux profile coherence fixes: proxy timezone, navigator languages, and WebRTC policy. Does not change proxy, UA, GPU, or screen.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -896,6 +939,20 @@ async function handleTool(name: string, rawArgs: unknown): Promise<CallToolResul
     case 'get_profile': {
       const profileId = requireString(args, 'profileId')
       return textResult({ ok: true, data: await lux.request('GET', `/profiles/${encodeURIComponent(profileId)}`) })
+    }
+
+    case 'list_profile_health': {
+      return textResult({ ok: true, data: await lux.request('GET', '/profiles/health') })
+    }
+
+    case 'get_profile_health': {
+      const profileId = requireString(args, 'profileId')
+      return textResult({ ok: true, data: await lux.request('GET', `/profiles/${encodeURIComponent(profileId)}/health`) })
+    }
+
+    case 'autofix_profile_health': {
+      const profileId = requireString(args, 'profileId')
+      return textResult({ ok: true, data: await lux.request('POST', `/profiles/${encodeURIComponent(profileId)}/health/autofix`) })
     }
 
     case 'create_profile': {

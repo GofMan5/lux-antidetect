@@ -4,6 +4,8 @@ import type {
   Fingerprint,
   Profile,
   ProfileDetail,
+  ProfileHealthFixResult,
+  ProfileHealthReport,
   ProfileStatus,
   ProxyInput,
   ProxyResponse,
@@ -107,15 +109,6 @@ export interface SessionStateEvent {
   profile_id: SessionEventProfileId
   status: ProfileStatus
   error?: string
-}
-
-export interface ProfileExtension {
-  id: string
-  profile_id: string
-  name: string
-  path: string
-  enabled: number
-  created_at: string
 }
 
 export interface LuxAPI {
@@ -244,6 +237,9 @@ export interface LuxAPI {
 
   checkProcessHealth(): Promise<{ dead: string[] }>
   validateFingerprint(profileId: string): Promise<{ valid: boolean; issues: string[] }>
+  listProfileHealth(): Promise<ProfileHealthReport[]>
+  getProfileHealth(profileId: string): Promise<ProfileHealthReport>
+  autofixProfileHealth(profileId: string): Promise<ProfileHealthFixResult>
 
   // Auto-updates
   checkForUpdates(): Promise<unknown>

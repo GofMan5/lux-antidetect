@@ -96,6 +96,7 @@ import type {
   Profile,
   ProxyResponse,
   FraudRisk,
+  ProfileHealthReport,
   SessionInfo,
   UpdateFingerprintInput
 } from '../lib/types'
@@ -610,6 +611,59 @@ function ProxyChip({ proxy }: ProxyChipProps): React.JSX.Element {
   )
 }
 
+interface HealthChipProps {
+  health: ProfileHealthReport | undefined
+}
+
+function HealthChip({ health }: HealthChipProps): React.JSX.Element {
+  if (!health) {
+    return (
+      <Badge variant="muted" className="hidden sm:inline-flex h-5 min-w-[52px] justify-center">
+        <Shield className="h-3 w-3" />
+        ...
+      </Badge>
+    )
+  }
+
+  const variant = health.status === 'good' ? 'success' : health.status === 'warning' ? 'warning' : 'destructive'
+  const icon = health.status === 'critical' ? <ShieldOff className="h-3 w-3" /> : <Shield className="h-3 w-3" />
+  const topIssues = health.issues.slice(0, 4)
+  const tooltip = (
+    <div className="max-w-[260px] space-y-1 text-[11.5px] leading-snug">
+      <div className="font-semibold text-foreground">Health {health.score}/100</div>
+      <div className="text-muted-foreground">{health.summary}</div>
+      {topIssues.length > 0 && (
+        <div className="space-y-1 pt-1">
+          {topIssues.map((item) => (
+            <div key={item.id}>
+              <span className="font-medium text-foreground">{item.title}</span>
+              <span className="text-muted-foreground"> - {item.detail}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {health.fixable_count > 0 && (
+        <div className="pt-1 text-primary">{health.fixable_count} issue{health.fixable_count === 1 ? '' : 's'} can be auto-fixed</div>
+      )}
+    </div>
+  )
+
+  return (
+    <Tooltip content={tooltip}>
+      <span tabIndex={0} className="hidden sm:inline-flex">
+        <Badge
+          variant={variant}
+          className="h-5 min-w-[52px] justify-center tabular-nums"
+          aria-label={`Profile health ${health.score} of 100. ${health.summary}`}
+        >
+          {icon}
+          {health.score}
+        </Badge>
+      </span>
+    </Tooltip>
+  )
+}
+
 interface TagChipsProps {
   tags: string[]
 }
@@ -646,6 +700,7 @@ function TagChips({ tags }: TagChipsProps): React.JSX.Element | null {
 interface ProfileRowProps {
   profile: Profile
   proxy: ProxyResponse | null
+  health: ProfileHealthReport | undefined
   session: SessionInfo | undefined
   selected: boolean
   focused: boolean
@@ -683,6 +738,7 @@ interface ProfileRowProps {
 function ProfileRowComponent({
   profile,
   proxy,
+  health,
   session,
   selected,
   focused,
@@ -865,6 +921,8 @@ function ProfileRowComponent({
           {status.label}
         </Badge>
       )}
+
+      <HealthChip health={health} />
 
       {/* Name + meta line */}
       <div className="flex-1 min-w-[160px] flex flex-col gap-0.5 leading-tight">
@@ -1076,6 +1134,7 @@ export function ProfilesPage(): React.JSX.Element {
   const initialSort = useMemo(readSortFromStorage, [])
   const [sortKey, setSortKey] = useState<SortKey>(initialSort.key)
   const [sortDir, setSortDir] = useState<SortDir>(initialSort.dir)
+  const [healthByProfile, setHealthByProfile] = useState<Record<string, ProfileHealthReport>>({})
   const [focusedProfileIdx, setFocusedProfileIdx] = useState<number | null>(null)
   const lastCheckedIdx = useRef<number | null>(null)
   const { isCollapsed, toggle: toggleGroupCollapsed } = useGroupCollapsedState()
@@ -1179,6 +1238,23 @@ export function ProfilesPage(): React.JSX.Element {
     fetchSessions()
     fetchProxies()
   }, [fetchProfiles, fetchSessions, fetchProxies])
+
+  const refreshHealth = useCallback(async (): Promise<void> => {
+    try {
+      const reports = await api.listProfileHealth()
+      setHealthByProfile(Object.fromEntries(reports.map((report) => [report.profile_id, report])))
+    } catch {
+      setHealthByProfile({})
+    }
+  }, [])
+
+  useEffect(() => {
+    if (profiles.length === 0) {
+      setHealthByProfile({})
+      return
+    }
+    void refreshHealth()
+  }, [profiles, proxies, refreshHealth])
 
   // Title reflects running count. Reads the derived `runningCount` from the
   // store (kept in sync alongside every profiles mutation) so it doesn't
@@ -1503,6 +1579,26 @@ export function ProfilesPage(): React.JSX.Element {
   )
 
   // ── Import / Export profiles ──────────────────────────────────────────
+
+  const handleAutoFixHealth = useCallback(
+    async (profileId: string, profileName: string): Promise<void> => {
+      try {
+        const result = await api.autofixProfileHealth(profileId)
+        setHealthByProfile((current) => ({ ...current, [profileId]: result.report }))
+        await fetchProfiles()
+        const applied = result.applied.length
+        addToast(
+          applied > 0
+            ? `${profileName}: applied ${applied} coherence fix${applied === 1 ? '' : 'es'}`
+            : `${profileName}: nothing safe to auto-fix`,
+          applied > 0 ? 'success' : 'info'
+        )
+      } catch (err) {
+        addToast(`Auto-fix failed: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+      }
+    },
+    [addToast, fetchProfiles]
+  )
 
   const handleExportProfiles = useCallback(async (): Promise<void> => {
     try {
@@ -1882,6 +1978,13 @@ export function ProfilesPage(): React.JSX.Element {
           onClick: () => handleDuplicate(profileId)
         },
         {
+          label: 'Auto-fix health',
+          icon: <Shield className="h-4 w-4" />,
+          onClick: () => {
+            void handleAutoFixHealth(profileId, profileName)
+          }
+        },
+        {
           label: 'Copy ID',
           icon: <ClipboardCopy className="h-4 w-4" />,
           onClick: () => {
@@ -2006,6 +2109,7 @@ export function ProfilesPage(): React.JSX.Element {
       handleLaunch,
       handleEditRow,
       handleDuplicate,
+      handleAutoFixHealth,
       handleExportCookies,
       handleImportCookies,
       handleScreenshot,
@@ -2622,8 +2726,9 @@ export function ProfilesPage(): React.JSX.Element {
               }
 
               const profile = row.profile
-              const proxy = profile.proxy_id ? proxyMap.get(profile.proxy_id) ?? null : null
-              const session = sessionMap.get(profile.id)
+                const proxy = profile.proxy_id ? proxyMap.get(profile.proxy_id) ?? null : null
+                const health = healthByProfile[profile.id]
+                const session = sessionMap.get(profile.id)
               const isSelected = selectedIds.has(profile.id)
               const isFocused = focusedProfileIdx === row.profileIndex
               const isFavorite = favoriteIds.has(profile.id)
@@ -2633,6 +2738,7 @@ export function ProfilesPage(): React.JSX.Element {
                   <ProfileRow
                     profile={profile}
                     proxy={proxy}
+                    health={health}
                     session={session}
                     selected={isSelected}
                     focused={isFocused}

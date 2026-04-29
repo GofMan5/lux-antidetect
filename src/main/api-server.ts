@@ -52,6 +52,7 @@ import {
   runAutomationScript,
   updateAutomationScript
 } from './automation'
+import { autofixProfileHealth, getProfileHealth, listProfileHealth } from './profile-health'
 import type {
   AutomationScriptInput,
   AutomationStep,
@@ -717,6 +718,11 @@ async function handleProfiles(
     }
   }
 
+  if (profileId === 'health' && req.method === 'GET') {
+    sendOk(res, listProfileHealth(db))
+    return
+  }
+
   assertUuid(profileId)
 
   if (parts.length === 1) {
@@ -849,6 +855,16 @@ async function handleProfiles(
     updateFingerprint(db, profileId, getBodyObject(body) as unknown as UpdateFingerprintInput)
     publishEvent('profile.fingerprint.updated', { profile_id: profileId })
     sendOk(res)
+    return
+  }
+  if (req.method === 'GET' && action === 'health') {
+    sendOk(res, getProfileHealth(db, profileId))
+    return
+  }
+  if (req.method === 'POST' && action === 'health' && parts[2] === 'autofix') {
+    const result = autofixProfileHealth(db, profileId)
+    publishEvent('profile.health.autofixed', { profile_id: profileId, applied: result.applied })
+    sendOk(res, result)
     return
   }
 
@@ -1354,12 +1370,15 @@ function buildOpenApi(config: ApiServerConfig): Record<string, unknown> {
       '/events': { get: { summary: 'Server-sent event stream' } },
       '/kill-switch': { post: { summary: 'Stop sessions, rotate token, and disable local API' } },
       '/profiles': { get: { summary: 'List profiles' }, post: { summary: 'Create profile' } },
+      '/profiles/health': { get: { summary: 'List profile coherence and health scores' } },
       '/profiles/{id}': {
         get: { summary: 'Get profile detail' },
         patch: { summary: 'Update profile' },
         delete: { summary: 'Delete profile' }
       },
       '/profiles/{id}/status': { get: { summary: 'Get profile lifecycle status' } },
+      '/profiles/{id}/health': { get: { summary: 'Get profile coherence and health score' } },
+      '/profiles/{id}/health/autofix': { post: { summary: 'Auto-fix safe profile coherence issues' } },
       '/profiles/{id}/proxy': { post: { summary: 'Bind or clear profile proxy' } },
       '/profiles/{id}/duplicate': { post: { summary: 'Duplicate profile' } },
       '/profiles/{id}/launch': { post: { summary: 'Launch profile browser' } },

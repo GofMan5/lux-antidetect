@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import { v4 as uuidv4 } from 'uuid'
 import {
   captureScreenshotCDP,
+  type CdpTargetSelector,
   executeJavaScriptCDP,
   launchBrowser,
   listCdpPageTargets,
@@ -88,13 +89,20 @@ function sanitizeStep(raw: unknown, index: number): AutomationStep {
   const step: AutomationStep = {
     id: optionalString(item.id) ?? uuidv4(),
     type: type as AutomationStepType,
-    label: optionalString(item.label)
+    label: optionalString(item.label),
+    enabled: item.enabled === false ? false : undefined
   }
 
-  if ('url' in item) step.url = validateHttpUrl(item.url, `steps[${index}].url`)
+  if ('url' in item) {
+    const rawUrl = optionalString(item.url)
+    if (rawUrl) step.url = validateHttpUrl(rawUrl, `steps[${index}].url`)
+  }
   if ('selector' in item) step.selector = optionalString(item.selector)
   if ('text' in item) step.text = typeof item.text === 'string' ? item.text : undefined
   if ('script' in item) step.script = optionalString(item.script)
+  if ('tabId' in item) step.tabId = optionalString(item.tabId)
+  if ('urlContains' in item) step.urlContains = optionalString(item.urlContains)
+  step.tabIndex = optionalInt(item.tabIndex, `steps[${index}].tabIndex`, 0, 100)
   step.duration_ms = optionalInt(item.duration_ms, `steps[${index}].duration_ms`, 0, 300_000)
   step.timeout_ms = optionalInt(item.timeout_ms, `steps[${index}].timeout_ms`, 1, 300_000)
 
@@ -110,6 +118,7 @@ function sanitizeStep(raw: unknown, index: number): AutomationStep {
 
 function sanitizeSteps(rawSteps: unknown): AutomationStep[] {
   if (!Array.isArray(rawSteps)) throw new Error('steps must be an array')
+  if (rawSteps.length === 0) throw new Error('steps must contain at least one step')
   if (rawSteps.length > MAX_STEPS) throw new Error(`Too many steps (max ${MAX_STEPS})`)
   const bytes = Buffer.byteLength(JSON.stringify(rawSteps), 'utf8')
   if (bytes > MAX_SCRIPT_BYTES) throw new Error(`Automation script is too large (max ${MAX_SCRIPT_BYTES} bytes)`)
@@ -274,10 +283,23 @@ function jsString(value: string): string {
   return JSON.stringify(value)
 }
 
-async function waitForSelector(ctx: RunContext, selector: string, timeoutMs: number): Promise<void> {
+function targetSelector(step: AutomationStep): CdpTargetSelector {
+  return {
+    tabId: step.tabId,
+    tabIndex: step.tabIndex,
+    urlContains: step.urlContains
+  }
+}
+
+async function waitForSelector(ctx: RunContext, step: AutomationStep, timeoutMs: number): Promise<void> {
+  const selector = step.selector ?? ''
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
-    const result = await executeJavaScriptCDP(ctx.profileId, `Boolean(document.querySelector(${jsString(selector)}))`)
+    const result = await executeJavaScriptCDP(
+      ctx.profileId,
+      `Boolean(document.querySelector(${jsString(selector)}))`,
+      targetSelector(step)
+    )
     const value = (result as { result?: { value?: unknown } })?.result?.value
     if (value === true) return
     await wait(DEFAULT_WAIT_SELECTOR_INTERVAL_MS)
@@ -286,6 +308,10 @@ async function waitForSelector(ctx: RunContext, selector: string, timeoutMs: num
 }
 
 async function runStep(ctx: RunContext, step: AutomationStep, index: number): Promise<void> {
+  if (step.enabled === false) {
+    addLog(ctx.logs, step.label || `Skipped ${step.type}`, { step_index: index, step_type: step.type, level: 'warn' })
+    return
+  }
   addLog(ctx.logs, step.label || `Running ${step.type}`, { step_index: index, step_type: step.type })
 
   switch (step.type) {
@@ -299,10 +325,10 @@ async function runStep(ctx: RunContext, step: AutomationStep, index: number): Pr
       await wait(step.duration_ms ?? 1000)
       return
     case 'wait_selector':
-      await waitForSelector(ctx, step.selector ?? '', step.timeout_ms ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS)
+      await waitForSelector(ctx, step, step.timeout_ms ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS)
       return
     case 'click':
-      await waitForSelector(ctx, step.selector ?? '', step.timeout_ms ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS)
+      await waitForSelector(ctx, step, step.timeout_ms ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS)
       await executeJavaScriptCDP(
         ctx.profileId,
         `(() => {
@@ -311,11 +337,12 @@ async function runStep(ctx: RunContext, step: AutomationStep, index: number): Pr
           el.scrollIntoView({ block: 'center', inline: 'center' });
           el.click();
           return true;
-        })()`
+        })()`,
+        targetSelector(step)
       )
       return
     case 'type':
-      await waitForSelector(ctx, step.selector ?? '', step.timeout_ms ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS)
+      await waitForSelector(ctx, step, step.timeout_ms ?? DEFAULT_WAIT_SELECTOR_TIMEOUT_MS)
       await executeJavaScriptCDP(
         ctx.profileId,
         `(() => {
@@ -329,11 +356,12 @@ async function runStep(ctx: RunContext, step: AutomationStep, index: number): Pr
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
           return true;
-        })()`
+        })()`,
+        targetSelector(step)
       )
       return
     case 'evaluate': {
-      const result = await executeJavaScriptCDP(ctx.profileId, step.script ?? '')
+      const result = await executeJavaScriptCDP(ctx.profileId, step.script ?? '', targetSelector(step))
       addLog(ctx.logs, 'JavaScript evaluated', {
         step_index: index,
         step_type: step.type,
@@ -342,7 +370,7 @@ async function runStep(ctx: RunContext, step: AutomationStep, index: number): Pr
       return
     }
     case 'screenshot': {
-      const data = await captureScreenshotCDP(ctx.profileId, { format: 'png', fullPage: true })
+      const data = await captureScreenshotCDP(ctx.profileId, { ...targetSelector(step), format: 'png', fullPage: true })
       addLog(ctx.logs, 'Screenshot captured', {
         step_index: index,
         step_type: step.type,
@@ -372,9 +400,9 @@ export async function runAutomationScript(
   const profile = db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
   if (!profile) throw new Error('Profile not found')
 
-  const run = createRun(db, script.id, profileId)
   const logs: AutomationRunLog[] = []
   const steps = parseSavedSteps(script.steps)
+  const run = createRun(db, script.id, profileId)
   addLog(logs, `Started ${script.name}`, { data: { steps: steps.length, profileId } })
 
   try {

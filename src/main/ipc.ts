@@ -29,6 +29,7 @@ import {
   runAutomationScript,
   updateAutomationScript
 } from './automation'
+import { autofixProfileHealth, getProfileHealth, listProfileHealth } from './profile-health'
 import { generateDefaultFingerprint } from './fingerprint'
 import { listFingerprintPresets, generateFingerprintFromPreset } from './fingerprint-presets'
 import { checkForUpdates, clearUpdateErrorState, getUpdateState, installUpdate } from './updater'
@@ -1014,28 +1015,21 @@ export function registerIpcHandlers(
   // Fingerprint validation
   ipcMain.handle('validate-fingerprint', (_, profileId: string) => {
     assertUuid(profileId)
-    const fp = db.prepare('SELECT * FROM fingerprints WHERE profile_id = ?').get(profileId) as Record<string, unknown> | undefined
-    if (!fp) throw new Error('Fingerprint not found')
-    const issues: string[] = []
+    const health = getProfileHealth(db, profileId)
+    return {
+      valid: health.status !== 'critical',
+      issues: health.issues.map((item) => item.title)
+    }
+  })
 
-    // Check UA consistency
-    const ua = fp.user_agent as string
-    const platform = fp.platform as string
-    if (ua.includes('Windows') && platform !== 'Win32') issues.push('UA says Windows but platform is not Win32')
-    if (ua.includes('Macintosh') && platform !== 'MacIntel') issues.push('UA says Mac but platform is not MacIntel')
-
-    // Check WebGL vendor/renderer consistency
-    const vendor = fp.webgl_vendor as string
-    const webglRenderer = fp.webgl_renderer as string
-    if (ua.includes('Macintosh') && vendor.includes('NVIDIA')) issues.push('Mac UA with NVIDIA GPU is suspicious')
-    if (ua.includes('Windows') && vendor === 'Apple') issues.push('Windows UA with Apple GPU is impossible')
-    if (webglRenderer.includes('Direct3D') && ua.includes('Macintosh')) issues.push('Direct3D renderer with Mac UA')
-
-    // Check screen/pixel ratio consistency
-    const pixelRatio = fp.pixel_ratio as number
-    if (ua.includes('Macintosh') && pixelRatio === 1.0) issues.push('Mac typically has pixel ratio 2.0')
-
-    return { valid: issues.length === 0, issues }
+  ipcMain.handle('profile-health-list', () => listProfileHealth(db))
+  ipcMain.handle('profile-health-get', (_, profileId: string) => {
+    assertUuid(profileId)
+    return getProfileHealth(db, profileId)
+  })
+  ipcMain.handle('profile-health-autofix', (_, profileId: string) => {
+    assertUuid(profileId)
+    return autofixProfileHealth(db, profileId)
   })
 
   // Auto-updates

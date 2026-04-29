@@ -114,6 +114,39 @@ export interface ProfileDetail {
   proxy: ProxyResponse | null
 }
 
+export type ProfileHealthSeverity = 'info' | 'warning' | 'critical'
+export type ProfileHealthCategory =
+  | 'identity'
+  | 'proxy'
+  | 'geo'
+  | 'network'
+  | 'hardware'
+  | 'browser'
+
+export interface ProfileHealthIssue {
+  id: string
+  category: ProfileHealthCategory
+  severity: ProfileHealthSeverity
+  title: string
+  detail: string
+  fixable: boolean
+}
+
+export interface ProfileHealthReport {
+  profile_id: string
+  score: number
+  status: 'good' | 'warning' | 'critical'
+  summary: string
+  issues: ProfileHealthIssue[]
+  fixable_count: number
+  checked_at: string
+}
+
+export interface ProfileHealthFixResult {
+  report: ProfileHealthReport
+  applied: string[]
+}
+
 export interface SessionInfo {
   profile_id: string
   pid: number
@@ -290,12 +323,16 @@ export interface AutomationStep {
   id: string
   type: AutomationStepType
   label?: string
+  enabled?: boolean
   url?: string
   selector?: string
   text?: string
   script?: string
   duration_ms?: number
   timeout_ms?: number
+  tabId?: string
+  tabIndex?: number
+  urlContains?: string
 }
 
 export interface AutomationScript {

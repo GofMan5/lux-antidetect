@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Download, Sparkles, X, RefreshCw, AlertCircle } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { Button } from '@renderer/components/ui'
+import { isApiAvailable } from '@renderer/lib/api'
 import type { UpdateState } from '../../../preload/api-contract'
 
 type Stage = 'idle' | 'downloading' | 'ready' | 'error'
@@ -44,6 +45,7 @@ export function UpdateNotification(): React.JSX.Element | null {
   }, [])
 
   useEffect(() => {
+    if (!isApiAvailable()) return
     let cancelled = false
     const unsubs = [
       window.api.onUpdateAvailable((data) => {
@@ -84,7 +86,7 @@ export function UpdateNotification(): React.JSX.Element | null {
 
   const dismiss = useCallback(() => {
     if (stage === 'error') {
-      void window.api.clearUpdateErrorState()
+      void window.api?.clearUpdateErrorState?.()
     }
     setExiting(true)
     setTimeout(() => {
@@ -222,7 +224,7 @@ export function UpdateNotification(): React.JSX.Element | null {
 
       <div className="flex gap-2">
         <Button
-          onClick={() => window.api.installUpdate()}
+          onClick={() => window.api?.installUpdate?.()}
           className="flex-1 pulse-glow"
         >
           <RefreshCw className="h-4 w-4 mr-1.5" />

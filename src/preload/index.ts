@@ -142,6 +142,9 @@ const api: LuxAPI = {
   // Health & Validation
   checkProcessHealth: () => ipcRenderer.invoke('check-process-health'),
   validateFingerprint: (profileId: string) => ipcRenderer.invoke('validate-fingerprint', profileId),
+  listProfileHealth: () => ipcRenderer.invoke('profile-health-list'),
+  getProfileHealth: (profileId: string) => ipcRenderer.invoke('profile-health-get', profileId),
+  autofixProfileHealth: (profileId: string) => ipcRenderer.invoke('profile-health-autofix', profileId),
 
   // Auto-updates
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
